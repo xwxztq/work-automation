@@ -1,0 +1,28 @@
+export const DEFAULT_CONFIG = {
+  serverId: "本机",
+  host: "127.0.0.1",
+  port: 4378,
+  pollIntervalSeconds: 60,
+  linear: {
+    apiKeyEnv: "LINEAR_API_KEY",
+  },
+  codex: {
+    bin: "codex",
+    defaultArgs: ["--json", "--ask-for-approval", "never"],
+    part1Sandbox: "read-only",
+    part2Sandbox: "workspace-write",
+  },
+  statuses: {
+    todo: "Todo",
+    needsClarification: "Needs Clarification",
+    blocked: "Blocked",
+    ready: "Ready for Codex",
+    schedule: "On Schedule",
+    inProgress: "In Progress",
+    testing: "Testing",
+  },
+  projects: [],
+}
+
+export const STATE_DIR = ".linear-automation"
+export const RUNS_DIR = "runs"
