@@ -64,28 +64,34 @@ export function normalizeConfig(raw) {
   config.pollIntervalSeconds = Number(
     config.pollIntervalSeconds || DEFAULT_CONFIG.pollIntervalSeconds,
   )
-  config.projects = config.projects.map((project) => ({
-    key: "",
-    enabled: true,
-    linearProjectId: "",
-    repoName: "",
-    path: "",
-    codexCwd: "",
-    branchOrScopePrefix: "",
-    maxActivePart2: 1,
-    defaultTests: [],
-    part1PromptMode: "global",
-    part2PromptMode: "global",
-    extraRules: "无额外项目规则。",
-    ...project,
-    defaultTests: Array.isArray(project.defaultTests)
-      ? project.defaultTests
-      : String(project.defaultTests || "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean),
-    maxActivePart2: Number(project.maxActivePart2 || 1),
-  }))
+  config.projects = config.projects.map((project) => {
+    const normalized = {
+      key: "",
+      enabled: true,
+      linearProjectId: "",
+      repoName: "",
+      path: "",
+      codexCwd: "",
+      branchOrScopePrefix: "",
+      maxActivePart2: 1,
+      defaultTests: [],
+      part1PromptMode: "global",
+      part2PromptMode: "global",
+      extraRules: "无额外项目规则。",
+      ...project,
+      defaultTests: Array.isArray(project.defaultTests)
+        ? project.defaultTests
+        : String(project.defaultTests || "")
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean),
+      maxActivePart2: Number(project.maxActivePart2 || 1),
+    }
+    if (!normalized.codexCwd) {
+      normalized.codexCwd = normalized.path
+    }
+    return normalized
+  })
 
   return config
 }

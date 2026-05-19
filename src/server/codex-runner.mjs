@@ -1,8 +1,9 @@
 import fs from "node:fs/promises"
 import { spawn } from "node:child_process"
-import { extractJson } from "./prompts.mjs"
 
-export async function runCodex({ config, project, stage, run, prompt, store }) {
+const FORCE_KILL_DELAY_MS = 5000
+
+export async function runCodex({ config, project, stage, run, prompt, store, signal, onChild }) {
   await fs.writeFile(run.promptPath, prompt)
 
   const sandbox = stage === "part1" ? config.codex.part1Sandbox : config.codex.part2Sandbox
@@ -23,9 +24,34 @@ export async function runCodex({ config, project, stage, run, prompt, store }) {
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
   })
+  let canceled = false
+  let forceKillTimer = null
 
   const appendRunError = (message) => {
     void store.appendText(run.stderrPath, message).catch(() => {})
+  }
+
+  const cancelChild = (reason = "用户中止任务") => {
+    canceled = true
+    appendRunError(`${reason}\n`)
+    if (child.exitCode != null || child.killed) {
+      return
+    }
+    child.kill("SIGTERM")
+    forceKillTimer = setTimeout(() => {
+      if (child.exitCode == null) {
+        appendRunError("Codex 子进程未及时退出，已强制停止。\n")
+        child.kill("SIGKILL")
+      }
+    }, FORCE_KILL_DELAY_MS)
+  }
+
+  if (signal?.aborted) {
+    cancelChild(abortReason(signal, "用户中止任务"))
+  } else {
+    signal?.addEventListener("abort", () => cancelChild(abortReason(signal, "用户中止任务")), {
+      once: true,
+    })
   }
 
   child.stdout.on("data", (chunk) => {
@@ -50,7 +76,10 @@ export async function runCodex({ config, project, stage, run, prompt, store }) {
     appendRunError(`${detail}\n`)
   })
 
-  child.stdin.end(prompt)
+  onChild?.(child)
+  if (!canceled) {
+    child.stdin.end(prompt)
+  }
 
   const exitCode = await new Promise((resolve) => {
     child.on("error", async (error) => {
@@ -59,6 +88,10 @@ export async function runCodex({ config, project, stage, run, prompt, store }) {
     })
     child.on("close", (code) => resolve(code ?? 0))
   })
+
+  if (forceKillTimer) {
+    clearTimeout(forceKillTimer)
+  }
 
   let finalText = ""
   try {
@@ -70,6 +103,13 @@ export async function runCodex({ config, project, stage, run, prompt, store }) {
   return {
     exitCode,
     finalText,
-    finalJson: extractJson(finalText),
+    canceled,
   }
+}
+
+function abortReason(signal, fallback) {
+  if (!signal?.reason) {
+    return fallback
+  }
+  return typeof signal.reason === "string" ? signal.reason : fallback
 }

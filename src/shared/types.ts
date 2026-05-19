@@ -64,13 +64,16 @@ export type RunSummary = {
   stage: "part1" | "part2"
   issueIdentifier: string
   issueTitle: string
-  status: "running" | "succeeded" | "failed"
+  status: "running" | "succeeded" | "failed" | "canceled"
   createdAt: string
   updatedAt: string
   dir: string
   exitCode?: number
   error?: string
   finalJson?: unknown
+  pid?: number | null
+  canceledAt?: string
+  cancelReason?: string
 }
 
 export type RunDetail = RunSummary & {
@@ -80,15 +83,31 @@ export type RunDetail = RunSummary & {
   prompt: string
 }
 
+export type ExecutionEvent = {
+  timestamp: string
+  level: "info" | "warn" | "error"
+  type: string
+  message: string
+  projectKey?: string
+  stage?: Stage
+  issueIdentifier?: string
+  runId?: string
+  data?: Record<string, unknown>
+}
+
 export type DaemonStatus = {
   enabled: boolean
   running: boolean
   nextRunAt: string | null
   lastError?: string | null
   activeRuns: Array<{
+    runId: string
+    projectKey: string
     stage: string
     startedAt: string
+    pid?: number | null
     issue: {
+      id?: string
       identifier: string
       title: string
     }

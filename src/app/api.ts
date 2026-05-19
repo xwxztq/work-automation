@@ -1,4 +1,12 @@
-import type { AppConfig, DaemonStatus, PromptBundle, RunDetail, RunSummary, Stage } from "@/shared/types"
+import type {
+  AppConfig,
+  DaemonStatus,
+  ExecutionEvent,
+  PromptBundle,
+  RunDetail,
+  RunSummary,
+  Stage,
+} from "@/shared/types"
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
@@ -31,15 +39,24 @@ export const api = {
     }),
   getRuns: () => request<{ runs: RunSummary[] }>("/api/runs"),
   getRun: (id: string) => request<RunDetail>(`/api/runs/${id}`),
+  getEvents: (limit = 200, projectKey?: string) => {
+    const search = new URLSearchParams({ limit: String(limit) })
+    if (projectKey) {
+      search.set("projectKey", projectKey)
+    }
+    return request<{ events: ExecutionEvent[] }>(`/api/events?${search.toString()}`)
+  },
   getDaemonStatus: () => request<DaemonStatus>("/api/daemon/status"),
   startDaemon: () => request<DaemonStatus>("/api/daemon/start", { method: "POST" }),
   stopDaemon: () => request<DaemonStatus>("/api/daemon/stop", { method: "POST" }),
-  runOnce: (stage: Stage) =>
-    request<unknown>("/api/runs/once", { method: "POST", body: JSON.stringify({ stage }) }),
-  runIssue: (stage: Stage, issueId: string) =>
+  runOnce: (stage: Stage, projectKey?: string) =>
+    request<unknown>("/api/runs/once", { method: "POST", body: JSON.stringify({ stage, projectKey }) }),
+  runIssue: (stage: Stage, issueId: string, projectKey?: string) =>
     request<unknown>("/api/runs/issue", {
       method: "POST",
-      body: JSON.stringify({ stage, issueId }),
+      body: JSON.stringify({ stage, issueId, projectKey }),
     }),
+  cancelRun: (id: string) => request<unknown>(`/api/runs/${id}/cancel`, { method: "POST" }),
+  cancelProject: (key: string) => request<unknown>(`/api/projects/${key}/cancel`, { method: "POST" }),
   previewProject: (key: string) => request<unknown>(`/api/projects/${key}/linear-preview`),
 }

@@ -82,6 +82,12 @@ async function handleApi(req, res, url, context) {
     return
   }
 
+  if (method === "POST" && parts[1] === "projects" && parts[3] === "cancel") {
+    const result = scheduler.cancelProject(parts[2])
+    sendJson(res, result.ok ? 200 : 404, result)
+    return
+  }
+
   if (method === "GET" && parts[1] === "projects" && parts[3] === "linear-preview") {
     const config = await loadConfig(configPath, ROOT_DIR)
     const project = config.projects.find((item) => item.key === parts[2])
@@ -121,15 +127,24 @@ async function handleApi(req, res, url, context) {
 
   if (method === "POST" && url.pathname === "/api/runs/once") {
     const body = await readBody(req)
-    const summary = await scheduler.runOnce(body.stage || "both")
+    const summary = await scheduler.runOnce(body.stage || "both", { projectKey: body.projectKey })
     sendJson(res, 200, summary)
     return
   }
 
   if (method === "POST" && url.pathname === "/api/runs/issue") {
     const body = await readBody(req)
-    const summary = await scheduler.runOnce(body.stage || "both", { issueId: body.issueId })
+    const summary = await scheduler.runOnce(body.stage || "both", {
+      issueId: body.issueId,
+      projectKey: body.projectKey,
+    })
     sendJson(res, 200, summary)
+    return
+  }
+
+  if (method === "POST" && parts[1] === "runs" && parts[2] && parts[3] === "cancel") {
+    const result = scheduler.cancelRun(parts[2])
+    sendJson(res, result.ok ? 200 : 404, result)
     return
   }
 
@@ -162,6 +177,16 @@ async function handleApi(req, res, url, context) {
 
   if (method === "GET" && url.pathname === "/api/daemon/status") {
     sendJson(res, 200, scheduler.status())
+    return
+  }
+
+  if (method === "GET" && url.pathname === "/api/events") {
+    sendJson(res, 200, {
+      events: await store.listEvents({
+        limit: Number(url.searchParams.get("limit") || 200),
+        projectKey: url.searchParams.get("projectKey") || undefined,
+      }),
+    })
     return
   }
 

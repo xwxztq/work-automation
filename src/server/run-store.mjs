@@ -2,11 +2,12 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { ensureDir, fileExists, readJsonFile, writeJsonFile } from "./config.mjs"
-import { RUNS_DIR, STATE_DIR } from "./defaults.mjs"
+import { EVENTS_FILE, RUNS_DIR, STATE_DIR } from "./defaults.mjs"
 
 export function createRunStore(rootDir) {
   const baseDir = path.join(rootDir, STATE_DIR)
   const runsDir = path.join(baseDir, RUNS_DIR)
+  const eventsPath = path.join(baseDir, EVENTS_FILE)
 
   async function createRun({ projectKey, stage, issue }) {
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${projectKey}-${stage}-${issue.identifier || issue.id}-${randomUUID().slice(0, 8)}`
@@ -48,6 +49,48 @@ export function createRunStore(rootDir) {
     await fs.appendFile(filePath, text)
   }
 
+  async function appendEvent(event) {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      level: "info",
+      ...event,
+    }
+    await appendText(eventsPath, `${JSON.stringify(entry)}\n`)
+    return entry
+  }
+
+  async function listEvents({ limit = 200, projectKey } = {}) {
+    if (!(await fileExists(eventsPath))) {
+      return []
+    }
+    const text = await fs.readFile(eventsPath, "utf8")
+    const max = Math.max(1, Math.min(Number(limit || 200), 1000))
+    const events = []
+    for (const line of text.trim().split("\n").reverse()) {
+      if (!line) {
+        continue
+      }
+      try {
+        const event = JSON.parse(line)
+        if (projectKey && event.projectKey !== projectKey) {
+          continue
+        }
+        events.push(event)
+      } catch {
+        events.push({
+          timestamp: new Date(0).toISOString(),
+          level: "error",
+          type: "log-parse-error",
+          message: line,
+        })
+      }
+      if (events.length >= max) {
+        break
+      }
+    }
+    return events
+  }
+
   async function listRuns(limit = 50) {
     if (!(await fileExists(runsDir))) {
       return []
@@ -87,9 +130,12 @@ export function createRunStore(rootDir) {
   return {
     baseDir,
     runsDir,
+    eventsPath,
     createRun,
     updateRun,
     appendText,
+    appendEvent,
+    listEvents,
     listRuns,
     getRun,
   }

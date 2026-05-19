@@ -1,31 +1,25 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
-  Activity,
   Bot,
   CheckCircle2,
   CircleDot,
-  FileText,
   FolderGit2,
+  Pencil,
   Play,
+  Plus,
   RefreshCcw,
   Save,
-  Server,
   Settings,
   Square,
+  StopCircle,
   Trash2,
-  type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { api } from "@/app/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -37,6 +31,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import {
+  Sheet,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
 import {
   Table,
@@ -52,6 +53,7 @@ import { Toaster } from "@/components/ui/sonner"
 import type {
   AppConfig,
   DaemonStatus,
+  ExecutionEvent,
   ProjectConfig,
   PromptBundle,
   RunDetail,
@@ -59,7 +61,7 @@ import type {
   Stage,
 } from "@/shared/types"
 
-type Page = "projects" | "prompts" | "runs" | "settings"
+type View = "project" | "settings"
 
 const emptyProject: ProjectConfig = {
   key: "",
@@ -77,13 +79,16 @@ const emptyProject: ProjectConfig = {
 }
 
 function App() {
-  const [page, setPage] = useState<Page>("projects")
+  const [view, setView] = useState<View>("project")
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [prompts, setPrompts] = useState<PromptBundle | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
+  const [events, setEvents] = useState<ExecutionEvent[]>([])
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null)
   const [selectedProjectKey, setSelectedProjectKey] = useState("")
   const [draftProject, setDraftProject] = useState<ProjectConfig>(emptyProject)
+  const [editingProjectKey, setEditingProjectKey] = useState<string | null>(null)
+  const [projectEditorOpen, setProjectEditorOpen] = useState(false)
   const [promptScope, setPromptScope] = useState("global")
   const [promptStage, setPromptStage] = useState<"part1" | "part2">("part1")
   const [promptText, setPromptText] = useState("")
@@ -91,18 +96,20 @@ function App() {
   const [manualStage, setManualStage] = useState<Stage>("both")
   const [manualIssue, setManualIssue] = useState("")
   const [busy, setBusy] = useState(false)
+  const autoStartTried = useRef(false)
 
   useEffect(() => {
     void refreshAll()
-    // Initial load only. Manual refresh buttons and mutations refresh explicitly.
+    // Initial load only. Subsequent updates use explicit refresh and polling.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    if (!config) return
-    const project = config.projects.find((item) => item.key === selectedProjectKey)
-    setDraftProject(project ? { ...project } : emptyProject)
-  }, [config, selectedProjectKey])
+    const timer = setInterval(() => {
+      void refreshRuns(true)
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     if (!prompts) return
@@ -113,24 +120,50 @@ function App() {
     setPromptText(prompts.projects[promptScope]?.[promptStage] || "")
   }, [prompts, promptScope, promptStage])
 
+  useEffect(() => {
+    setSelectedRun(null)
+  }, [selectedProjectKey])
+
+  useEffect(() => {
+    if (!daemon || autoStartTried.current) return
+    autoStartTried.current = true
+    if (!daemon.enabled) {
+      void setDaemonEnabled(true, true)
+    }
+  }, [daemon])
+
+  const selectedProject = useMemo(
+    () => config?.projects.find((project) => project.key === selectedProjectKey) || null,
+    [config, selectedProjectKey],
+  )
   const activeProjectKeys = useMemo(
     () => config?.projects.map((project) => project.key).filter(Boolean) || [],
     [config],
+  )
+  const projectRuns = useMemo(
+    () => runs.filter((run) => run.projectKey === selectedProjectKey),
+    [runs, selectedProjectKey],
+  )
+  const activeProjectRuns = useMemo(
+    () => daemon?.activeRuns.filter((run) => run.projectKey === selectedProjectKey) || [],
+    [daemon, selectedProjectKey],
   )
 
   async function refreshAll() {
     setBusy(true)
     try {
-      const [nextConfig, nextPrompts, nextRuns, nextDaemon] = await Promise.all([
+      const [nextConfig, nextPrompts, nextRuns, nextDaemon, nextEvents] = await Promise.all([
         api.getConfig(),
         api.getPrompts(),
         api.getRuns(),
         api.getDaemonStatus(),
+        api.getEvents(),
       ])
       setConfig(nextConfig)
       setPrompts(nextPrompts)
       setRuns(nextRuns.runs)
       setDaemon(nextDaemon)
+      setEvents(nextEvents.events)
       if (!selectedProjectKey && nextConfig.projects[0]) {
         setSelectedProjectKey(nextConfig.projects[0].key)
       }
@@ -141,42 +174,90 @@ function App() {
     }
   }
 
-  async function saveConfig(nextConfig: AppConfig) {
+  async function saveConfig(nextConfig: AppConfig, silent = false) {
     setBusy(true)
     try {
       const saved = await api.saveConfig(nextConfig)
       setConfig(saved)
-      toast.success("配置已保存")
+      if (!silent) {
+        toast.success("配置已保存")
+      }
+      return saved
     } catch (error) {
       toast.error(errorMessage(error))
+      return null
     } finally {
       setBusy(false)
     }
+  }
+
+  function openNewProject() {
+    if (!config) return
+    const key = `project-${config.projects.length + 1}`
+    setEditingProjectKey(null)
+    setDraftProject({ ...emptyProject, key, repoName: key, branchOrScopePrefix: key })
+    setProjectEditorOpen(true)
+  }
+
+  function openEditProject(project: ProjectConfig) {
+    setEditingProjectKey(project.key)
+    setDraftProject({ ...project })
+    setProjectEditorOpen(true)
   }
 
   function updateDraftProject(patch: Partial<ProjectConfig>) {
     setDraftProject((current) => ({ ...current, ...patch }))
   }
 
-  async function saveProject() {
+  async function saveDraftProject() {
     if (!config) return
-    if (!draftProject.key.trim()) {
+    const key = draftProject.key.trim()
+    if (!key) {
       toast.error("项目标识不能为空")
       return
     }
-    const exists = config.projects.some((project) => project.key === draftProject.key)
-    const projects = exists
-      ? config.projects.map((project) => (project.key === draftProject.key ? draftProject : project))
-      : [...config.projects, draftProject]
-    await saveConfig({ ...config, projects })
-    setSelectedProjectKey(draftProject.key)
+    const duplicate = config.projects.some((project) => project.key === key && project.key !== editingProjectKey)
+    if (duplicate) {
+      toast.error(`项目标识已存在: ${key}`)
+      return
+    }
+
+    const repoPath = draftProject.path.trim()
+    const nextProject = {
+      ...draftProject,
+      key,
+      repoName: draftProject.repoName.trim() || key,
+      path: repoPath,
+      codexCwd: draftProject.codexCwd.trim() || repoPath,
+      maxActivePart2: Number(draftProject.maxActivePart2 || 1),
+    }
+    const projects = editingProjectKey
+      ? config.projects.map((project) => (project.key === editingProjectKey ? nextProject : project))
+      : [...config.projects, nextProject]
+    const saved = await saveConfig({ ...config, projects })
+    if (!saved) return
+    setSelectedProjectKey(key)
+    setView("project")
+    setProjectEditorOpen(false)
   }
 
   async function removeProject(key: string) {
     if (!config) return
     const projects = config.projects.filter((project) => project.key !== key)
-    await saveConfig({ ...config, projects })
+    const saved = await saveConfig({ ...config, projects })
+    if (!saved) return
     setSelectedProjectKey(projects[0]?.key || "")
+    setSelectedRun(null)
+    setProjectEditorOpen(false)
+  }
+
+  async function toggleProjectEnabled(project: ProjectConfig, enabled: boolean) {
+    if (!config) return
+    const projects = config.projects.map((item) => (item.key === project.key ? { ...item, enabled } : item))
+    const saved = await saveConfig({ ...config, projects }, true)
+    if (saved) {
+      toast.success(enabled ? "项目已启用" : "项目已停用")
+    }
   }
 
   async function savePrompt() {
@@ -211,13 +292,13 @@ function App() {
     }
   }
 
-  async function triggerOnce(stage: Stage, issueId?: string) {
+  async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string) {
     setBusy(true)
     try {
       if (issueId) {
-        await api.runIssue(stage, issueId)
+        await api.runIssue(stage, issueId, projectKey)
       } else {
-        await api.runOnce(stage)
+        await api.runOnce(stage, projectKey)
       }
       toast.success("执行已完成")
       await refreshRuns()
@@ -228,10 +309,21 @@ function App() {
     }
   }
 
-  async function refreshRuns() {
-    const [nextRuns, nextDaemon] = await Promise.all([api.getRuns(), api.getDaemonStatus()])
-    setRuns(nextRuns.runs)
-    setDaemon(nextDaemon)
+  async function refreshRuns(silent = false) {
+    try {
+      const [nextRuns, nextDaemon, nextEvents] = await Promise.all([
+        api.getRuns(),
+        api.getDaemonStatus(),
+        api.getEvents(),
+      ])
+      setRuns(nextRuns.runs)
+      setDaemon(nextDaemon)
+      setEvents(nextEvents.events)
+    } catch (error) {
+      if (!silent) {
+        toast.error(errorMessage(error))
+      }
+    }
   }
 
   async function loadRun(id: string) {
@@ -242,11 +334,41 @@ function App() {
     }
   }
 
-  async function toggleDaemon(next: boolean) {
+  async function setDaemonEnabled(next: boolean, silent = false) {
     setBusy(true)
     try {
       setDaemon(next ? await api.startDaemon() : await api.stopDaemon())
-      toast.success(next ? "轮询已启动" : "轮询已停止")
+      if (!silent) {
+        toast.success(next ? "轮询已启动" : "轮询已停止")
+      }
+    } catch (error) {
+      if (!silent) {
+        toast.error(errorMessage(error))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function cancelRun(id: string) {
+    setBusy(true)
+    try {
+      await api.cancelRun(id)
+      toast.success("任务已停止")
+      await refreshRuns()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function cancelProject(key: string) {
+    setBusy(true)
+    try {
+      await api.cancelProject(key)
+      toast.success("项目任务已停止")
+      await refreshRuns()
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -269,61 +391,36 @@ function App() {
 
   return (
     <main className="min-h-svh bg-muted/30">
-      <div className="grid min-h-svh grid-cols-[240px_1fr]">
-        <aside className="border-r bg-sidebar px-3 py-4 text-sidebar-foreground">
-          <div className="mb-5 flex items-center gap-2 px-2">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-              <Bot className="size-4" />
-            </div>
-            <div>
-              <div className="text-sm font-medium">Linear 自动执行</div>
-              <div className="text-xs text-muted-foreground">{config.serverId}</div>
-            </div>
-          </div>
-
-          <nav className="space-y-1">
-            <NavButton page="projects" active={page} setPage={setPage} icon={FolderGit2} label="项目" />
-            <NavButton page="prompts" active={page} setPage={setPage} icon={FileText} label="提示词" />
-            <NavButton page="runs" active={page} setPage={setPage} icon={Activity} label="运行" />
-            <NavButton page="settings" active={page} setPage={setPage} icon={Settings} label="设置" />
-          </nav>
-
-          <Separator className="my-4" />
-
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Server className="size-4" />
-                轮询
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  {daemon?.enabled ? "已启动" : "已停止"} · {daemon?.running ? "执行中" : "空闲"}
-                </span>
-                <Switch
-                  checked={Boolean(daemon?.enabled)}
-                  disabled={busy}
-                  onCheckedChange={(checked) => void toggleDaemon(checked)}
-                />
-              </div>
-              <div className="text-xs text-muted-foreground">
-                下次扫描: {daemon?.nextRunAt ? formatDate(daemon.nextRunAt) : "-"}
-              </div>
-              {daemon?.lastError && (
-                <div className="text-xs text-destructive">
-                  错误: {daemon.lastError}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </aside>
+      <div className="grid min-h-svh grid-cols-[280px_1fr]">
+        <Sidebar
+          config={config}
+          daemon={daemon}
+          selectedProjectKey={selectedProjectKey}
+          view={view}
+          busy={busy}
+          onSelectProject={(key) => {
+            setSelectedProjectKey(key)
+            setView("project")
+          }}
+          onNewProject={openNewProject}
+          onEditProject={openEditProject}
+          onToggleProject={(project, enabled) => void toggleProjectEnabled(project, enabled)}
+          onToggleDaemon={(enabled) => void setDaemonEnabled(enabled)}
+          onSettings={() => setView("settings")}
+        />
 
         <section className="min-w-0 px-5 py-4">
           <header className="mb-4 flex items-center justify-between">
             <div>
-              <h1 className="text-xl font-semibold tracking-normal">Codex 执行控制</h1>
+              <h1 className="text-xl font-semibold tracking-normal">
+                {view === "settings" ? "设置" : selectedProject?.repoName || selectedProject?.key || "项目"}
+              </h1>
+              {view === "project" && selectedProject && (
+                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-mono">{selectedProject.key}</span>
+                  <span>{selectedProject.path || selectedProject.codexCwd}</span>
+                </div>
+              )}
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => void refreshAll()} disabled={busy}>
@@ -337,244 +434,594 @@ function App() {
             </div>
           </header>
 
-          {page === "projects" && (
-            <ProjectsPage
-              config={config}
-              draftProject={draftProject}
-              selectedProjectKey={selectedProjectKey}
-              setSelectedProjectKey={setSelectedProjectKey}
-              updateDraftProject={updateDraftProject}
-              saveProject={() => void saveProject()}
-              removeProject={(key) => void removeProject(key)}
-              addProject={() => {
-                const key = `project-${config.projects.length + 1}`
-                setSelectedProjectKey(key)
-                setDraftProject({ ...emptyProject, key, repoName: key, branchOrScopePrefix: key })
-              }}
-            />
-          )}
-
-          {page === "prompts" && (
-            <PromptsPage
-              projectKeys={activeProjectKeys}
-              promptScope={promptScope}
-              promptStage={promptStage}
-              promptText={promptText}
-              setPromptScope={setPromptScope}
-              setPromptStage={setPromptStage}
-              setPromptText={setPromptText}
-              savePrompt={() => void savePrompt()}
-            />
-          )}
-
-          {page === "runs" && (
-            <RunsPage
-              runs={runs}
+          {view === "project" && (
+            <ProjectView
+              project={selectedProject}
+              runs={projectRuns}
+              activeRuns={activeProjectRuns}
               selectedRun={selectedRun}
               manualStage={manualStage}
               manualIssue={manualIssue}
+              busy={busy}
               setManualStage={setManualStage}
               setManualIssue={setManualIssue}
               refreshRuns={() => void refreshRuns()}
               loadRun={(id) => void loadRun(id)}
-              triggerOnce={(stage, issueId) => void triggerOnce(stage, issueId)}
-              busy={busy}
+              triggerOnce={(stage, issueId, projectKey) => void triggerOnce(stage, issueId, projectKey)}
+              cancelRun={(id) => void cancelRun(id)}
+              cancelProject={(key) => void cancelProject(key)}
+              editProject={(project) => openEditProject(project)}
+              addProject={openNewProject}
             />
           )}
 
-          {page === "settings" && (
+          {view === "settings" && (
             <SettingsPage
               config={config}
+              prompts={prompts}
+              events={events}
+              projectKeys={activeProjectKeys}
+              promptScope={promptScope}
+              promptStage={promptStage}
+              promptText={promptText}
               setConfig={setConfig}
               saveConfig={() => void saveConfig(config)}
+              setPromptScope={setPromptScope}
+              setPromptStage={setPromptStage}
+              setPromptText={setPromptText}
+              savePrompt={() => void savePrompt()}
               busy={busy}
             />
           )}
         </section>
       </div>
+      <ProjectEditor
+        open={projectEditorOpen}
+        project={draftProject}
+        editing={Boolean(editingProjectKey)}
+        busy={busy}
+        onOpenChange={setProjectEditorOpen}
+        onUpdate={updateDraftProject}
+        onSave={() => void saveDraftProject()}
+        onRemove={editingProjectKey ? () => void removeProject(editingProjectKey) : undefined}
+      />
       <Toaster />
     </main>
   )
 }
 
-function NavButton({
-  page,
-  active,
-  setPage,
-  icon: Icon,
-  label,
+function Sidebar({
+  config,
+  daemon,
+  selectedProjectKey,
+  view,
+  busy,
+  onSelectProject,
+  onNewProject,
+  onEditProject,
+  onToggleProject,
+  onToggleDaemon,
+  onSettings,
 }: {
-  page: Page
-  active: Page
-  setPage: (page: Page) => void
-  icon: LucideIcon
-  label: string
+  config: AppConfig
+  daemon: DaemonStatus | null
+  selectedProjectKey: string
+  view: View
+  busy: boolean
+  onSelectProject: (key: string) => void
+  onNewProject: () => void
+  onEditProject: (project: ProjectConfig) => void
+  onToggleProject: (project: ProjectConfig, enabled: boolean) => void
+  onToggleDaemon: (enabled: boolean) => void
+  onSettings: () => void
 }) {
   return (
-    <Button
-      variant={active === page ? "secondary" : "ghost"}
-      className="w-full justify-start"
-      onClick={() => setPage(page)}
-    >
-      <Icon className="size-4" />
-      {label}
-    </Button>
+    <aside className="flex h-svh flex-col border-r bg-sidebar text-sidebar-foreground">
+      <div className="flex items-center justify-between px-4 py-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+            <Bot className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">Linear 自动执行</div>
+            <div className="truncate text-xs text-muted-foreground">{config.serverId}</div>
+          </div>
+        </div>
+        <Button size="icon" variant="ghost" onClick={onNewProject} disabled={busy} aria-label="新建项目">
+          <Plus className="size-4" />
+        </Button>
+      </div>
+
+      <Separator />
+
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-1 p-3">
+          {config.projects.map((project) => (
+            <ProjectNavItem
+              key={project.key}
+              project={project}
+              active={view === "project" && selectedProjectKey === project.key}
+              busy={busy}
+              onSelect={() => onSelectProject(project.key)}
+              onEdit={() => onEditProject(project)}
+              onToggle={(enabled) => onToggleProject(project, enabled)}
+            />
+          ))}
+          {config.projects.length === 0 && (
+            <div className="rounded-lg border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">
+              尚未配置项目
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+
+      <Separator />
+
+      <div className="space-y-3 p-3">
+        <div className="rounded-lg border bg-background/70 px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium">轮询</div>
+              <div className="text-xs text-muted-foreground">
+                {daemon?.enabled ? "已启动" : "已停止"} · {daemon?.running ? "执行中" : "空闲"}
+              </div>
+            </div>
+            <Switch
+              checked={Boolean(daemon?.enabled)}
+              disabled={busy}
+              onCheckedChange={(checked) => onToggleDaemon(checked)}
+            />
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            下次扫描: {daemon?.nextRunAt ? formatDate(daemon.nextRunAt) : "-"}
+          </div>
+          {daemon?.lastError && <div className="mt-2 text-xs text-destructive">错误: {daemon.lastError}</div>}
+        </div>
+        <Button
+          variant={view === "settings" ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          onClick={onSettings}
+        >
+          <Settings className="size-4" />
+          设置
+        </Button>
+      </div>
+    </aside>
   )
 }
 
-function ProjectsPage({
-  config,
-  draftProject,
-  selectedProjectKey,
-  setSelectedProjectKey,
-  updateDraftProject,
-  saveProject,
-  removeProject,
-  addProject,
+function ProjectNavItem({
+  project,
+  active,
+  busy,
+  onSelect,
+  onEdit,
+  onToggle,
 }: {
-  config: AppConfig
-  draftProject: ProjectConfig
-  selectedProjectKey: string
-  setSelectedProjectKey: (key: string) => void
-  updateDraftProject: (patch: Partial<ProjectConfig>) => void
-  saveProject: () => void
-  removeProject: (key: string) => void
-  addProject: () => void
+  project: ProjectConfig
+  active: boolean
+  busy: boolean
+  onSelect: () => void
+  onEdit: () => void
+  onToggle: (enabled: boolean) => void
 }) {
   return (
-    <div className="grid grid-cols-[minmax(360px,480px)_1fr] gap-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>项目</CardTitle>
-            </div>
-            <Button onClick={addProject} size="sm">
-              <FolderGit2 className="size-4" />
-              添加
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>标识</TableHead>
-                <TableHead>仓库</TableHead>
-                <TableHead>状态</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {config.projects.map((project) => (
-                <TableRow
-                  key={project.key}
-                  className="cursor-pointer"
-                  onClick={() => setSelectedProjectKey(project.key)}
-                >
-                  <TableCell className="font-mono text-xs">{project.key}</TableCell>
-                  <TableCell>{project.repoName}</TableCell>
-                  <TableCell>
-                    <Badge variant={project.enabled ? "default" : "secondary"}>
-                      {project.enabled ? "启用" : "停用"}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {config.projects.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={3} className="text-muted-foreground">
-                    尚未配置项目
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+    <div
+      className={[
+        "rounded-lg border px-2 py-2 transition-colors",
+        active ? "border-sidebar-ring bg-sidebar-accent" : "border-transparent hover:bg-sidebar-accent/70",
+      ].join(" ")}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          onSelect()
+        }
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{project.repoName || project.key}</div>
+          <div className="truncate font-mono text-xs text-muted-foreground">{project.key}</div>
+        </div>
+        <Switch
+          checked={project.enabled}
+          disabled={busy}
+          onClick={(event) => event.stopPropagation()}
+          onCheckedChange={onToggle}
+        />
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-8"
+          disabled={busy}
+          onClick={(event) => {
+            event.stopPropagation()
+            onEdit()
+          }}
+          aria-label="修改项目"
+        >
+          <Pencil className="size-4" />
+        </Button>
+      </div>
+    </div>
+  )
+}
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>{selectedProjectKey ? "项目配置" : "新项目"}</CardTitle>
-            </div>
-            <div className="flex gap-2">
-              {selectedProjectKey && (
-                <Button variant="destructive" size="sm" onClick={() => removeProject(selectedProjectKey)}>
-                  <Trash2 className="size-4" />
-                  删除
-                </Button>
-              )}
-              <Button size="sm" onClick={saveProject}>
-                <Save className="size-4" />
-                保存
+function ProjectView({
+  project,
+  runs,
+  activeRuns,
+  selectedRun,
+  manualStage,
+  manualIssue,
+  busy,
+  setManualStage,
+  setManualIssue,
+  refreshRuns,
+  loadRun,
+  triggerOnce,
+  cancelRun,
+  cancelProject,
+  editProject,
+  addProject,
+}: {
+  project: ProjectConfig | null
+  runs: RunSummary[]
+  activeRuns: DaemonStatus["activeRuns"]
+  selectedRun: RunDetail | null
+  manualStage: Stage
+  manualIssue: string
+  busy: boolean
+  setManualStage: (stage: Stage) => void
+  setManualIssue: (issue: string) => void
+  refreshRuns: () => void
+  loadRun: (id: string) => void
+  triggerOnce: (stage: Stage, issueId?: string, projectKey?: string) => void
+  cancelRun: (id: string) => void
+  cancelProject: (key: string) => void
+  editProject: (project: ProjectConfig) => void
+  addProject: () => void
+}) {
+  if (!project) {
+    return (
+      <div className="flex min-h-[520px] items-center justify-center rounded-lg border border-dashed bg-background">
+        <Button onClick={addProject}>
+          <Plus className="size-4" />
+          新建项目
+        </Button>
+      </div>
+    )
+  }
+
+  const lastRun = runs[0]
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-4">
+        <MetricCard title="当前执行" value={String(activeRuns.length)} />
+        <MetricCard title="历史运行" value={String(runs.length)} />
+        <MetricCard title="最近状态" value={lastRun ? runStatusLabel(lastRun.status) : "-"} />
+      </div>
+
+      <div className="grid grid-cols-[minmax(420px,0.9fr)_1.1fr] gap-4">
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>当前项目</CardTitle>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => editProject(project)} disabled={busy}>
+                    <Pencil className="size-4" />
+                    修改
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => cancelProject(project.key)}
+                    disabled={busy || activeRuns.length === 0}
+                  >
+                    <StopCircle className="size-4" />
+                    停止项目
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 gap-3 text-sm">
+              <InfoItem label="仓库" value={project.repoName || "-"} />
+              <InfoItem label="状态" value={project.enabled ? "启用" : "停用"} />
+              <InfoItem label="Linear 项目 ID" value={project.linearProjectId || "-"} />
+              <InfoItem label="阶段二上限" value={String(project.maxActivePart2)} />
+              <InfoItem label="仓库路径" value={project.path || "-"} wide />
+              <InfoItem label="Codex 路径" value={project.codexCwd || project.path || "-"} wide />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>执行</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-[150px_1fr_auto] gap-2">
+              <Select value={manualStage} onValueChange={(value) => setManualStage(value as Stage)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">全部</SelectItem>
+                  <SelectItem value="part1">阶段一</SelectItem>
+                  <SelectItem value="part2">阶段二</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                placeholder="可选 issue ID，例如 LIV-123"
+                value={manualIssue}
+                onChange={(event) => setManualIssue(event.target.value)}
+              />
+              <Button
+                onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key)}
+                disabled={busy}
+              >
+                <Play className="size-4" />
+                执行
               </Button>
-            </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>正在执行</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>事项</TableHead>
+                    <TableHead>阶段</TableHead>
+                    <TableHead>进程</TableHead>
+                    <TableHead className="w-20" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {activeRuns.map((run) => (
+                    <TableRow key={run.runId}>
+                      <TableCell>
+                        <div className="font-mono text-xs">{run.issue.identifier}</div>
+                        <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issue.title}</div>
+                      </TableCell>
+                      <TableCell>{stageLabel(run.stage)}</TableCell>
+                      <TableCell className="font-mono text-xs">{run.pid || "-"}</TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => cancelRun(run.runId)}
+                        >
+                          <StopCircle className="size-4" />
+                          停止
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {activeRuns.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-muted-foreground">
+                        暂无执行中任务
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>历史</CardTitle>
+                <Button variant="outline" size="sm" onClick={refreshRuns} disabled={busy}>
+                  <RefreshCcw className="size-4" />
+                  刷新
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <RunTable runs={runs} loadRun={loadRun} />
+            </CardContent>
+          </Card>
+        </div>
+
+        <RunDetailPanel selectedRun={selectedRun} />
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({ title, value }: { title: string; value: string }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm text-muted-foreground">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="text-2xl font-semibold">{value}</div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function InfoItem({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
+  return (
+    <div className={wide ? "col-span-2" : ""}>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 break-words font-mono text-xs">{value}</div>
+    </div>
+  )
+}
+
+function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string) => void }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>事项</TableHead>
+          <TableHead>阶段</TableHead>
+          <TableHead>状态</TableHead>
+          <TableHead>更新时间</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {runs.map((run) => (
+          <TableRow key={run.id} className="cursor-pointer" onClick={() => loadRun(run.id)}>
+            <TableCell>
+              <div className="font-mono text-xs">{run.issueIdentifier}</div>
+              <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
+            </TableCell>
+            <TableCell>{stageLabel(run.stage)}</TableCell>
+            <TableCell>
+              <StatusBadge status={run.status} />
+            </TableCell>
+            <TableCell className="text-xs">{formatDate(run.updatedAt)}</TableCell>
+          </TableRow>
+        ))}
+        {runs.length === 0 && (
+          <TableRow>
+            <TableCell colSpan={4} className="text-muted-foreground">
+              暂无运行记录
+            </TableCell>
+          </TableRow>
+        )}
+      </TableBody>
+    </Table>
+  )
+}
+
+function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>运行详情</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {selectedRun ? (
+          <Tabs defaultValue="final">
+            <TabsList>
+              <TabsTrigger value="final">最终结果</TabsTrigger>
+              <TabsTrigger value="stdout">标准输出</TabsTrigger>
+              <TabsTrigger value="stderr">错误输出</TabsTrigger>
+              <TabsTrigger value="prompt">提示词</TabsTrigger>
+            </TabsList>
+            <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
+            <RunLog value="stdout" text={selectedRun.stdout} />
+            <RunLog value="stderr" text={selectedRun.stderr} />
+            <RunLog value="prompt" text={selectedRun.prompt} />
+          </Tabs>
+        ) : (
+          <div className="flex min-h-80 items-center justify-center text-sm text-muted-foreground">
+            <CircleDot className="mr-2 size-4" />
+            未选择运行记录
           </div>
-        </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-3">
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function RunLog({ value, text }: { value: string; text: string }) {
+  return (
+    <TabsContent value={value} className="mt-3">
+      <ScrollArea className="h-[640px] rounded-lg border bg-background p-3">
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{text || "（空）"}</pre>
+      </ScrollArea>
+    </TabsContent>
+  )
+}
+
+function ProjectEditor({
+  open,
+  project,
+  editing,
+  busy,
+  onOpenChange,
+  onUpdate,
+  onSave,
+  onRemove,
+}: {
+  open: boolean
+  project: ProjectConfig
+  editing: boolean
+  busy: boolean
+  onOpenChange: (open: boolean) => void
+  onUpdate: (patch: Partial<ProjectConfig>) => void
+  onSave: () => void
+  onRemove?: () => void
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-[720px] overflow-y-auto sm:max-w-[720px]">
+        <SheetHeader>
+          <SheetTitle>{editing ? "修改项目" : "新建项目"}</SheetTitle>
+        </SheetHeader>
+        <div className="grid grid-cols-2 gap-3 px-4">
           <Field label="项目标识">
-            <Input value={draftProject.key} onChange={(event) => updateDraftProject({ key: event.target.value })} />
+            <Input value={project.key} onChange={(event) => onUpdate({ key: event.target.value })} />
           </Field>
           <Field label="仓库名称">
-            <Input
-              value={draftProject.repoName}
-              onChange={(event) => updateDraftProject({ repoName: event.target.value })}
-            />
+            <Input value={project.repoName} onChange={(event) => onUpdate({ repoName: event.target.value })} />
           </Field>
           <Field label="Linear 项目 ID">
             <Input
-              value={draftProject.linearProjectId}
-              onChange={(event) => updateDraftProject({ linearProjectId: event.target.value })}
+              value={project.linearProjectId}
+              onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
             />
           </Field>
           <Field label="分支 / 提交范围前缀">
             <Input
-              value={draftProject.branchOrScopePrefix}
-              onChange={(event) => updateDraftProject({ branchOrScopePrefix: event.target.value })}
+              value={project.branchOrScopePrefix}
+              onChange={(event) => onUpdate({ branchOrScopePrefix: event.target.value })}
             />
           </Field>
           <Field label="仓库路径">
-            <Input value={draftProject.path} onChange={(event) => updateDraftProject({ path: event.target.value })} />
+            <Input
+              value={project.path}
+              onChange={(event) => {
+                const nextPath = event.target.value
+                const shouldSyncCodexCwd = !project.codexCwd || project.codexCwd === project.path
+                onUpdate({
+                  path: nextPath,
+                  ...(shouldSyncCodexCwd ? { codexCwd: nextPath } : {}),
+                })
+              }}
+            />
           </Field>
           <Field label="Codex 执行路径">
-            <Input
-              value={draftProject.codexCwd}
-              onChange={(event) => updateDraftProject({ codexCwd: event.target.value })}
-            />
+            <Input value={project.codexCwd} onChange={(event) => onUpdate({ codexCwd: event.target.value })} />
           </Field>
           <Field label="阶段二并发上限">
             <Input
               type="number"
-              value={draftProject.maxActivePart2}
-              onChange={(event) => updateDraftProject({ maxActivePart2: Number(event.target.value) })}
+              value={project.maxActivePart2}
+              onChange={(event) => onUpdate({ maxActivePart2: Number(event.target.value) })}
             />
           </Field>
           <div className="flex items-center justify-between rounded-lg border px-3 py-2">
             <Label>启用</Label>
-            <Switch
-              checked={draftProject.enabled}
-              onCheckedChange={(checked) => updateDraftProject({ enabled: checked })}
-            />
+            <Switch checked={project.enabled} onCheckedChange={(checked) => onUpdate({ enabled: checked })} />
           </div>
           <Field label="阶段一提示词模式">
-            <ModeSelect
-              value={draftProject.part1PromptMode}
-              onValueChange={(value) => updateDraftProject({ part1PromptMode: value })}
-            />
+            <ModeSelect value={project.part1PromptMode} onValueChange={(value) => onUpdate({ part1PromptMode: value })} />
           </Field>
           <Field label="阶段二提示词模式">
-            <ModeSelect
-              value={draftProject.part2PromptMode}
-              onValueChange={(value) => updateDraftProject({ part2PromptMode: value })}
-            />
+            <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
           </Field>
           <Field label="默认测试命令" className="col-span-2">
             <Textarea
               className="min-h-24 font-mono text-xs"
-              value={draftProject.defaultTests.join("\n")}
+              value={project.defaultTests.join("\n")}
               onChange={(event) =>
-                updateDraftProject({
+                onUpdate({
                   defaultTests: event.target.value
                     .split("\n")
                     .map((line) => line.trim())
@@ -586,14 +1033,277 @@ function ProjectsPage({
           <Field label="项目规则" className="col-span-2">
             <Textarea
               className="min-h-24"
-              value={draftProject.extraRules}
-              onChange={(event) => updateDraftProject({ extraRules: event.target.value })}
+              value={project.extraRules}
+              onChange={(event) => onUpdate({ extraRules: event.target.value })}
             />
           </Field>
+        </div>
+        <SheetFooter>
+          {onRemove && (
+            <Button variant="destructive" onClick={onRemove} disabled={busy}>
+              <Trash2 className="size-4" />
+              删除
+            </Button>
+          )}
+          <Button onClick={onSave} disabled={busy}>
+            <Save className="size-4" />
+            保存
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function SettingsPage({
+  config,
+  prompts,
+  events,
+  projectKeys,
+  promptScope,
+  promptStage,
+  promptText,
+  setConfig,
+  saveConfig,
+  setPromptScope,
+  setPromptStage,
+  setPromptText,
+  savePrompt,
+  busy,
+}: {
+  config: AppConfig
+  prompts: PromptBundle
+  events: ExecutionEvent[]
+  projectKeys: string[]
+  promptScope: string
+  promptStage: "part1" | "part2"
+  promptText: string
+  setConfig: (config: AppConfig) => void
+  saveConfig: () => void
+  setPromptScope: (scope: string) => void
+  setPromptStage: (stage: "part1" | "part2") => void
+  setPromptText: (text: string) => void
+  savePrompt: () => void
+  busy: boolean
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>服务</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Field label="服务 ID">
+              <Input value={config.serverId} onChange={(event) => setConfig({ ...config, serverId: event.target.value })} />
+            </Field>
+            <Field label="监听地址">
+              <Input value={config.host} onChange={(event) => setConfig({ ...config, host: event.target.value })} />
+            </Field>
+            <Field label="端口">
+              <Input
+                type="number"
+                value={config.port}
+                onChange={(event) => setConfig({ ...config, port: Number(event.target.value) })}
+              />
+            </Field>
+            <Field label="轮询间隔秒数">
+              <Input
+                type="number"
+                value={config.pollIntervalSeconds}
+                onChange={(event) => setConfig({ ...config, pollIntervalSeconds: Number(event.target.value) })}
+              />
+            </Field>
+            <Button onClick={saveConfig} disabled={busy}>
+              <Save className="size-4" />
+              保存
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Linear 与 Codex</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Field label="Linear API 密钥环境变量">
+              <Input
+                value={config.linear.apiKeyEnv}
+                onChange={(event) =>
+                  setConfig({ ...config, linear: { ...config.linear, apiKeyEnv: event.target.value } })
+                }
+              />
+            </Field>
+            <Field label="Codex 命令">
+              <Input
+                value={config.codex.bin}
+                onChange={(event) => setConfig({ ...config, codex: { ...config.codex, bin: event.target.value } })}
+              />
+            </Field>
+            <Field label="Codex 默认参数">
+              <Textarea
+                className="min-h-24 font-mono text-xs"
+                value={config.codex.defaultArgs.join("\n")}
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    codex: {
+                      ...config.codex,
+                      defaultArgs: event.target.value
+                        .split("\n")
+                        .map((line) => line.trim())
+                        .filter(Boolean),
+                    },
+                  })
+                }
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="阶段一沙箱">
+                <Input
+                  value={config.codex.part1Sandbox}
+                  onChange={(event) =>
+                    setConfig({ ...config, codex: { ...config.codex, part1Sandbox: event.target.value } })
+                  }
+                />
+              </Field>
+              <Field label="阶段二沙箱">
+                <Input
+                  value={config.codex.part2Sandbox}
+                  onChange={(event) =>
+                    setConfig({ ...config, codex: { ...config.codex, part2Sandbox: event.target.value } })
+                  }
+                />
+              </Field>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Linear 状态</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-4 gap-3">
+          {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
+            <Field key={key} label={statusConfigLabel(key)}>
+              <Input
+                value={value}
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    statuses: { ...config.statuses, [key]: event.target.value },
+                  })
+                }
+              />
+            </Field>
+          ))}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>提示词</CardTitle>
+            <Button onClick={savePrompt} disabled={busy}>
+              <Save className="size-4" />
+              保存
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Tabs value={promptStage} onValueChange={(value) => setPromptStage(value as "part1" | "part2")}>
+              <TabsList>
+                <TabsTrigger value="part1">阶段一</TabsTrigger>
+                <TabsTrigger value="part2">阶段二</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <Select value={promptScope} onValueChange={setPromptScope}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">全局</SelectItem>
+                {projectKeys.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {prompts.projects[key]?.part1IsOverride || prompts.projects[key]?.part2IsOverride ? `${key}` : key}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Textarea
+            className="min-h-[520px] resize-y font-mono text-xs leading-relaxed"
+            value={promptText}
+            onChange={(event) => setPromptText(event.target.value)}
+          />
+        </CardContent>
+      </Card>
+
+      <ExecutionLog events={events} />
     </div>
   )
+}
+
+function ExecutionLog({ events }: { events: ExecutionEvent[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>执行日志</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ScrollArea className="h-[420px] rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>时间</TableHead>
+                <TableHead>级别</TableHead>
+                <TableHead>项目</TableHead>
+                <TableHead>阶段</TableHead>
+                <TableHead>事项</TableHead>
+                <TableHead>消息</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {events.map((event, index) => (
+                <TableRow key={`${event.timestamp}-${event.type}-${index}`}>
+                  <TableCell className="whitespace-nowrap text-xs">{formatDate(event.timestamp)}</TableCell>
+                  <TableCell>
+                    <EventLevelBadge level={event.level} />
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{event.projectKey || "-"}</TableCell>
+                  <TableCell>{event.stage ? stageLabel(event.stage) : "-"}</TableCell>
+                  <TableCell className="font-mono text-xs">{event.issueIdentifier || "-"}</TableCell>
+                  <TableCell>
+                    <div className="text-sm">{event.message}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{event.type}</div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {events.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-muted-foreground">
+                    暂无执行日志
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </ScrollArea>
+      </CardContent>
+    </Card>
+  )
+}
+
+function EventLevelBadge({ level }: { level: ExecutionEvent["level"] }) {
+  if (level === "error") {
+    return <Badge variant="destructive">错误</Badge>
+  }
+  if (level === "warn") {
+    return <Badge variant="outline">警告</Badge>
+  }
+  return <Badge variant="secondary">信息</Badge>
 }
 
 function ModeSelect({
@@ -616,331 +1326,6 @@ function ModeSelect({
   )
 }
 
-function PromptsPage({
-  projectKeys,
-  promptScope,
-  promptStage,
-  promptText,
-  setPromptScope,
-  setPromptStage,
-  setPromptText,
-  savePrompt,
-}: {
-  projectKeys: string[]
-  promptScope: string
-  promptStage: "part1" | "part2"
-  promptText: string
-  setPromptScope: (scope: string) => void
-  setPromptStage: (stage: "part1" | "part2") => void
-  setPromptText: (text: string) => void
-  savePrompt: () => void
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>提示词</CardTitle>
-          </div>
-          <Button onClick={savePrompt}>
-            <Save className="size-4" />
-            保存
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Tabs value={promptStage} onValueChange={(value) => setPromptStage(value as "part1" | "part2")}>
-            <TabsList>
-              <TabsTrigger value="part1">阶段一</TabsTrigger>
-              <TabsTrigger value="part2">阶段二</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <Select value={promptScope} onValueChange={setPromptScope}>
-            <SelectTrigger className="w-[220px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="global">全局</SelectItem>
-              {projectKeys.map((key) => (
-                <SelectItem key={key} value={key}>
-                  {key}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <Textarea
-          className="min-h-[560px] resize-y font-mono text-xs leading-relaxed"
-          value={promptText}
-          onChange={(event) => setPromptText(event.target.value)}
-        />
-      </CardContent>
-    </Card>
-  )
-}
-
-function RunsPage({
-  runs,
-  selectedRun,
-  manualStage,
-  manualIssue,
-  setManualStage,
-  setManualIssue,
-  refreshRuns,
-  loadRun,
-  triggerOnce,
-  busy,
-}: {
-  runs: RunSummary[]
-  selectedRun: RunDetail | null
-  manualStage: Stage
-  manualIssue: string
-  setManualStage: (stage: Stage) => void
-  setManualIssue: (issue: string) => void
-  refreshRuns: () => void
-  loadRun: (id: string) => void
-  triggerOnce: (stage: Stage, issueId?: string) => void
-  busy: boolean
-}) {
-  return (
-    <div className="grid grid-cols-[minmax(500px,0.9fr)_1.1fr] gap-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>运行记录</CardTitle>
-            </div>
-            <Button variant="outline" onClick={refreshRuns} disabled={busy}>
-              <RefreshCcw className="size-4" />
-              刷新
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-[160px_1fr_auto] gap-2">
-            <Select value={manualStage} onValueChange={(value) => setManualStage(value as Stage)}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="both">全部</SelectItem>
-                <SelectItem value="part1">阶段一</SelectItem>
-                <SelectItem value="part2">阶段二</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              placeholder="可选 issue ID，例如 LIV-123"
-              value={manualIssue}
-              onChange={(event) => setManualIssue(event.target.value)}
-            />
-            <Button onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined)} disabled={busy}>
-              <Play className="size-4" />
-              执行
-            </Button>
-          </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>事项</TableHead>
-                <TableHead>阶段</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>更新时间</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runs.map((run) => (
-                <TableRow key={run.id} className="cursor-pointer" onClick={() => loadRun(run.id)}>
-                  <TableCell>
-                    <div className="font-mono text-xs">{run.issueIdentifier}</div>
-                    <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
-                  </TableCell>
-                  <TableCell>{stageLabel(run.stage)}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={run.status} />
-                  </TableCell>
-                  <TableCell className="text-xs">{formatDate(run.updatedAt)}</TableCell>
-                </TableRow>
-              ))}
-              {runs.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground">
-                    暂无运行记录
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>运行详情</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {selectedRun ? (
-            <Tabs defaultValue="final">
-              <TabsList>
-                <TabsTrigger value="final">最终结果</TabsTrigger>
-                <TabsTrigger value="stdout">标准输出</TabsTrigger>
-                <TabsTrigger value="stderr">错误输出</TabsTrigger>
-                <TabsTrigger value="prompt">提示词</TabsTrigger>
-              </TabsList>
-              <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
-              <RunLog value="stdout" text={selectedRun.stdout} />
-              <RunLog value="stderr" text={selectedRun.stderr} />
-              <RunLog value="prompt" text={selectedRun.prompt} />
-            </Tabs>
-          ) : (
-            <div className="flex min-h-80 items-center justify-center text-sm text-muted-foreground">
-              <CircleDot className="mr-2 size-4" />
-              未选择运行记录
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function RunLog({ value, text }: { value: string; text: string }) {
-  return (
-    <TabsContent value={value} className="mt-3">
-      <ScrollArea className="h-[560px] rounded-lg border bg-background p-3">
-        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{text || "（空）"}</pre>
-      </ScrollArea>
-    </TabsContent>
-  )
-}
-
-function SettingsPage({
-  config,
-  setConfig,
-  saveConfig,
-  busy,
-}: {
-  config: AppConfig
-  setConfig: (config: AppConfig) => void
-  saveConfig: () => void
-  busy: boolean
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>服务</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Field label="服务 ID">
-            <Input value={config.serverId} onChange={(event) => setConfig({ ...config, serverId: event.target.value })} />
-          </Field>
-          <Field label="监听地址">
-            <Input value={config.host} onChange={(event) => setConfig({ ...config, host: event.target.value })} />
-          </Field>
-          <Field label="端口">
-            <Input
-              type="number"
-              value={config.port}
-              onChange={(event) => setConfig({ ...config, port: Number(event.target.value) })}
-            />
-          </Field>
-          <Field label="轮询间隔秒数">
-            <Input
-              type="number"
-              value={config.pollIntervalSeconds}
-              onChange={(event) => setConfig({ ...config, pollIntervalSeconds: Number(event.target.value) })}
-            />
-          </Field>
-          <Button onClick={saveConfig} disabled={busy}>
-            <Save className="size-4" />
-            保存
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Linear 与 Codex</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Field label="Linear API 密钥环境变量">
-            <Input
-              value={config.linear.apiKeyEnv}
-              onChange={(event) =>
-                setConfig({ ...config, linear: { ...config.linear, apiKeyEnv: event.target.value } })
-              }
-            />
-          </Field>
-          <Field label="Codex 命令">
-            <Input
-              value={config.codex.bin}
-              onChange={(event) => setConfig({ ...config, codex: { ...config.codex, bin: event.target.value } })}
-            />
-          </Field>
-          <Field label="Codex 默认参数">
-            <Textarea
-              className="min-h-24 font-mono text-xs"
-              value={config.codex.defaultArgs.join("\n")}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  codex: {
-                    ...config.codex,
-                    defaultArgs: event.target.value
-                      .split("\n")
-                      .map((line) => line.trim())
-                      .filter(Boolean),
-                  },
-                })
-              }
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="阶段一沙箱">
-              <Input
-                value={config.codex.part1Sandbox}
-                onChange={(event) =>
-                  setConfig({ ...config, codex: { ...config.codex, part1Sandbox: event.target.value } })
-                }
-              />
-            </Field>
-            <Field label="阶段二沙箱">
-              <Input
-                value={config.codex.part2Sandbox}
-                onChange={(event) =>
-                  setConfig({ ...config, codex: { ...config.codex, part2Sandbox: event.target.value } })
-                }
-              />
-            </Field>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="col-span-2">
-        <CardHeader>
-          <CardTitle>Linear 状态</CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-4 gap-3">
-          {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
-            <Field key={key} label={statusConfigLabel(key)}>
-              <Input
-                value={value}
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    statuses: { ...config.statuses, [key]: event.target.value },
-                  })
-                }
-              />
-            </Field>
-          ))}
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
 function StatusBadge({ status }: { status: string }) {
   if (status === "succeeded") {
     return (
@@ -958,6 +1343,14 @@ function StatusBadge({ status }: { status: string }) {
       </Badge>
     )
   }
+  if (status === "canceled") {
+    return (
+      <Badge variant="outline">
+        <StopCircle className="size-3" />
+        已中止
+      </Badge>
+    )
+  }
   return (
     <Badge variant="destructive">
       <Square className="size-3" />
@@ -971,6 +1364,13 @@ function stageLabel(stage: string) {
   if (stage === "part2") return "阶段二"
   if (stage === "both") return "全部"
   return stage
+}
+
+function runStatusLabel(status: string) {
+  if (status === "succeeded") return "成功"
+  if (status === "running") return "运行中"
+  if (status === "canceled") return "已中止"
+  return "失败"
 }
 
 function statusConfigLabel(key: keyof AppConfig["statuses"]) {

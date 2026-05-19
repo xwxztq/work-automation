@@ -5,10 +5,13 @@
 ## 功能
 
 - 读取当前机器配置的 Linear 项目。
-- 阶段一处理 `Todo / Needs Clarification / Blocked`。
-- 阶段二只处理 `On Schedule`。
+- 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
+- 阶段二检测 `On Schedule` 并启动 Codex 做实现。
+- 服务端只负责扫描队列、启动 Codex、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
+- 多个项目并行执行，同一项目内按 issue 串行执行。
 - 使用 `codex exec --json -C <project.codexCwd> -` 启动 Codex。
-- 运行日志写入 `.linear-automation/runs`。
+- 支持停止单个运行或当前项目的运行。
+- 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
 - 不自动移动 issue 到 `Done`。
 
 ## 启动
@@ -23,6 +26,8 @@ pnpm dev:all
 前端地址: `http://127.0.0.1:8888`
 
 后端地址: `http://127.0.0.1:4378`
+
+开发模式下，前端打开后会默认启动轮询。关闭轮询只会停止后续扫描，不会自动停止正在运行的 Codex 子进程；需要在项目页停止单个运行或停止当前项目。
 
 生产模式:
 
@@ -42,8 +47,12 @@ pnpm start
 - Linear API 密钥环境变量名
 - Codex 命令和默认参数
 - Linear 工作流状态名
-- 项目、仓库路径、Codex 执行路径
+- 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
 - 全局和项目级阶段一 / 阶段二提示词
+
+左侧侧边栏按项目展示。设置入口在侧边栏底部，提示词也在设置中维护。
+
+提示词负责指导 Codex 直接操作 Linear。默认提示词参考上级目录的 `automation-prompt` 两阶段规则，但当前版本不再创建子代理。
 
 `config.local.json` 已加入 `.gitignore`。接口不会返回 Linear API 密钥明文。
 
