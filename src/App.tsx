@@ -792,8 +792,8 @@ function ProjectView({
         <MetricCard title="最近状态" value={lastRun ? runStatusLabel(lastRun.status) : "-"} />
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(420px,0.9fr)_1.1fr] gap-4">
-        <div className="flex min-h-0 flex-col gap-4">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)] gap-4">
+        <div className="flex min-h-0 min-w-0 flex-col gap-4">
           <Card className="shrink-0">
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -988,14 +988,14 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
 
 function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
   return (
-    <Card className="h-full min-h-0">
+    <Card className="h-full min-h-0 min-w-0 overflow-hidden">
       <CardHeader className="shrink-0">
         <CardTitle>运行详情</CardTitle>
       </CardHeader>
-      <CardContent className="flex min-h-0 flex-1">
+      <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedRun ? (
-          <Tabs defaultValue="final" className="h-full min-h-0 flex-1">
-            <TabsList className="shrink-0">
+          <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
+            <TabsList className="max-w-full shrink-0 overflow-x-auto">
               <TabsTrigger value="final">最终结果</TabsTrigger>
               <TabsTrigger value="stdout">标准输出</TabsTrigger>
               <TabsTrigger value="stderr">错误输出</TabsTrigger>
@@ -1019,9 +1019,9 @@ function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
 
 function RunLog({ value, text }: { value: string; text: string }) {
   return (
-    <TabsContent value={value} className="mt-3 min-h-0">
-      <ScrollArea className="h-full rounded-lg border bg-background p-3">
-        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{text || "（空）"}</pre>
+    <TabsContent value={value} className="mt-3 min-h-0 min-w-0 overflow-hidden">
+      <ScrollArea className="h-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-background p-3">
+        <pre className="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">{text || "（空）"}</pre>
       </ScrollArea>
     </TabsContent>
   )
