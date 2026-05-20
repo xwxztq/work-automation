@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
-  Bot,
   CheckCircle2,
   CircleDot,
   FolderGit2,
@@ -78,6 +77,8 @@ const emptyProject: ProjectConfig = {
   part2PromptMode: "global",
   extraRules: "无额外项目规则。",
 }
+
+const APP_LOGO_SRC = "/WA-logo.png"
 
 function App() {
   const [view, setView] = useState<View>("project")
@@ -382,7 +383,10 @@ function App() {
       <main className="flex min-h-svh items-center justify-center bg-background">
         <Card className="w-[360px]">
           <CardHeader>
-            <CardTitle>Linear 自动执行</CardTitle>
+            <div className="flex items-center gap-3">
+              <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-9 rounded-md object-contain" />
+              <CardTitle>Linear 自动执行</CardTitle>
+            </div>
           </CardHeader>
         </Card>
         <Toaster />
@@ -524,8 +528,8 @@ function Sidebar({
     <aside className="flex h-svh flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center justify-between px-4 py-4">
         <div className="flex min-w-0 items-center gap-2">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-            <Bot className="size-4" />
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-sidebar-border">
+            <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-6 object-contain" />
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">Linear 自动执行</div>

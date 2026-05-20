@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/WA-logo.png" alt="WorkAutomation logo" width="96" />
+</p>
+
 # Linear Codex 自动执行
 
 本地服务，用于在每台服务器上执行 Linear 到 Codex 的两阶段流程。
