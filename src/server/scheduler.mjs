@@ -7,11 +7,13 @@ export function createScheduler({ rootDir, configProvider, store }) {
   let timer = null
   let enabled = false
   let running = false
+  let activeDaemonScans = 0
   let nextRunAt = null
   let lastError = null
   const activeRunsByKey = new Map()
   const activeRunsById = new Map()
-  const activeProjectCycles = new Map()
+  const activeProjectCycles = new Set()
+  const activeProjectStageCycles = new Map()
 
   async function logEvent(event) {
     await store.appendEvent(event).catch(() => {})
@@ -82,23 +84,14 @@ export function createScheduler({ rootDir, configProvider, store }) {
       part2: [],
       skipped: [],
     }
-    if (activeProjectCycles.has(project.key)) {
-      projectSummary.skipped.push(`${project.key}: 项目正在执行`)
-      await logEvent({
-        type: "project-skip",
-        stage,
-        projectKey: project.key,
-        message: "项目正在执行，本轮跳过",
-      })
-      return projectSummary
-    }
-
     const controller = new AbortController()
-    activeProjectCycles.set(project.key, {
+    const cycle = {
       projectKey: project.key,
+      stage,
       startedAt: new Date().toISOString(),
       controller,
-    })
+    }
+    activeProjectCycles.add(cycle)
 
     try {
       await logEvent({
@@ -109,13 +102,21 @@ export function createScheduler({ rootDir, configProvider, store }) {
         data: { issueId },
       })
       if (stage === "part1" || stage === "both") {
-        await runProjectPart1({
-          config,
+        await runProjectStageOnce({
+          cycle,
           project,
-          linear,
+          stage: "part1",
+          requestedStage: stage,
           projectSummary,
-          issueId,
-          signal: controller.signal,
+          run: () =>
+            runProjectPart1({
+              config,
+              project,
+              linear,
+              projectSummary,
+              issueId,
+              signal: controller.signal,
+            }),
         })
       }
       if (!controller.signal.aborted && (stage === "part2" || stage === "both")) {
@@ -151,7 +152,39 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       return projectSummary
     } finally {
-      activeProjectCycles.delete(project.key)
+      removeProjectCycle(project.key, cycle)
+    }
+  }
+
+  async function runProjectStageOnce({ cycle, project, stage, requestedStage, projectSummary, run }) {
+    const key = projectStageKey(project.key, stage)
+    if (activeProjectStageCycles.has(key)) {
+      projectSummary.skipped.push(`${project.key}: ${stageLabel(stage)}正在执行`)
+      await logEvent({
+        type: `${stage}-skip-active-cycle`,
+        stage,
+        projectKey: project.key,
+        message: `${stageLabel(stage)}正在执行，本轮跳过该阶段`,
+        data: { requestedStage },
+      })
+      return
+    }
+    activeProjectStageCycles.set(key, cycle)
+    try {
+      await run()
+    } finally {
+      if (activeProjectStageCycles.get(key) === cycle) {
+        activeProjectStageCycles.delete(key)
+      }
+    }
+  }
+
+  function removeProjectCycle(projectKey, cycle) {
+    activeProjectCycles.delete(cycle)
+    for (const [key, activeCycle] of activeProjectStageCycles.entries()) {
+      if (activeCycle === cycle && key.startsWith(`${projectKey}:`)) {
+        activeProjectStageCycles.delete(key)
+      }
     }
   }
 
@@ -227,6 +260,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     const candidates = issueId
       ? issues.filter((issue) => issue.identifier === issueId || issue.id === issueId)
       : issues.filter((issue) => issue.state?.name === config.statuses.schedule)
+    const activeStats = activePart2StatsFromIssues(issues, project, config)
 
     await logEvent({
       type: "part2-candidates",
@@ -236,7 +270,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
       data: {
         issueCount: issues.length,
         candidateCount: candidates.length,
-        activeCount: issues.filter((issue) => issue.state?.name === config.statuses.inProgress).length,
+        activeCount: activeStats.count,
+        linearInProgressCount: activeStats.linearInProgressCount,
+        localActivePart2Count: activeStats.localActivePart2Count,
         maxActivePart2: project.maxActivePart2,
         issueId,
       },
@@ -255,8 +291,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
       }
 
       if (!issueId) {
-        const active = await countActivePart2(linear, project, config)
-        if (active >= project.maxActivePart2) {
+        const activeLimitStats = await countActivePart2(linear, project, config)
+        if (activeLimitStats.count >= project.maxActivePart2) {
           projectSummary.skipped.push(`${project.key}: 处理中数量已达上限`)
           await logEvent({
             type: "part2-skip-active-limit",
@@ -264,7 +300,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
             projectKey: project.key,
             message: "阶段二处理中数量已达上限",
             data: {
-              activeCount: active,
+              activeCount: activeLimitStats.count,
+              linearInProgressCount: activeLimitStats.linearInProgressCount,
+              localActivePart2Count: activeLimitStats.localActivePart2Count,
               maxActivePart2: project.maxActivePart2,
             },
           })
@@ -300,6 +338,41 @@ export function createScheduler({ rootDir, configProvider, store }) {
       const result = await executeCodexStage({ config, project, issue, stage: "part2", signal })
       await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
       projectSummary.part2.push({ issue: issue.identifier, result: result.status })
+    }
+  }
+
+  async function countActivePart2(linear, project, config) {
+    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    return activePart2StatsFromIssues(issues, project, config)
+  }
+
+  function activePart2StatsFromIssues(issues, project, config) {
+    const linearIssueKeys = new Set()
+    for (const issue of issues) {
+      if (issue.state?.name !== config.statuses.inProgress) {
+        continue
+      }
+      const key = issueActiveKey(issue)
+      if (key) {
+        linearIssueKeys.add(key)
+      }
+    }
+
+    const localIssueKeys = new Set()
+    for (const active of activeRunsById.values()) {
+      if (active.projectKey !== project.key || active.stage !== "part2") {
+        continue
+      }
+      const key = issueActiveKey(active.issue)
+      if (key) {
+        localIssueKeys.add(key)
+      }
+    }
+
+    return {
+      count: new Set([...linearIssueKeys, ...localIssueKeys]).size,
+      linearInProgressCount: linearIssueKeys.size,
+      localActivePart2Count: localIssueKeys.size,
     }
   }
 
@@ -546,31 +619,50 @@ ${(issue.comments || [])
       type: "daemon-start",
       message: "轮询已启动",
     })
-    const loop = async () => {
-      timer = null
-      if (!enabled) {
-        return
-      }
-      if (!running) {
-        running = true
-        try {
-          await runOnce("both")
-          lastError = null
-        } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error)
-        } finally {
-          running = false
-        }
-      }
-      if (!enabled) {
-        return
-      }
-      const config = await configProvider()
-      nextRunAt = new Date(Date.now() + config.pollIntervalSeconds * 1000).toISOString()
-      timer = setTimeout(loop, config.pollIntervalSeconds * 1000)
+    scheduleDaemonTick(0)
+  }
+
+  async function runDaemonTick() {
+    timer = null
+    if (!enabled) {
+      return
     }
-    nextRunAt = new Date().toISOString()
-    timer = setTimeout(loop, 0)
+
+    try {
+      const config = await configProvider()
+      if (!enabled) {
+        return
+      }
+      scheduleDaemonTick(config.pollIntervalSeconds * 1000)
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
+      scheduleDaemonTick(60_000)
+      return
+    }
+
+    activeDaemonScans += 1
+    running = true
+    void runOnce("both")
+      .then(() => {
+        lastError = null
+      })
+      .catch((error) => {
+        lastError = error instanceof Error ? error.message : String(error)
+      })
+      .finally(() => {
+        activeDaemonScans = Math.max(0, activeDaemonScans - 1)
+        running = activeDaemonScans > 0
+      })
+  }
+
+  function scheduleDaemonTick(delayMs) {
+    if (!enabled) {
+      return
+    }
+    nextRunAt = new Date(Date.now() + delayMs).toISOString()
+    timer = setTimeout(() => {
+      void runDaemonTick()
+    }, delayMs)
   }
 
   function stop() {
@@ -606,10 +698,11 @@ ${(issue.comments || [])
 
   function cancelProject(projectKey, reason = "用户中止项目任务") {
     let canceled = false
-    const cycle = activeProjectCycles.get(projectKey)
-    if (cycle && !cycle.controller.signal.aborted) {
-      cycle.controller.abort(reason)
-      canceled = true
+    for (const cycle of activeProjectCycles) {
+      if (cycle.projectKey === projectKey && !cycle.controller.signal.aborted) {
+        cycle.controller.abort(reason)
+        canceled = true
+      }
     }
     for (const active of activeRunsById.values()) {
       if (active.projectKey === projectKey) {
@@ -677,11 +770,6 @@ ${(issue.comments || [])
   }
 }
 
-async function countActivePart2(linear, project, config) {
-  const { issues } = await linear.listProjectIssues(project.linearProjectId)
-  return issues.filter((issue) => issue.state?.name === config.statuses.inProgress).length
-}
-
 function getLinear(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   const apiKey = process.env[apiKeyEnv]
@@ -712,10 +800,18 @@ function compareIssuePriority(a, b) {
   return String(a.updatedAt).localeCompare(String(b.updatedAt))
 }
 
+function projectStageKey(projectKey, stage) {
+  return `${projectKey}:${stage}`
+}
+
 function stageLabel(stage) {
   if (stage === "part1") return "阶段一"
   if (stage === "part2") return "阶段二"
   return stage
+}
+
+function issueActiveKey(issue) {
+  return issue?.id || issue?.identifier || ""
 }
 
 function issueFingerprint(issue) {
