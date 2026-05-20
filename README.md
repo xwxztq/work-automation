@@ -12,7 +12,7 @@
 - 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现。
 - 服务端只负责扫描队列、启动 Codex、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
-- 多个项目并行执行，同一项目内按 issue 串行执行。
+- 多个项目并行执行；同一项目内阶段一、阶段二互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
 - 使用 `codex exec --json -C <project.codexCwd> -` 启动 Codex。
 - 支持停止单个运行或当前项目的运行。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。

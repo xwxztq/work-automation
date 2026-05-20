@@ -13,7 +13,6 @@ export function createScheduler({ rootDir, configProvider, store }) {
   const activeRunsByKey = new Map()
   const activeRunsById = new Map()
   const activeProjectCycles = new Set()
-  const activeProjectStageCycles = new Map()
 
   async function logEvent(event) {
     await store.appendEvent(event).catch(() => {})
@@ -101,25 +100,47 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message: "项目扫描开始",
         data: { issueId },
       })
-      if (stage === "part1" || stage === "both") {
-        await runProjectStageOnce({
-          cycle,
+      if (stage === "both") {
+        await Promise.all([
+          runProjectStageBranch({
+            project,
+            stage: "part1",
+            projectSummary,
+            run: () =>
+              runProjectPart1({
+                config,
+                project,
+                linear,
+                projectSummary,
+                issueId,
+                signal: controller.signal,
+              }),
+          }),
+          runProjectStageBranch({
+            project,
+            stage: "part2",
+            projectSummary,
+            run: () =>
+              runProjectPart2({
+                config,
+                project,
+                linear,
+                projectSummary,
+                issueId,
+                signal: controller.signal,
+              }),
+          }),
+        ])
+      } else if (stage === "part1") {
+        await runProjectPart1({
+          config,
           project,
-          stage: "part1",
-          requestedStage: stage,
+          linear,
           projectSummary,
-          run: () =>
-            runProjectPart1({
-              config,
-              project,
-              linear,
-              projectSummary,
-              issueId,
-              signal: controller.signal,
-            }),
+          issueId,
+          signal: controller.signal,
         })
-      }
-      if (!controller.signal.aborted && (stage === "part2" || stage === "both")) {
+      } else if (!controller.signal.aborted && stage === "part2") {
         await runProjectPart2({
           config,
           project,
@@ -152,39 +173,23 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       return projectSummary
     } finally {
-      removeProjectCycle(project.key, cycle)
+      activeProjectCycles.delete(cycle)
     }
   }
 
-  async function runProjectStageOnce({ cycle, project, stage, requestedStage, projectSummary, run }) {
-    const key = projectStageKey(project.key, stage)
-    if (activeProjectStageCycles.has(key)) {
-      projectSummary.skipped.push(`${project.key}: ${stageLabel(stage)}正在执行`)
-      await logEvent({
-        type: `${stage}-skip-active-cycle`,
-        stage,
-        projectKey: project.key,
-        message: `${stageLabel(stage)}正在执行，本轮跳过该阶段`,
-        data: { requestedStage },
-      })
-      return
-    }
-    activeProjectStageCycles.set(key, cycle)
+  async function runProjectStageBranch({ project, stage, projectSummary, run }) {
     try {
       await run()
-    } finally {
-      if (activeProjectStageCycles.get(key) === cycle) {
-        activeProjectStageCycles.delete(key)
-      }
-    }
-  }
-
-  function removeProjectCycle(projectKey, cycle) {
-    activeProjectCycles.delete(cycle)
-    for (const [key, activeCycle] of activeProjectStageCycles.entries()) {
-      if (activeCycle === cycle && key.startsWith(`${projectKey}:`)) {
-        activeProjectStageCycles.delete(key)
-      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      projectSummary.skipped.push(`${project.key}: ${stageLabel(stage)}执行失败: ${message}`)
+      await logEvent({
+        type: `${stage}-error`,
+        level: "error",
+        stage,
+        projectKey: project.key,
+        message,
+      })
     }
   }
 
@@ -212,19 +217,48 @@ export function createScheduler({ rootDir, configProvider, store }) {
       },
     })
 
-    for (const issueRef of candidates.sort(compareIssuePriority)) {
-      if (signal.aborted) {
-        await logEvent({
-          type: "part1-aborted",
-          level: "warn",
-          stage: "part1",
-          projectKey: project.key,
-          message: "阶段一项目信号已中止，停止处理后续候选",
-        })
-        break
-      }
+    const results = await Promise.all(
+      candidates.sort(compareIssuePriority).map((issueRef) =>
+        runProjectPart1Candidate({
+          config,
+          project,
+          linear,
+          projectSummary,
+          eligibleStatuses,
+          issueId,
+          issueRef,
+          signal,
+        }),
+      ),
+    )
+    projectSummary.part1.push(...results.filter(Boolean))
+  }
 
-      const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
+  async function runProjectPart1Candidate({
+    config,
+    project,
+    linear,
+    projectSummary,
+    eligibleStatuses,
+    issueId,
+    issueRef,
+    signal,
+  }) {
+    const issueIdentifier = issueRef.identifier || issueRef.id
+    if (signal.aborted) {
+      await logEvent({
+        type: "part1-aborted",
+        level: "warn",
+        stage: "part1",
+        projectKey: project.key,
+        issueIdentifier,
+        message: "阶段一项目信号已中止，跳过候选",
+      })
+      return null
+    }
+
+    try {
+      const issue = await linear.getIssue(issueIdentifier)
       if (!issueId && !eligibleStatuses.has(issue.state?.name)) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是阶段一队列状态`)
         await logEvent({
@@ -235,10 +269,21 @@ export function createScheduler({ rootDir, configProvider, store }) {
           message: `${issue.identifier} 状态已不是阶段一队列状态，跳过`,
           data: { state: issue.state?.name },
         })
-        continue
+        return null
       }
       if (!issueId && (await skipUnchangedIssue({ project, issue, stage: "part1", projectSummary }))) {
-        continue
+        return null
+      }
+      if (signal.aborted) {
+        await logEvent({
+          type: "part1-aborted",
+          level: "warn",
+          stage: "part1",
+          projectKey: project.key,
+          issueIdentifier: issue.identifier,
+          message: "阶段一项目信号已中止，跳过候选",
+        })
+        return null
       }
 
       await logEvent({
@@ -251,7 +296,18 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       const result = await executeCodexStage({ config, project, issue, stage: "part1", signal })
       await recordProcessedIssue({ linear, project, issue, stage: "part1", run: result })
-      projectSummary.part1.push({ issue: issue.identifier, result: result.status })
+      return { issue: issue.identifier, result: result.status }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await logEvent({
+        type: "part1-candidate-error",
+        level: "error",
+        stage: "part1",
+        projectKey: project.key,
+        issueIdentifier,
+        message,
+      })
+      return { issue: issueIdentifier, result: "failed" }
     }
   }
 
@@ -335,7 +391,14 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message: `${issue.identifier} 进入阶段二执行`,
         data: { state: issue.state?.name },
       })
-      const result = await executeCodexStage({ config, project, issue, stage: "part2", signal })
+      const result = await executeCodexStage({
+        config,
+        project,
+        issue,
+        stage: "part2",
+        signal,
+        enforceLocalPart2Limit: !issueId,
+      })
       await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
       projectSummary.part2.push({ issue: issue.identifier, result: result.status })
     }
@@ -359,7 +422,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     }
 
     const localIssueKeys = new Set()
-    for (const active of activeRunsById.values()) {
+    for (const active of activeLocalRuns()) {
       if (active.projectKey !== project.key || active.stage !== "part2") {
         continue
       }
@@ -374,6 +437,38 @@ export function createScheduler({ rootDir, configProvider, store }) {
       linearInProgressCount: linearIssueKeys.size,
       localActivePart2Count: localIssueKeys.size,
     }
+  }
+
+  function activeLocalRuns() {
+    const seen = new Set()
+    const active = []
+    for (const item of activeRunsByKey.values()) {
+      if (!seen.has(item)) {
+        seen.add(item)
+        active.push(item)
+      }
+    }
+    for (const item of activeRunsById.values()) {
+      if (!seen.has(item)) {
+        seen.add(item)
+        active.push(item)
+      }
+    }
+    return active
+  }
+
+  function countLocalActivePart2(project) {
+    const issueKeys = new Set()
+    for (const active of activeLocalRuns()) {
+      if (active.projectKey !== project.key || active.stage !== "part2") {
+        continue
+      }
+      const key = issueActiveKey(active.issue)
+      if (key) {
+        issueKeys.add(key)
+      }
+    }
+    return issueKeys.size
   }
 
   async function skipUnchangedIssue({ project, issue, stage, projectSummary }) {
@@ -443,7 +538,14 @@ export function createScheduler({ rootDir, configProvider, store }) {
     })
   }
 
-  async function executeCodexStage({ config, project, issue, stage, signal }) {
+  async function executeCodexStage({
+    config,
+    project,
+    issue,
+    stage,
+    signal,
+    enforceLocalPart2Limit = false,
+  }) {
     const key = `${project.key}:${stage}:${issue.identifier}`
     if (activeRunsByKey.has(key)) {
       await logEvent({
@@ -455,6 +557,24 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       return { status: "already-running" }
     }
+    if (
+      enforceLocalPart2Limit &&
+      stage === "part2" &&
+      countLocalActivePart2(project) >= project.maxActivePart2
+    ) {
+      await logEvent({
+        type: "part2-skip-local-active-limit",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        message: "阶段二本地运行数量已达上限",
+        data: {
+          localActivePart2Count: countLocalActivePart2(project),
+          maxActivePart2: project.maxActivePart2,
+        },
+      })
+      return { status: "skipped-active-limit" }
+    }
 
     const runController = new AbortController()
     const abortFromProject = () => abortRun(runController, abortReason(signal, "用户中止项目任务"))
@@ -464,18 +584,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
       signal.addEventListener("abort", abortFromProject, { once: true })
     }
 
-    let run = await store.createRun({ projectKey: project.key, stage, issue })
-    await logEvent({
-      type: "run-start",
-      stage,
-      projectKey: project.key,
-      issueIdentifier: issue.identifier,
-      runId: run.id,
-      message: `${issue.identifier} ${stageLabel(stage)} 开始`,
-      data: { runDir: run.dir },
-    })
     const active = {
-      runId: run.id,
+      runId: null,
       projectKey: project.key,
       stage,
       issue: {
@@ -488,9 +598,21 @@ export function createScheduler({ rootDir, configProvider, store }) {
       cancel: (reason = "用户中止任务") => abortRun(runController, reason),
     }
     activeRunsByKey.set(key, active)
-    activeRunsById.set(run.id, active)
 
+    let run = null
     try {
+      run = await store.createRun({ projectKey: project.key, stage, issue })
+      active.runId = run.id
+      activeRunsById.set(run.id, active)
+      await logEvent({
+        type: "run-start",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: run.id,
+        message: `${issue.identifier} ${stageLabel(stage)} 开始`,
+        data: { runDir: run.dir },
+      })
       if (runController.signal.aborted) {
         return await markRunCanceled(run, runController.signal)
       }
@@ -544,6 +666,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       return run
     } catch (error) {
+      if (!run) {
+        throw error
+      }
       if (runController.signal.aborted) {
         return await markRunCanceled(run, runController.signal, { pid: active.pid })
       }
@@ -566,7 +691,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
     } finally {
       signal.removeEventListener("abort", abortFromProject)
       activeRunsByKey.delete(key)
-      activeRunsById.delete(run.id)
+      if (run?.id) {
+        activeRunsById.delete(run.id)
+      }
     }
   }
 
@@ -798,10 +925,6 @@ function compareIssuePriority(a, b) {
     return priorityDiff
   }
   return String(a.updatedAt).localeCompare(String(b.updatedAt))
-}
-
-function projectStageKey(projectKey, stage) {
-  return `${projectKey}:${stage}`
 }
 
 function stageLabel(stage) {
