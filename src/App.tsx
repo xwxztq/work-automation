@@ -80,6 +80,28 @@ const emptyProject: ProjectConfig = {
 
 const APP_LOGO_SRC = "/WA-logo.png"
 
+const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
+  key: "本机配置用的稳定标识，日志和提示词会引用它。",
+  repoName: "展示名称，也会写入 Codex 执行提示词。",
+  linearProjectId: "Linear 项目 UUID，服务只扫描这个项目下的 issue。",
+  branchOrScopePrefix: "用于阶段二提示词和提交 scope，例如 main。",
+  path: "本机仓库绝对路径，服务用它定位代码。",
+  codexCwd: "codex exec -C 的工作目录；通常等于仓库路径。",
+  maxActivePart2: "同一项目同时处于阶段二实现中的 issue 上限，默认 1。",
+  defaultTests: "AI Triage 未指定测试时使用，每行一条命令。",
+  extraRules: "会写入阶段提示词；只放项目约束，不要放密钥。",
+}
+
+const statusConfigDescriptions: Record<keyof AppConfig["statuses"], string> = {
+  todo: "阶段一会扫描的新需求入口。",
+  needsClarification: "阶段一会复查等待用户补充的问题。",
+  blocked: "阶段一会复查阻塞是否解除。",
+  ready: "阶段一判断可实现后的等待池，不会自动进入已排期。",
+  schedule: "用户人工批准后，阶段二才会认领实现。",
+  inProgress: "当前 Codex agent 已认领并正在实现。",
+  testing: "实现完成后等待人工验证；不会自动 Done。",
+}
+
 function App() {
   const [view, setView] = useState<View>("project")
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -982,25 +1004,25 @@ function ProjectEditor({
           <SheetTitle>{editing ? "修改项目" : "新建项目"}</SheetTitle>
         </SheetHeader>
         <div className="grid grid-cols-2 gap-3 px-4">
-          <Field label="项目标识">
+          <Field label="项目标识" description={projectFieldDescriptions.key}>
             <Input value={project.key} onChange={(event) => onUpdate({ key: event.target.value })} />
           </Field>
-          <Field label="仓库名称">
+          <Field label="仓库名称" description={projectFieldDescriptions.repoName}>
             <Input value={project.repoName} onChange={(event) => onUpdate({ repoName: event.target.value })} />
           </Field>
-          <Field label="Linear 项目 ID">
+          <Field label="Linear 项目 ID" description={projectFieldDescriptions.linearProjectId}>
             <Input
               value={project.linearProjectId}
               onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
             />
           </Field>
-          <Field label="分支 / 提交范围前缀">
+          <Field label="分支 / 提交范围前缀" description={projectFieldDescriptions.branchOrScopePrefix}>
             <Input
               value={project.branchOrScopePrefix}
               onChange={(event) => onUpdate({ branchOrScopePrefix: event.target.value })}
             />
           </Field>
-          <Field label="仓库路径">
+          <Field label="仓库路径" description={projectFieldDescriptions.path}>
             <Input
               value={project.path}
               onChange={(event) => {
@@ -1013,10 +1035,10 @@ function ProjectEditor({
               }}
             />
           </Field>
-          <Field label="Codex 执行路径">
+          <Field label="Codex 执行路径" description={projectFieldDescriptions.codexCwd}>
             <Input value={project.codexCwd} onChange={(event) => onUpdate({ codexCwd: event.target.value })} />
           </Field>
-          <Field label="阶段二并发上限">
+          <Field label="阶段二并发上限" description={projectFieldDescriptions.maxActivePart2}>
             <Input
               type="number"
               value={project.maxActivePart2}
@@ -1033,7 +1055,7 @@ function ProjectEditor({
           <Field label="阶段二提示词模式">
             <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
           </Field>
-          <Field label="默认测试命令" className="col-span-2">
+          <Field label="默认测试命令" description={projectFieldDescriptions.defaultTests} className="col-span-2">
             <Textarea
               className="min-h-24 font-mono text-xs"
               value={project.defaultTests.join("\n")}
@@ -1047,7 +1069,7 @@ function ProjectEditor({
               }
             />
           </Field>
-          <Field label="项目规则" className="col-span-2">
+          <Field label="项目规则" description={projectFieldDescriptions.extraRules} className="col-span-2">
             <Textarea
               className="min-h-24"
               value={project.extraRules}
@@ -1141,7 +1163,7 @@ function SettingsPage({
             <CardTitle>Linear 与 Codex</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Field label="Linear API 密钥环境变量">
+            <Field label="Linear API 密钥环境变量" description="这里只填写环境变量名；密钥值只放在启动服务的进程环境中。">
               <Input
                 value={config.linear.apiKeyEnv}
                 onChange={(event) =>
@@ -1199,20 +1221,25 @@ function SettingsPage({
         <CardHeader>
           <CardTitle>Linear 状态</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-4 gap-3">
-          {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
-            <Field key={key} label={statusConfigLabel(key)}>
-              <Input
-                value={value}
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    statuses: { ...config.statuses, [key]: event.target.value },
-                  })
-                }
-              />
-            </Field>
-          ))}
+        <CardContent className="space-y-4">
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；阶段二只扫描已排期状态。Ready for Codex 到 On Schedule 需要用户人工批准。
+          </p>
+          <div className="grid grid-cols-4 gap-3">
+            {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
+              <Field key={key} label={statusConfigLabel(key)} description={statusConfigDescriptions[key]}>
+                <Input
+                  value={value}
+                  onChange={(event) =>
+                    setConfig({
+                      ...config,
+                      statuses: { ...config.statuses, [key]: event.target.value },
+                    })
+                  }
+                />
+              </Field>
+            ))}
+          </div>
         </CardContent>
       </Card>
 
@@ -1449,10 +1476,12 @@ function statusConfigLabel(key: keyof AppConfig["statuses"]) {
 
 function Field({
   label,
+  description,
   children,
   className,
 }: {
   label: string
+  description?: string
   children: ReactNode
   className?: string
 }) {
@@ -1460,6 +1489,7 @@ function Field({
     <div className={className}>
       <Label className="mb-1.5 block text-xs text-muted-foreground">{label}</Label>
       {children}
+      {description ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{description}</p> : null}
     </div>
   )
 }

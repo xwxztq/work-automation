@@ -44,6 +44,65 @@ pnpm start
 
 生产模式访问 `http://127.0.0.1:4378`。
 
+## 新用户配置步骤
+
+1. 复制本地配置文件:
+
+   ```bash
+   cp config.example.json config.local.json
+   ```
+
+2. 只在当前 shell 或进程环境中设置 Linear API key，不要写入 `config.local.json`:
+
+   ```bash
+   export LINEAR_API_KEY='你的 Linear API key'
+   ```
+
+   如果改用其他环境变量名，需要同步修改 `linear.apiKeyEnv`，并确保启动服务的进程能读取到这个变量。
+
+3. 在 Linear 工作流中创建或确认这些状态名，并让 `config.local.json` 的 `statuses` 与 Linear 中的名称完全一致:
+
+   - `Todo`: 阶段一会扫描的新需求入口。
+   - `Needs Clarification`: 阶段一会复查等待用户补充的问题。
+   - `Blocked`: 阶段一会复查阻塞是否解除。
+   - `Ready for Codex`: 阶段一判断可实现后的等待池。
+   - `On Schedule`: 用户人工批准后，阶段二才会认领实现。
+   - `In Progress`: 当前 Codex agent 已认领并正在实现。
+   - `Testing`: Codex 完成 scoped commit 后等待人工验证。
+
+   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。这个转换必须由用户在 Linear 中人工完成。
+
+4. 在界面或 `config.local.json` 中添加项目。必填字段建议按下面填写:
+
+   - `key`: 本机配置内使用的稳定项目标识，例如 `work-automation`。
+   - `repoName`: 展示给用户和写入提示词的仓库名称。
+   - `linearProjectId`: Linear 项目 UUID，只扫描这个项目下的 issue。
+   - `path`: 本机仓库绝对路径，例如 `/Users/san/Projects/Infra/linear/linear-automation`。
+   - `codexCwd`: `codex exec -C` 的执行目录；通常和 `path` 相同。
+   - `branchOrScopePrefix`: 分支或提交 scope 前缀，例如 `main`。
+   - `defaultTests`: AI Triage 没有给出测试命令时使用的默认测试，每行一条。
+   - `extraRules`: 项目特定规则，只写执行约束，不要写密钥。
+
+5. 校验配置并启动:
+
+   ```bash
+   pnpm validate
+   pnpm dev:all
+   ```
+
+   也可以手动触发一次扫描:
+
+   ```bash
+   pnpm once -- --stage part1
+   pnpm once -- --stage part2
+   ```
+
+6. 首次跑通时建议按这个顺序验证:
+
+   - 新 issue 放在 `Todo`，阶段一只分析和评论，不写代码。
+   - 用户确认范围后，把 issue 移到 `On Schedule`。
+   - 阶段二只认领 `On Schedule`，先移到 `In Progress`，由当前 Codex agent 实现、测试、提交，再移到 `Testing`。
+
 ## 配置
 
 在界面中配置:
