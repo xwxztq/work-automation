@@ -13,7 +13,7 @@
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现。
 - 服务端只负责扫描队列、启动 Codex、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
 - 多个项目并行执行；同一项目内阶段一、阶段二互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
-- 使用 `codex exec --json -C <project.codexCwd> -` 启动 Codex。
+- 使用 `codex exec --json --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
 - 支持停止单个运行或当前项目的运行。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
 - 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响。
@@ -144,6 +144,7 @@ pnpm start -- --host 192.168.1.23
 - 服务 ID、监听地址、端口、轮询间隔
 - Linear API 密钥环境变量名
 - Codex 命令和默认参数
+- Codex 默认只附加 `--json`；阶段一默认 sandbox 为 `read-only`，阶段二默认 sandbox 为 `danger-full-access`。
 - Linear 工作流状态名
 - 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
 - 全局和项目级阶段一 / 阶段二提示词

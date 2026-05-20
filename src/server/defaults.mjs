@@ -8,9 +8,9 @@ export const DEFAULT_CONFIG = {
   },
   codex: {
     bin: "codex",
-    defaultArgs: ["--json", "--ask-for-approval", "never"],
+    defaultArgs: ["--json"],
     part1Sandbox: "read-only",
-    part2Sandbox: "workspace-write",
+    part2Sandbox: "danger-full-access",
   },
   statuses: {
     todo: "Todo",
