@@ -79,6 +79,9 @@ const emptyProject: ProjectConfig = {
 }
 
 const APP_LOGO_SRC = "/WA-logo.png"
+const APP_BRAND_NAME = "Work Automation"
+const APP_TITLE_PREFIX = "WA"
+const DEFAULT_SERVER_ID = "本机"
 const SELECTED_PROJECT_KEY_STORAGE_KEY = "linearAutomation.selectedProjectKey"
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
@@ -188,6 +191,11 @@ function App() {
       void setDaemonEnabled(true, true)
     }
   }, [daemon])
+
+  useEffect(() => {
+    const serverName = config?.serverId.trim() || DEFAULT_SERVER_ID
+    document.title = `${APP_TITLE_PREFIX} - ${serverName}`
+  }, [config?.serverId])
 
   const selectedProject = useMemo(
     () => config?.projects.find((project) => project.key === selectedProjectKey) || null,
@@ -444,7 +452,7 @@ function App() {
           <CardHeader>
             <div className="flex items-center gap-3">
               <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-9 rounded-md object-contain" />
-              <CardTitle>Linear 自动执行</CardTitle>
+              <CardTitle>{APP_BRAND_NAME}</CardTitle>
             </div>
           </CardHeader>
         </Card>
@@ -593,7 +601,7 @@ function Sidebar({
             <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-6 object-contain" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">Linear 自动执行</div>
+            <div className="truncate text-sm font-medium">{APP_BRAND_NAME}</div>
             <div className="truncate text-xs text-muted-foreground">{config.serverId}</div>
           </div>
         </div>
