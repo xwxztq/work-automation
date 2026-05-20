@@ -75,7 +75,17 @@ AI Triage: READY
 - <命令或手动验证>
 
 计划提交信息:
-<Conventional Commit 信息，使用中文，尽量包含 issue ID>
+```text
+<type>[optional scope]: <中文描述，尽量包含 Linear issue ID>
+
+<中文 body，用 1-3 句概括计划中的改动和原因；必须包含，不要只写 header>
+
+[可选 footer: 仅在需要时写 BREAKING CHANGE: <说明> 或其他 trailers]
+```
+
+提交信息说明:
+- 这是阶段一生成给阶段二参考的计划提交信息，不代表阶段一会提交代码。
+- 阶段二创建真实 commit 前必须根据最终 diff 修订 header、body 和 footer。
 
 风险:
 - <风险或“低风险”>
