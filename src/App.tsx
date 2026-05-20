@@ -255,9 +255,8 @@ function App() {
 
   function openNewProject() {
     if (!config) return
-    const key = `project-${config.projects.length + 1}`
     setEditingProjectKey(null)
-    setDraftProject({ ...emptyProject, key, repoName: key, branchOrScopePrefix: key })
+    setDraftProject({ ...emptyProject, branchOrScopePrefix: "main" })
     setProjectEditorOpen(true)
   }
 
