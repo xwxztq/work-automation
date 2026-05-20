@@ -79,6 +79,7 @@ const emptyProject: ProjectConfig = {
 }
 
 const APP_LOGO_SRC = "/WA-logo.png"
+const SELECTED_PROJECT_KEY_STORAGE_KEY = "linearAutomation.selectedProjectKey"
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
   key: "本机配置用的稳定标识，日志和提示词会引用它。",
@@ -102,6 +103,38 @@ const statusConfigDescriptions: Record<keyof AppConfig["statuses"], string> = {
   testing: "实现完成后等待人工验证；不会自动 Done。",
 }
 
+function readPersistedSelectedProjectKey() {
+  if (typeof window === "undefined") return ""
+  try {
+    return window.localStorage.getItem(SELECTED_PROJECT_KEY_STORAGE_KEY) || ""
+  } catch {
+    return ""
+  }
+}
+
+function persistSelectedProjectKey(key: string) {
+  if (typeof window === "undefined") return
+  try {
+    if (key) {
+      window.localStorage.setItem(SELECTED_PROJECT_KEY_STORAGE_KEY, key)
+      return
+    }
+    window.localStorage.removeItem(SELECTED_PROJECT_KEY_STORAGE_KEY)
+  } catch {
+    // Browser storage may be unavailable; keep the in-memory selection working.
+  }
+}
+
+function resolveSelectedProjectKey(projects: ProjectConfig[], preferredKeys: string[]) {
+  const availableKeys = new Set(projects.map((project) => project.key).filter(Boolean))
+  for (const key of preferredKeys) {
+    if (availableKeys.has(key)) {
+      return key
+    }
+  }
+  return projects[0]?.key || ""
+}
+
 function App() {
   const [view, setView] = useState<View>("project")
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -109,7 +142,7 @@ function App() {
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [events, setEvents] = useState<ExecutionEvent[]>([])
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null)
-  const [selectedProjectKey, setSelectedProjectKey] = useState("")
+  const [selectedProjectKey, setSelectedProjectKey] = useState(readPersistedSelectedProjectKey)
   const [draftProject, setDraftProject] = useState<ProjectConfig>(emptyProject)
   const [editingProjectKey, setEditingProjectKey] = useState<string | null>(null)
   const [projectEditorOpen, setProjectEditorOpen] = useState(false)
@@ -173,6 +206,11 @@ function App() {
     [daemon, selectedProjectKey],
   )
 
+  function selectProject(key: string) {
+    setSelectedProjectKey(key)
+    persistSelectedProjectKey(key)
+  }
+
   async function refreshAll() {
     setBusy(true)
     try {
@@ -188,9 +226,9 @@ function App() {
       setRuns(nextRuns.runs)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
-      if (!selectedProjectKey && nextConfig.projects[0]) {
-        setSelectedProjectKey(nextConfig.projects[0].key)
-      }
+      selectProject(
+        resolveSelectedProjectKey(nextConfig.projects, [selectedProjectKey, readPersistedSelectedProjectKey()]),
+      )
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -260,7 +298,7 @@ function App() {
       : [...config.projects, nextProject]
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
-    setSelectedProjectKey(key)
+    selectProject(key)
     setView("project")
     setProjectEditorOpen(false)
   }
@@ -270,7 +308,7 @@ function App() {
     const projects = config.projects.filter((project) => project.key !== key)
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
-    setSelectedProjectKey(projects[0]?.key || "")
+    selectProject(resolveSelectedProjectKey(projects, [selectedProjectKey === key ? "" : selectedProjectKey]))
     setSelectedRun(null)
     setProjectEditorOpen(false)
   }
@@ -426,7 +464,7 @@ function App() {
           view={view}
           busy={busy}
           onSelectProject={(key) => {
-            setSelectedProjectKey(key)
+            selectProject(key)
             setView("project")
           }}
           onNewProject={openNewProject}
