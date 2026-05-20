@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 8888",
-    "dev:server": "node src/server/index.mjs --config config.local.json --dev",
+    "dev:server": "node --watch src/server/index.mjs --config config.local.json --dev",
     "dev:all": "concurrently \"pnpm dev\" \"pnpm dev:server\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
