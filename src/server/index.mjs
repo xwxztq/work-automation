@@ -3,14 +3,16 @@ import { createHttpApi } from "./http-api.mjs"
 import { loadConfig, validateConfig } from "./config.mjs"
 import { createRunStore } from "./run-store.mjs"
 import { createScheduler } from "./scheduler.mjs"
+import { applyHostOverride, RUNTIME_HOST_ENV, normalizeHost, validateHost } from "./host.mjs"
 
 const ROOT_DIR = process.cwd()
 const args = parseArgs(process.argv.slice(2))
 const command = args._[0] || "serve"
 const configPath = args.config || "config.local.json"
+const hostOverride = resolveHostOverride(args)
 
 const store = createRunStore(ROOT_DIR)
-const configProvider = () => loadConfig(configPath, ROOT_DIR)
+const configProvider = async () => applyHostOverride(await loadConfig(configPath, ROOT_DIR), hostOverride)
 const scheduler = createScheduler({ rootDir: ROOT_DIR, configProvider, store })
 
 if (command === "validate-config") {
@@ -27,6 +29,12 @@ if (command === "once") {
 }
 
 const config = await configProvider()
+const hostError = validateHost(config.host)
+if (hostError) {
+  console.error(hostError)
+  process.exit(1)
+}
+
 const server = createHttpApi({
   configPath,
   scheduler,
@@ -50,12 +58,27 @@ function shutdown() {
   server.close(() => process.exit(0))
 }
 
+function resolveHostOverride(parsedArgs) {
+  if (parsedArgs.host === true) {
+    console.error("--host 需要指定一个具体 IP，例如 --host 192.168.1.23。")
+    process.exit(1)
+  }
+  return normalizeHost(parsedArgs.host) || normalizeHost(process.env[RUNTIME_HOST_ENV])
+}
+
 function parseArgs(argv) {
   const parsed = { _: [] }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (arg.startsWith("--")) {
-      const key = arg.slice(2).replace(/-([a-z])/g, (_, char) => char.toUpperCase())
+      const option = arg.slice(2)
+      const equalsIndex = option.indexOf("=")
+      if (equalsIndex !== -1) {
+        const key = option.slice(0, equalsIndex).replace(/-([a-z])/g, (_, char) => char.toUpperCase())
+        parsed[key] = option.slice(equalsIndex + 1)
+        continue
+      }
+      const key = option.replace(/-([a-z])/g, (_, char) => char.toUpperCase())
       const next = argv[index + 1]
       if (!next || next.startsWith("--")) {
         parsed[key] = true

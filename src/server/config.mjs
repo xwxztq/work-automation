@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { accessSync, constants } from "node:fs"
 import { DEFAULT_CONFIG } from "./defaults.mjs"
+import { isLoopbackHost, validateHost } from "./host.mjs"
 
 export function resolveFromRoot(rootDir, filePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath)
@@ -115,8 +116,11 @@ export async function validateConfig(config, rootDir = process.cwd()) {
   if (!config.serverId?.trim()) {
     errors.push("必须填写 serverId。")
   }
-  if (config.host !== "127.0.0.1") {
-    warnings.push("当前版本建议 GUI 只监听 127.0.0.1。")
+  const hostError = validateHost(config.host)
+  if (hostError) {
+    errors.push(hostError)
+  } else if (!isLoopbackHost(config.host)) {
+    warnings.push("当前 host 会把服务暴露到局域网，请确认只在可信网络中使用。")
   }
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
     errors.push("port 必须是 1 到 65535 之间的整数。")

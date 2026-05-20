@@ -3,15 +3,23 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+const host = process.env.LINEAR_AUTOMATION_HOST?.trim() || '127.0.0.1'
+const apiHost = process.env.LINEAR_AUTOMATION_API_HOST?.trim() || host
+const apiPort = process.env.LINEAR_AUTOMATION_API_PORT?.trim() || '4378'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    host: '127.0.0.1',
+    host,
     port: 8888,
     proxy: {
-      '/api': 'http://127.0.0.1:4378',
+      '/api': `http://${apiHost}:${apiPort}`,
     },
+  },
+  preview: {
+    host,
+    port: 8888,
   },
   resolve: {
     alias: {

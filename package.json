@@ -4,13 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 8888",
+    "dev": "vite --port 8888",
+    "dev:lan": "node src/server/with-host.mjs dev:all",
     "dev:server": "node --watch src/server/index.mjs --config config.local.json --dev",
     "dev:all": "concurrently \"pnpm dev\" \"pnpm dev:server\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview --host 127.0.0.1 --port 8888",
+    "preview": "vite preview",
+    "preview:lan": "node src/server/with-host.mjs preview",
     "start": "node src/server/index.mjs --config config.local.json",
+    "start:lan": "node src/server/with-host.mjs start",
     "once": "node src/server/index.mjs once --config config.local.json",
     "validate": "node src/server/index.mjs validate-config --config config.local.json"
   },
