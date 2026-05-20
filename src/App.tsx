@@ -417,8 +417,8 @@ function App() {
   }
 
   return (
-    <main className="min-h-svh bg-muted/30">
-      <div className="grid min-h-svh grid-cols-[280px_1fr]">
+    <main className="h-svh bg-muted/30">
+      <div className="grid h-full min-h-0 grid-cols-[280px_1fr]">
         <Sidebar
           config={config}
           daemon={daemon}
@@ -437,8 +437,8 @@ function App() {
           onSettings={() => setView("settings")}
         />
 
-        <section className="min-w-0 px-5 py-4">
-          <header className="mb-4 flex items-center justify-between">
+        <section className="flex min-h-0 min-w-0 flex-col px-5 py-4">
+          <header className="mb-4 flex shrink-0 items-center justify-between">
             <div>
               <h1 className="text-xl font-semibold tracking-normal">
                 {viewTitle(view, selectedProject)}
@@ -462,46 +462,48 @@ function App() {
             </div>
           </header>
 
-          {view === "project" && (
-            <ProjectView
-              project={selectedProject}
-              runs={projectRuns}
-              activeRuns={activeProjectRuns}
-              selectedRun={selectedRun}
-              manualStage={manualStage}
-              manualIssue={manualIssue}
-              busy={busy}
-              setManualStage={setManualStage}
-              setManualIssue={setManualIssue}
-              refreshRuns={() => void refreshRuns()}
-              loadRun={(id) => void loadRun(id)}
-              triggerOnce={(stage, issueId, projectKey) => void triggerOnce(stage, issueId, projectKey)}
-              cancelRun={(id) => void cancelRun(id)}
-              cancelProject={(key) => void cancelProject(key)}
-              editProject={(project) => openEditProject(project)}
-              addProject={openNewProject}
-            />
-          )}
+          <div className={view === "project" ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto pr-1"}>
+            {view === "project" && (
+              <ProjectView
+                project={selectedProject}
+                runs={projectRuns}
+                activeRuns={activeProjectRuns}
+                selectedRun={selectedRun}
+                manualStage={manualStage}
+                manualIssue={manualIssue}
+                busy={busy}
+                setManualStage={setManualStage}
+                setManualIssue={setManualIssue}
+                refreshRuns={() => void refreshRuns()}
+                loadRun={(id) => void loadRun(id)}
+                triggerOnce={(stage, issueId, projectKey) => void triggerOnce(stage, issueId, projectKey)}
+                cancelRun={(id) => void cancelRun(id)}
+                cancelProject={(key) => void cancelProject(key)}
+                editProject={(project) => openEditProject(project)}
+                addProject={openNewProject}
+              />
+            )}
 
-          {view === "logs" && <LogsPage events={events} />}
+            {view === "logs" && <LogsPage events={events} />}
 
-          {view === "settings" && (
-            <SettingsPage
-              config={config}
-              prompts={prompts}
-              projectKeys={activeProjectKeys}
-              promptScope={promptScope}
-              promptStage={promptStage}
-              promptText={promptText}
-              setConfig={setConfig}
-              saveConfig={() => void saveConfig(config)}
-              setPromptScope={setPromptScope}
-              setPromptStage={setPromptStage}
-              setPromptText={setPromptText}
-              savePrompt={() => void savePrompt()}
-              busy={busy}
-            />
-          )}
+            {view === "settings" && (
+              <SettingsPage
+                config={config}
+                prompts={prompts}
+                projectKeys={activeProjectKeys}
+                promptScope={promptScope}
+                promptStage={promptStage}
+                promptText={promptText}
+                setConfig={setConfig}
+                saveConfig={() => void saveConfig(config)}
+                setPromptScope={setPromptScope}
+                setPromptStage={setPromptStage}
+                setPromptText={setPromptText}
+                savePrompt={() => void savePrompt()}
+                busy={busy}
+              />
+            )}
+          </div>
         </section>
       </div>
       <ProjectEditor
@@ -738,16 +740,16 @@ function ProjectView({
   const lastRun = runs[0]
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="grid shrink-0 grid-cols-3 gap-4">
         <MetricCard title="当前执行" value={String(activeRuns.length)} />
         <MetricCard title="历史运行" value={String(runs.length)} />
         <MetricCard title="最近状态" value={lastRun ? runStatusLabel(lastRun.status) : "-"} />
       </div>
 
-      <div className="grid grid-cols-[minmax(420px,0.9fr)_1.1fr] gap-4">
-        <div className="space-y-4">
-          <Card>
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(420px,0.9fr)_1.1fr] gap-4">
+        <div className="flex min-h-0 flex-col gap-4">
+          <Card className="shrink-0">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>当前项目</CardTitle>
@@ -778,7 +780,7 @@ function ProjectView({
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="shrink-0">
             <CardHeader>
               <CardTitle>执行</CardTitle>
             </CardHeader>
@@ -808,7 +810,7 @@ function ProjectView({
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="shrink-0">
             <CardHeader>
               <CardTitle>正在执行</CardTitle>
             </CardHeader>
@@ -856,8 +858,8 @@ function ProjectView({
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
+          <Card className="min-h-[240px] flex-1">
+            <CardHeader className="shrink-0">
               <div className="flex items-center justify-between">
                 <CardTitle>历史</CardTitle>
                 <Button variant="outline" size="sm" onClick={refreshRuns} disabled={busy}>
@@ -866,8 +868,10 @@ function ProjectView({
                 </Button>
               </div>
             </CardHeader>
-            <CardContent>
-              <RunTable runs={runs} loadRun={loadRun} />
+            <CardContent className="min-h-0 flex-1 overflow-hidden">
+              <ScrollArea className="h-full rounded-lg border">
+                <RunTable runs={runs} loadRun={loadRun} />
+              </ScrollArea>
             </CardContent>
           </Card>
         </div>
@@ -903,7 +907,7 @@ function InfoItem({ label, value, wide = false }: { label: string; value: string
 function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string) => void }) {
   return (
     <Table>
-      <TableHeader>
+      <TableHeader className="sticky top-0 z-10 bg-card">
         <TableRow>
           <TableHead>事项</TableHead>
           <TableHead>阶段</TableHead>
@@ -939,14 +943,14 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
 
 function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
   return (
-    <Card>
-      <CardHeader>
+    <Card className="h-full min-h-0">
+      <CardHeader className="shrink-0">
         <CardTitle>运行详情</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex min-h-0 flex-1">
         {selectedRun ? (
-          <Tabs defaultValue="final">
-            <TabsList>
+          <Tabs defaultValue="final" className="h-full min-h-0 flex-1">
+            <TabsList className="shrink-0">
               <TabsTrigger value="final">最终结果</TabsTrigger>
               <TabsTrigger value="stdout">标准输出</TabsTrigger>
               <TabsTrigger value="stderr">错误输出</TabsTrigger>
@@ -958,7 +962,7 @@ function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
             <RunLog value="prompt" text={selectedRun.prompt} />
           </Tabs>
         ) : (
-          <div className="flex min-h-80 items-center justify-center text-sm text-muted-foreground">
+          <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
             <CircleDot className="mr-2 size-4" />
             未选择运行记录
           </div>
@@ -970,8 +974,8 @@ function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
 
 function RunLog({ value, text }: { value: string; text: string }) {
   return (
-    <TabsContent value={value} className="mt-3">
-      <ScrollArea className="h-[640px] rounded-lg border bg-background p-3">
+    <TabsContent value={value} className="mt-3 min-h-0">
+      <ScrollArea className="h-full rounded-lg border bg-background p-3">
         <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{text || "（空）"}</pre>
       </ScrollArea>
     </TabsContent>
@@ -1276,7 +1280,7 @@ function SettingsPage({
             </Select>
           </div>
           <Textarea
-            className="min-h-[520px] resize-y font-mono text-xs leading-relaxed"
+            className="h-[52svh] min-h-80 max-h-[680px] resize-none overflow-auto font-mono text-xs leading-relaxed"
             value={promptText}
             onChange={(event) => setPromptText(event.target.value)}
           />
