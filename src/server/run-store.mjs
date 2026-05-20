@@ -2,12 +2,13 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { ensureDir, fileExists, readJsonFile, writeJsonFile } from "./config.mjs"
-import { EVENTS_FILE, RUNS_DIR, STATE_DIR } from "./defaults.mjs"
+import { EVENTS_FILE, PROCESSED_FILE, RUNS_DIR, STATE_DIR } from "./defaults.mjs"
 
 export function createRunStore(rootDir) {
   const baseDir = path.join(rootDir, STATE_DIR)
   const runsDir = path.join(baseDir, RUNS_DIR)
   const eventsPath = path.join(baseDir, EVENTS_FILE)
+  const processedPath = path.join(baseDir, PROCESSED_FILE)
 
   async function createRun({ projectKey, stage, issue }) {
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${projectKey}-${stage}-${issue.identifier || issue.id}-${randomUUID().slice(0, 8)}`
@@ -91,6 +92,28 @@ export function createRunStore(rootDir) {
     return events
   }
 
+  async function getProcessedIssue(projectKey, stage, issueId) {
+    const state = await readProcessedState()
+    return state.issues[processedIssueKey(projectKey, stage, issueId)] || null
+  }
+
+  async function setProcessedIssue({ projectKey, stage, issueId, issueIdentifier, fingerprint, issueUpdatedAt, stateName, runId }) {
+    const state = await readProcessedState()
+    state.issues[processedIssueKey(projectKey, stage, issueId)] = {
+      projectKey,
+      stage,
+      issueId,
+      issueIdentifier,
+      fingerprint,
+      issueUpdatedAt,
+      stateName,
+      runId,
+      recordedAt: new Date().toISOString(),
+    }
+    await writeJsonFile(processedPath, state)
+    return state.issues[processedIssueKey(projectKey, stage, issueId)]
+  }
+
   async function listRuns(limit = 50) {
     if (!(await fileExists(runsDir))) {
       return []
@@ -131,14 +154,29 @@ export function createRunStore(rootDir) {
     baseDir,
     runsDir,
     eventsPath,
+    processedPath,
     createRun,
     updateRun,
     appendText,
     appendEvent,
     listEvents,
+    getProcessedIssue,
+    setProcessedIssue,
     listRuns,
     getRun,
   }
+
+  async function readProcessedState() {
+    const state = await readJsonFile(processedPath, { version: 1, issues: {} })
+    return {
+      version: 1,
+      issues: state?.issues && typeof state.issues === "object" ? state.issues : {},
+    }
+  }
+}
+
+function processedIssueKey(projectKey, stage, issueId) {
+  return `${projectKey}:${stage}:${issueId}`
 }
 
 async function readOptional(filePath) {

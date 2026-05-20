@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCcw,
   Save,
+  ScrollText,
   Settings,
   Square,
   StopCircle,
@@ -61,7 +62,7 @@ import type {
   Stage,
 } from "@/shared/types"
 
-type View = "project" | "settings"
+type View = "project" | "logs" | "settings"
 
 const emptyProject: ProjectConfig = {
   key: "",
@@ -406,6 +407,7 @@ function App() {
           onEditProject={openEditProject}
           onToggleProject={(project, enabled) => void toggleProjectEnabled(project, enabled)}
           onToggleDaemon={(enabled) => void setDaemonEnabled(enabled)}
+          onLogs={() => setView("logs")}
           onSettings={() => setView("settings")}
         />
 
@@ -413,7 +415,7 @@ function App() {
           <header className="mb-4 flex items-center justify-between">
             <div>
               <h1 className="text-xl font-semibold tracking-normal">
-                {view === "settings" ? "设置" : selectedProject?.repoName || selectedProject?.key || "项目"}
+                {viewTitle(view, selectedProject)}
               </h1>
               {view === "project" && selectedProject && (
                 <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
@@ -455,11 +457,12 @@ function App() {
             />
           )}
 
+          {view === "logs" && <LogsPage events={events} />}
+
           {view === "settings" && (
             <SettingsPage
               config={config}
               prompts={prompts}
-              events={events}
               projectKeys={activeProjectKeys}
               promptScope={promptScope}
               promptStage={promptStage}
@@ -501,6 +504,7 @@ function Sidebar({
   onEditProject,
   onToggleProject,
   onToggleDaemon,
+  onLogs,
   onSettings,
 }: {
   config: AppConfig
@@ -513,6 +517,7 @@ function Sidebar({
   onEditProject: (project: ProjectConfig) => void
   onToggleProject: (project: ProjectConfig, enabled: boolean) => void
   onToggleDaemon: (enabled: boolean) => void
+  onLogs: () => void
   onSettings: () => void
 }) {
   return (
@@ -577,6 +582,14 @@ function Sidebar({
           </div>
           {daemon?.lastError && <div className="mt-2 text-xs text-destructive">错误: {daemon.lastError}</div>}
         </div>
+        <Button
+          variant={view === "logs" ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          onClick={onLogs}
+        >
+          <ScrollText className="size-4" />
+          全局日志
+        </Button>
         <Button
           variant={view === "settings" ? "secondary" : "ghost"}
           className="w-full justify-start"
@@ -1058,7 +1071,6 @@ function ProjectEditor({
 function SettingsPage({
   config,
   prompts,
-  events,
   projectKeys,
   promptScope,
   promptStage,
@@ -1073,7 +1085,6 @@ function SettingsPage({
 }: {
   config: AppConfig
   prompts: PromptBundle
-  events: ExecutionEvent[]
   projectKeys: string[]
   promptScope: string
   promptStage: "part1" | "part2"
@@ -1240,6 +1251,46 @@ function SettingsPage({
           />
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function LogsPage({ events }: { events: ExecutionEvent[] }) {
+  const skipEvents = events.filter(
+    (event) => event.type.includes("skip") || event.message.includes("跳过"),
+  )
+  const errorEvents = events.filter((event) => event.level === "error")
+  const latestSkip = skipEvents[0]
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-4">
+        <MetricCard title="日志总数" value={String(events.length)} />
+        <MetricCard title="跳过记录" value={String(skipEvents.length)} />
+        <MetricCard title="错误记录" value={String(errorEvents.length)} />
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>最近跳过</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {latestSkip ? (
+            <div className="space-y-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{latestSkip.type}</Badge>
+                {latestSkip.projectKey && <Badge variant="secondary">{latestSkip.projectKey}</Badge>}
+                {latestSkip.stage && <Badge variant="secondary">{stageLabel(latestSkip.stage)}</Badge>}
+                {latestSkip.issueIdentifier && <Badge variant="secondary">{latestSkip.issueIdentifier}</Badge>}
+                <span className="text-xs text-muted-foreground">{formatDate(latestSkip.timestamp)}</span>
+              </div>
+              <div>{latestSkip.message}</div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">暂无跳过记录</div>
+          )}
+        </CardContent>
+      </Card>
 
       <ExecutionLog events={events} />
     </div>
@@ -1253,7 +1304,7 @@ function ExecutionLog({ events }: { events: ExecutionEvent[] }) {
         <CardTitle>执行日志</CardTitle>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-[420px] rounded-lg border">
+        <ScrollArea className="h-[640px] rounded-lg border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1371,6 +1422,12 @@ function runStatusLabel(status: string) {
   if (status === "running") return "运行中"
   if (status === "canceled") return "已中止"
   return "失败"
+}
+
+function viewTitle(view: View, selectedProject: ProjectConfig | null) {
+  if (view === "settings") return "设置"
+  if (view === "logs") return "全局日志"
+  return selectedProject?.repoName || selectedProject?.key || "项目"
 }
 
 function statusConfigLabel(key: keyof AppConfig["statuses"]) {

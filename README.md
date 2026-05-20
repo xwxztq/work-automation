@@ -12,6 +12,7 @@
 - 使用 `codex exec --json -C <project.codexCwd> -` 启动 Codex。
 - 支持停止单个运行或当前项目的运行。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
+- 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响。
 - 不自动移动 issue 到 `Done`。
 
 ## 启动
@@ -50,7 +51,7 @@ pnpm start
 - 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
 - 全局和项目级阶段一 / 阶段二提示词
 
-左侧侧边栏按项目展示。设置入口在侧边栏底部，提示词也在设置中维护。
+左侧侧边栏按项目展示。侧边栏底部有全局日志入口和设置入口；跳过、失败、扫描等执行事件在全局日志页查看，提示词在设置中维护。
 
 提示词负责指导 Codex 直接操作 Linear。默认提示词参考上级目录的 `automation-prompt` 两阶段规则，但当前版本不再创建子代理。
 

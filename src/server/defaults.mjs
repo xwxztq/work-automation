@@ -27,3 +27,4 @@ export const DEFAULT_CONFIG = {
 export const STATE_DIR = ".linear-automation"
 export const RUNS_DIR = "runs"
 export const EVENTS_FILE = "events.jsonl"
+export const PROCESSED_FILE = "processed-issues.json"

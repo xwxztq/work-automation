@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import { buildPromptContext, readPrompt, renderPrompt } from "./prompts.mjs"
@@ -203,6 +204,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
         })
         continue
       }
+      if (!issueId && (await skipUnchangedIssue({ project, issue, stage: "part1", projectSummary }))) {
+        continue
+      }
 
       await logEvent({
         type: "run-queue",
@@ -213,6 +217,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         data: { state: issue.state?.name },
       })
       const result = await executeCodexStage({ config, project, issue, stage: "part1", signal })
+      await recordProcessedIssue({ linear, project, issue, stage: "part1", run: result })
       projectSummary.part1.push({ issue: issue.identifier, result: result.status })
     }
   }
@@ -280,6 +285,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
         })
         continue
       }
+      if (!issueId && (await skipUnchangedIssue({ project, issue, stage: "part2", projectSummary }))) {
+        continue
+      }
 
       await logEvent({
         type: "run-queue",
@@ -290,8 +298,76 @@ export function createScheduler({ rootDir, configProvider, store }) {
         data: { state: issue.state?.name },
       })
       const result = await executeCodexStage({ config, project, issue, stage: "part2", signal })
+      await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
       projectSummary.part2.push({ issue: issue.identifier, result: result.status })
     }
+  }
+
+  async function skipUnchangedIssue({ project, issue, stage, projectSummary }) {
+    const fingerprint = issueFingerprint(issue)
+    const processed = await store.getProcessedIssue(project.key, stage, issue.id)
+    if (processed?.fingerprint !== fingerprint) {
+      return false
+    }
+    projectSummary.skipped.push(`${issue.identifier}: 自上次处理后没有变化`)
+    await logEvent({
+      type: "issue-skip-unchanged",
+      stage,
+      projectKey: project.key,
+      issueIdentifier: issue.identifier,
+      message: `${issue.identifier} 自上次处理后没有变化，跳过`,
+      data: {
+        fingerprint,
+        recordedAt: processed.recordedAt,
+        issueUpdatedAt: issue.updatedAt,
+        state: issue.state?.name,
+      },
+    })
+    return true
+  }
+
+  async function recordProcessedIssue({ linear, project, issue, stage, run }) {
+    if (!run?.id || run.status === "already-running" || run.status === "canceled") {
+      return
+    }
+    let latestIssue = issue
+    try {
+      latestIssue = await linear.getIssue(issue.identifier || issue.id)
+    } catch (error) {
+      await logEvent({
+        type: "processed-refresh-failed",
+        level: "warn",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+    const fingerprint = issueFingerprint(latestIssue)
+    const entry = await store.setProcessedIssue({
+      projectKey: project.key,
+      stage,
+      issueId: latestIssue.id || issue.id,
+      issueIdentifier: latestIssue.identifier || issue.identifier,
+      fingerprint,
+      issueUpdatedAt: latestIssue.updatedAt,
+      stateName: latestIssue.state?.name,
+      runId: run.id,
+    })
+    await logEvent({
+      type: "issue-processed-recorded",
+      stage,
+      projectKey: project.key,
+      issueIdentifier: latestIssue.identifier || issue.identifier,
+      runId: run.id,
+      message: `${latestIssue.identifier || issue.identifier} 已记录处理快照`,
+      data: {
+        fingerprint: entry.fingerprint,
+        issueUpdatedAt: entry.issueUpdatedAt,
+        state: entry.stateName,
+      },
+    })
   }
 
   async function executeCodexStage({ config, project, issue, stage, signal }) {
@@ -640,4 +716,44 @@ function stageLabel(stage) {
   if (stage === "part1") return "阶段一"
   if (stage === "part2") return "阶段二"
   return stage
+}
+
+function issueFingerprint(issue) {
+  const payload = {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title || "",
+    description: issue.description || "",
+    updatedAt: issue.updatedAt || "",
+    priority: issue.priority || null,
+    priorityLabel: issue.priorityLabel || "",
+    state: {
+      id: issue.state?.id || "",
+      name: issue.state?.name || "",
+      type: issue.state?.type || "",
+    },
+    assignee: {
+      name: issue.assignee?.name || "",
+      email: issue.assignee?.email || "",
+    },
+    labels: [...(issue.labels || [])]
+      .map((label) => ({
+        id: label.id || "",
+        name: label.name || "",
+      }))
+      .sort((a, b) => `${a.id}:${a.name}`.localeCompare(`${b.id}:${b.name}`)),
+    comments: [...(issue.comments || [])]
+      .map((comment) => ({
+        id: comment.id || "",
+        body: comment.body || "",
+        createdAt: comment.createdAt || "",
+        updatedAt: comment.updatedAt || "",
+        user: {
+          name: comment.user?.name || "",
+          email: comment.user?.email || "",
+        },
+      }))
+      .sort((a, b) => `${a.createdAt}:${a.id}`.localeCompare(`${b.createdAt}:${b.id}`)),
+  }
+  return createHash("md5").update(JSON.stringify(payload)).digest("hex")
 }
