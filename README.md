@@ -16,7 +16,8 @@
 - 使用 `codex exec --json --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
 - 支持停止单个运行或当前项目的运行。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
-- 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响。
+- 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响，但仍会遵守阶段状态边界。
+- 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Blocked` 进入阶段一，`On Schedule` 进入阶段二，其他状态直接跳过。
 - 不自动移动 issue 到 `Done`。
 
 ## 启动
@@ -176,6 +177,8 @@ pnpm once -- --stage part1
 pnpm once -- --stage part2
 node src/server/index.mjs once --config config.local.json --stage both --issue LIV-123
 ```
+
+手动指定 `--issue` 不会绕过状态边界：`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一或阶段二，不会对同一个 issue 同时启动两个阶段。
 
 ## shadcn
 

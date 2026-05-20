@@ -153,7 +153,7 @@ function App() {
   const [promptStage, setPromptStage] = useState<"part1" | "part2">("part1")
   const [promptText, setPromptText] = useState("")
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null)
-  const [manualStage, setManualStage] = useState<Stage>("both")
+  const [manualStage, setManualStage] = useState<Stage>("part1")
   const [manualIssue, setManualIssue] = useState("")
   const [busy, setBusy] = useState(false)
   const autoStartTried = useRef(false)

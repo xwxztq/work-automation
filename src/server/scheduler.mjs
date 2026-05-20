@@ -100,7 +100,14 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message: "项目扫描开始",
         data: { issueId },
       })
-      if (stage === "both") {
+      const effectiveStage =
+        issueId && stage === "both"
+          ? await resolveManualIssueStage({ config, project, linear, projectSummary, issueId })
+          : stage
+      if (!effectiveStage) {
+        return projectSummary
+      }
+      if (effectiveStage === "both") {
         await Promise.all([
           runProjectStageBranch({
             project,
@@ -131,7 +138,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
               }),
           }),
         ])
-      } else if (stage === "part1") {
+      } else if (effectiveStage === "part1") {
         await runProjectPart1({
           config,
           project,
@@ -140,7 +147,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           issueId,
           signal: controller.signal,
         })
-      } else if (!controller.signal.aborted && stage === "part2") {
+      } else if (!controller.signal.aborted && effectiveStage === "part2") {
         await runProjectPart2({
           config,
           project,
@@ -193,15 +200,112 @@ export function createScheduler({ rootDir, configProvider, store }) {
     }
   }
 
+  async function resolveManualIssueStage({ config, project, linear, projectSummary, issueId }) {
+    let issue
+    try {
+      issue = await linear.getIssue(issueId)
+    } catch (error) {
+      projectSummary.skipped.push(`${issueId}: 未找到手动指定 issue`)
+      await logEvent({
+        type: "manual-issue-not-found",
+        level: "warn",
+        stage: "both",
+        projectKey: project.key,
+        message: `未找到手动指定 issue: ${issueId}`,
+        data: {
+          issueId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
+      return null
+    }
+
+    let linearProject
+    try {
+      ;({ project: linearProject } = await linear.listProjectIssues(project.linearProjectId, 1))
+    } catch (error) {
+      projectSummary.skipped.push(`${project.key}: 无法读取 Linear 项目`)
+      await logEvent({
+        type: "manual-issue-project-read-failed",
+        level: "error",
+        stage: "both",
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        message: `无法读取手动 issue 对应的项目: ${project.key}`,
+        data: {
+          issueId,
+          configuredProjectId: project.linearProjectId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
+      return null
+    }
+
+    if (issue.project?.id !== linearProject.id) {
+      projectSummary.skipped.push(`${issue.identifier}: 不属于当前项目`)
+      await logEvent({
+        type: "manual-issue-not-in-project",
+        stage: "both",
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        message: `手动指定 issue 不属于当前项目: ${issue.identifier}`,
+        data: {
+          issueId,
+          issueProjectId: issue.project?.id || null,
+          configuredProjectId: project.linearProjectId,
+          projectId: linearProject.id,
+        },
+      })
+      return null
+    }
+
+    const stateName = issue.state?.name
+    const eligiblePart1Statuses = part1EligibleStatuses(config)
+    let effectiveStage = null
+    if (eligiblePart1Statuses.has(stateName)) {
+      effectiveStage = "part1"
+    } else if (stateName === config.statuses.schedule) {
+      effectiveStage = "part2"
+    }
+
+    if (effectiveStage) {
+      await logEvent({
+        type: "manual-issue-routed",
+        stage: "both",
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        message: `${issue.identifier} 根据当前状态 ${stateName} 路由到${stageLabel(effectiveStage)}`,
+        data: {
+          issueId,
+          state: stateName,
+          effectiveStage,
+        },
+      })
+      return effectiveStage
+    }
+
+    projectSummary.skipped.push(`${issue.identifier}: 手动指定 issue 当前状态不可执行`)
+    await logEvent({
+      type: "manual-issue-skip-state",
+      stage: "both",
+      projectKey: project.key,
+      issueIdentifier: issue.identifier,
+      message: `${issue.identifier} 当前状态 ${stateName || "未知"} 不属于手动执行可路由阶段，跳过`,
+      data: {
+        issueId,
+        state: stateName,
+        part1Statuses: [...eligiblePart1Statuses],
+        part2Status: config.statuses.schedule,
+      },
+    })
+    return null
+  }
+
   async function runProjectPart1({ config, project, linear, projectSummary, issueId, signal }) {
     const { issues } = await linear.listProjectIssues(project.linearProjectId)
-    const eligibleStatuses = new Set([
-      config.statuses.todo,
-      config.statuses.needsClarification,
-      config.statuses.blocked,
-    ])
+    const eligibleStatuses = part1EligibleStatuses(config)
     const candidates = issueId
-      ? issues.filter((issue) => issue.identifier === issueId || issue.id === issueId)
+      ? issues.filter((issue) => issueMatchesId(issue, issueId))
       : issues.filter((issue) => eligibleStatuses.has(issue.state?.name))
 
     await logEvent({
@@ -259,7 +363,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
 
     try {
       const issue = await linear.getIssue(issueIdentifier)
-      if (!issueId && !eligibleStatuses.has(issue.state?.name)) {
+      if (!eligibleStatuses.has(issue.state?.name)) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是阶段一队列状态`)
         await logEvent({
           type: "part1-skip-state-changed",
@@ -314,7 +418,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
   async function runProjectPart2({ config, project, linear, projectSummary, issueId, signal }) {
     const { issues } = await linear.listProjectIssues(project.linearProjectId)
     const candidates = issueId
-      ? issues.filter((issue) => issue.identifier === issueId || issue.id === issueId)
+      ? issues.filter((issue) => issueMatchesId(issue, issueId))
       : issues.filter((issue) => issue.state?.name === config.statuses.schedule)
     const activeStats = activePart2StatsFromIssues(issues, project, config)
 
@@ -346,28 +450,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
         break
       }
 
-      if (!issueId) {
-        const activeLimitStats = await countActivePart2(linear, project, config)
-        if (activeLimitStats.count >= project.maxActivePart2) {
-          projectSummary.skipped.push(`${project.key}: 处理中数量已达上限`)
-          await logEvent({
-            type: "part2-skip-active-limit",
-            stage: "part2",
-            projectKey: project.key,
-            message: "阶段二处理中数量已达上限",
-            data: {
-              activeCount: activeLimitStats.count,
-              linearInProgressCount: activeLimitStats.linearInProgressCount,
-              localActivePart2Count: activeLimitStats.localActivePart2Count,
-              maxActivePart2: project.maxActivePart2,
-            },
-          })
-          break
-        }
-      }
-
       const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
-      if (!issueId && issue.state?.name !== config.statuses.schedule) {
+      if (issue.state?.name !== config.statuses.schedule) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.schedule}`)
         await logEvent({
           type: "part2-skip-state-changed",
@@ -378,6 +462,24 @@ export function createScheduler({ rootDir, configProvider, store }) {
           data: { state: issue.state?.name },
         })
         continue
+      }
+      const activeLimitStats = await countActivePart2(linear, project, config)
+      if (activeLimitStats.count >= project.maxActivePart2) {
+        projectSummary.skipped.push(`${project.key}: 处理中数量已达上限`)
+        await logEvent({
+          type: "part2-skip-active-limit",
+          stage: "part2",
+          projectKey: project.key,
+          message: "阶段二处理中数量已达上限",
+          data: {
+            activeCount: activeLimitStats.count,
+            linearInProgressCount: activeLimitStats.linearInProgressCount,
+            localActivePart2Count: activeLimitStats.localActivePart2Count,
+            maxActivePart2: project.maxActivePart2,
+            issueId,
+          },
+        })
+        break
       }
       if (!issueId && (await skipUnchangedIssue({ project, issue, stage: "part2", projectSummary }))) {
         continue
@@ -397,7 +499,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         issue,
         stage: "part2",
         signal,
-        enforceLocalPart2Limit: !issueId,
+        enforceLocalPart2Limit: true,
       })
       await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
       projectSummary.part2.push({ issue: issue.identifier, result: result.status })
@@ -979,7 +1081,21 @@ function compareIssuePriority(a, b) {
 function stageLabel(stage) {
   if (stage === "part1") return "阶段一"
   if (stage === "part2") return "阶段二"
+  if (stage === "both") return "全部"
   return stage
+}
+
+function part1EligibleStatuses(config) {
+  return new Set([
+    config.statuses.todo,
+    config.statuses.needsClarification,
+    config.statuses.blocked,
+  ])
+}
+
+function issueMatchesId(issue, issueId) {
+  const normalized = String(issueId || "").trim().toLowerCase()
+  return [issue?.identifier, issue?.id].some((value) => String(value || "").trim().toLowerCase() === normalized)
 }
 
 function issueActiveKey(issue) {
