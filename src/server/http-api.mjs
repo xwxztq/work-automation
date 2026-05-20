@@ -83,7 +83,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "POST" && parts[1] === "projects" && parts[3] === "cancel") {
-    const result = scheduler.cancelProject(parts[2])
+    const result = await scheduler.cancelProject(parts[2])
     sendJson(res, result.ok ? 200 : 404, result)
     return
   }
@@ -143,7 +143,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "POST" && parts[1] === "runs" && parts[2] && parts[3] === "cancel") {
-    const result = scheduler.cancelRun(parts[2])
+    const result = await scheduler.cancelRun(parts[2])
     sendJson(res, result.ok ? 200 : 404, result)
     return
   }
@@ -165,18 +165,18 @@ async function handleApi(req, res, url, context) {
 
   if (method === "POST" && url.pathname === "/api/daemon/start") {
     scheduler.start()
-    sendJson(res, 200, scheduler.status())
+    sendJson(res, 200, await scheduler.status())
     return
   }
 
   if (method === "POST" && url.pathname === "/api/daemon/stop") {
     scheduler.stop()
-    sendJson(res, 200, scheduler.status())
+    sendJson(res, 200, await scheduler.status())
     return
   }
 
   if (method === "GET" && url.pathname === "/api/daemon/status") {
-    sendJson(res, 200, scheduler.status())
+    sendJson(res, 200, await scheduler.status())
     return
   }
 

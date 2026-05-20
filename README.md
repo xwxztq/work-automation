@@ -11,10 +11,10 @@
 - 读取当前机器配置的 Linear 项目。
 - 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现。
-- 服务端只负责扫描队列、启动 Codex、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
+- 服务端只负责扫描队列、启动独立 Codex supervisor、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
 - 多个项目并行执行；同一项目内阶段一、阶段二互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
 - 使用 `codex exec --json --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
-- 支持停止单个运行或当前项目的运行。
+- 支持停止单个运行或当前项目的运行；后端热重启后会从 `.linear-automation/runs` 恢复仍在运行的任务。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
 - 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响，但仍会遵守阶段状态边界。
 - 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Blocked` 进入阶段一，`On Schedule` 进入阶段二，其他状态直接跳过。
@@ -45,7 +45,7 @@ pnpm dev:lan --host 192.168.1.23
 
 `dev:lan` 会让 Vite 前端服务、Vite `/api` proxy 和 Node 后端服务使用同一个具体 IP。不要使用 `0.0.0.0`；如果换成其他局域网 IP，需要停止当前服务并重新启动。
 
-开发后端通过 Node 内置 watch 启动。运行 `pnpm dev:server` 或 `pnpm dev:all` 时，修改 `src/server` 下被后端加载的源码会自动重启后端进程，无需手动停止重启。自动重启会清空进程内状态，并可能影响正在运行的 Codex 子进程；有活跃运行时不要修改后端服务代码。
+开发后端通过 Node 内置 watch 启动。运行 `pnpm dev:server` 或 `pnpm dev:all` 时，修改 `src/server` 下被后端加载的源码会自动重启后端进程，无需手动停止重启。正在执行的 Codex 会由独立 supervisor 继续运行，重启后的后端会从持久化运行记录里恢复正在执行的任务并继续提供停止按钮。
 
 开发模式下，前端打开后会默认启动轮询。关闭轮询只会停止后续扫描，不会自动停止正在运行的 Codex 子进程；需要在项目页停止单个运行或停止当前项目。
 

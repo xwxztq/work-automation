@@ -420,7 +420,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
       : issues.filter((issue) => issue.state?.name === config.statuses.schedule)
-    const activeStats = activePart2StatsFromIssues(issues, project, config)
+    const activeStats = await activePart2StatsFromIssues(issues, project, config)
 
     await logEvent({
       type: "part2-candidates",
@@ -511,7 +511,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     return activePart2StatsFromIssues(issues, project, config)
   }
 
-  function activePart2StatsFromIssues(issues, project, config) {
+  async function activePart2StatsFromIssues(issues, project, config) {
     const linearIssueKeys = new Set()
     for (const issue of issues) {
       if (issue.state?.name !== config.statuses.inProgress) {
@@ -529,6 +529,18 @@ export function createScheduler({ rootDir, configProvider, store }) {
         continue
       }
       const key = issueActiveKey(active.issue)
+      if (key) {
+        localIssueKeys.add(key)
+      }
+    }
+    for (const run of await persistedRunningRuns()) {
+      if (run.projectKey !== project.key || run.stage !== "part2") {
+        continue
+      }
+      const key = issueActiveKey({
+        id: run.issueId,
+        identifier: run.issueIdentifier,
+      })
       if (key) {
         localIssueKeys.add(key)
       }
@@ -559,13 +571,25 @@ export function createScheduler({ rootDir, configProvider, store }) {
     return active
   }
 
-  function countLocalActivePart2(project) {
+  async function countLocalActivePart2(project) {
     const issueKeys = new Set()
     for (const active of activeLocalRuns()) {
       if (active.projectKey !== project.key || active.stage !== "part2") {
         continue
       }
       const key = issueActiveKey(active.issue)
+      if (key) {
+        issueKeys.add(key)
+      }
+    }
+    for (const run of await persistedRunningRuns()) {
+      if (run.projectKey !== project.key || run.stage !== "part2") {
+        continue
+      }
+      const key = issueActiveKey({
+        id: run.issueId,
+        identifier: run.issueIdentifier,
+      })
       if (key) {
         issueKeys.add(key)
       }
@@ -708,11 +732,29 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       return { status: "already-running" }
     }
+    const persistedActiveRun = await findPersistedActiveRun(project.key, stage, issue)
+    if (persistedActiveRun) {
+      await logEvent({
+        type: "run-skip-persisted-active",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: persistedActiveRun.id,
+        message: `${issue.identifier} 已有持久化运行仍在执行中`,
+        data: {
+          pid: persistedActiveRun.pid || null,
+          supervisorPid: persistedActiveRun.supervisorPid || null,
+          codexPid: persistedActiveRun.codexPid || null,
+        },
+      })
+      return { status: "already-running", id: persistedActiveRun.id }
+    }
     if (
       enforceLocalPart2Limit &&
       stage === "part2" &&
-      countLocalActivePart2(project) >= project.maxActivePart2
+      (await countLocalActivePart2(project)) >= project.maxActivePart2
     ) {
+      const localActivePart2Count = await countLocalActivePart2(project)
       await logEvent({
         type: "part2-skip-local-active-limit",
         stage,
@@ -720,7 +762,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         issueIdentifier: issue.identifier,
         message: "阶段二本地运行数量已达上限",
         data: {
-          localActivePart2Count: countLocalActivePart2(project),
+          localActivePart2Count,
           maxActivePart2: project.maxActivePart2,
         },
       })
@@ -746,6 +788,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
       },
       startedAt: new Date().toISOString(),
       pid: null,
+      supervisorPid: null,
+      codexPid: null,
       cancel: (reason = "用户中止任务") => abortRun(runController, reason),
     }
     activeRunsByKey.set(key, active)
@@ -777,17 +821,23 @@ export function createScheduler({ rootDir, configProvider, store }) {
         prompt,
         store,
         signal: runController.signal,
-        onChild: (child) => {
-          active.pid = child.pid || null
-          void logEvent({
-            type: "run-child",
-            stage,
-            projectKey: project.key,
-            issueIdentifier: issue.identifier,
-            runId: run.id,
-            message: `${issue.identifier} Codex 子进程已启动`,
-            data: { pid: active.pid },
-          })
+        onChild: (processInfo) => {
+          active.pid = processInfo.pid || null
+          active.supervisorPid = processInfo.supervisorPid || null
+          if (active.pid) {
+            void logEvent({
+              type: "run-supervisor",
+              stage,
+              projectKey: project.key,
+              issueIdentifier: issue.identifier,
+              runId: run.id,
+              message: `${issue.identifier} Codex supervisor 已启动`,
+              data: {
+                pid: active.pid,
+                supervisorPid: active.supervisorPid,
+              },
+            })
+          }
         },
       })
 
@@ -795,15 +845,27 @@ export function createScheduler({ rootDir, configProvider, store }) {
         return await markRunCanceled(run, runController.signal, {
           exitCode: codexResult.exitCode,
           pid: active.pid,
+          supervisorPid: codexResult.supervisorPid || active.supervisorPid,
+          codexPid: codexResult.codexPid || active.codexPid,
+          codexStarted: codexResult.started,
         })
       }
 
       const succeeded = codexResult.exitCode === 0
+      const startupError = codexResult.started ? null : codexResult.startError
+      active.supervisorPid = codexResult.supervisorPid || active.supervisorPid
+      active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
         status: succeeded ? "succeeded" : "failed",
         exitCode: codexResult.exitCode,
         pid: active.pid,
-        error: succeeded ? undefined : `Codex 退出码为 ${codexResult.exitCode}`,
+        supervisorPid: active.supervisorPid,
+        codexPid: active.codexPid,
+        codexStarted: codexResult.started,
+        startupError,
+        error: succeeded
+          ? undefined
+          : startupError || `Codex 退出码为 ${codexResult.exitCode}`,
       })
       await logEvent({
         type: succeeded ? "run-succeeded" : "run-failed",
@@ -812,8 +874,13 @@ export function createScheduler({ rootDir, configProvider, store }) {
         projectKey: project.key,
         issueIdentifier: issue.identifier,
         runId: run.id,
-        message: `${issue.identifier} ${stageLabel(stage)} ${succeeded ? "成功" : "失败"}`,
-        data: { exitCode: codexResult.exitCode, runDir: run.dir },
+        message: `${issue.identifier} ${stageLabel(stage)} ${succeeded ? "成功" : startupError ? "启动失败" : "失败"}`,
+        data: {
+          exitCode: codexResult.exitCode,
+          runDir: run.dir,
+          codexStarted: codexResult.started,
+          startupError,
+        },
       })
       return run
     } catch (error) {
@@ -821,11 +888,20 @@ export function createScheduler({ rootDir, configProvider, store }) {
         throw error
       }
       if (runController.signal.aborted) {
-        return await markRunCanceled(run, runController.signal, { pid: active.pid })
+        return await markRunCanceled(run, runController.signal, {
+          pid: active.pid,
+          supervisorPid: active.supervisorPid,
+          codexPid: active.codexPid,
+        })
       }
+      const codexStarted = Boolean(active.codexPid)
       run = await store.updateRun(run, {
         status: "failed",
         pid: active.pid,
+        supervisorPid: active.supervisorPid,
+        codexPid: active.codexPid,
+        codexStarted,
+        startupError: codexStarted ? null : error instanceof Error ? error.message : String(error),
         error: error instanceof Error ? error.message : String(error),
       })
       await logEvent({
@@ -956,10 +1032,32 @@ ${(issue.comments || [])
     nextRunAt = null
   }
 
-  function cancelRun(runId, reason = "用户中止任务") {
+  async function cancelRun(runId, reason = "用户中止任务") {
     const active = activeRunsById.get(runId)
     if (!active) {
-      return { ok: false, error: "未找到正在运行的任务" }
+      const persisted = await getPersistedRun(runId)
+      if (!persisted || persisted.status !== "running") {
+        return { ok: false, error: "未找到正在运行的任务" }
+      }
+      const canceled = await cancelPersistedRun(persisted, reason)
+      if (!canceled) {
+        return { ok: false, error: "运行进程已不存在" }
+      }
+      await logEvent({
+        type: "cancel-run",
+        level: "warn",
+        projectKey: persisted.projectKey,
+        stage: persisted.stage,
+        issueIdentifier: persisted.issueIdentifier,
+        runId: persisted.id,
+        message: reason,
+        data: {
+          pid: persisted.pid || null,
+          supervisorPid: persisted.supervisorPid || null,
+          codexPid: persisted.codexPid || null,
+        },
+      })
+      return { ok: true, runId }
     }
     active.cancel(reason)
     void logEvent({
@@ -974,7 +1072,7 @@ ${(issue.comments || [])
     return { ok: true, runId }
   }
 
-  function cancelProject(projectKey, reason = "用户中止项目任务") {
+  async function cancelProject(projectKey, reason = "用户中止项目任务") {
     let canceled = false
     for (const cycle of activeProjectCycles) {
       if (cycle.projectKey === projectKey && !cycle.controller.signal.aborted) {
@@ -986,6 +1084,11 @@ ${(issue.comments || [])
       if (active.projectKey === projectKey) {
         active.cancel(reason)
         canceled = true
+      }
+    }
+    for (const run of await persistedRunningRuns()) {
+      if (run.projectKey === projectKey) {
+        canceled = (await cancelPersistedRun(run, reason)) || canceled
       }
     }
     if (!canceled) {
@@ -1000,21 +1103,147 @@ ${(issue.comments || [])
     return { ok: true, projectKey }
   }
 
-  function status() {
+  async function status() {
+    const activeRuns = await activeRunSummaries()
     return {
-      running,
+      running: running || activeRuns.length > 0,
       enabled,
       nextRunAt,
       lastError,
-      activeRuns: [...activeRunsById.values()].map((active) => ({
+      activeRuns,
+    }
+  }
+
+  async function activeRunSummaries() {
+    const activeById = new Map()
+    for (const active of activeRunsById.values()) {
+      if (!active.runId) {
+        continue
+      }
+      activeById.set(active.runId, {
         runId: active.runId,
         projectKey: active.projectKey,
         stage: active.stage,
         startedAt: active.startedAt,
         pid: active.pid,
+        supervisorPid: active.supervisorPid,
+        codexPid: active.codexPid,
         issue: active.issue,
-      })),
+      })
     }
+    for (const run of await persistedRunningRuns()) {
+      if (activeById.has(run.id)) {
+        continue
+      }
+      activeById.set(run.id, {
+        runId: run.id,
+        projectKey: run.projectKey,
+        stage: run.stage,
+        startedAt: run.createdAt,
+        pid: run.pid || null,
+        supervisorPid: run.supervisorPid || null,
+        codexPid: run.codexPid || null,
+        issue: {
+          id: run.issueId,
+          identifier: run.issueIdentifier,
+          title: run.issueTitle,
+        },
+      })
+    }
+    return [...activeById.values()].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)))
+  }
+
+  async function findPersistedActiveRun(projectKey, stage, issue) {
+    const key = issueActiveKey(issue)
+    for (const run of await persistedRunningRuns()) {
+      if (run.projectKey !== projectKey || run.stage !== stage) {
+        continue
+      }
+      const runIssueKey = issueActiveKey({
+        id: run.issueId,
+        identifier: run.issueIdentifier,
+      })
+      if (runIssueKey === key) {
+        return run
+      }
+    }
+    return null
+  }
+
+  async function persistedRunningRuns() {
+    const runs = await store.listRuns(500)
+    const active = []
+    for (const run of runs) {
+      if (run.status !== "running") {
+        continue
+      }
+      if (activeRunsById.has(run.id) || isWithinStartupGrace(run)) {
+        active.push(run)
+        continue
+      }
+      if (isRunAlive(run)) {
+        active.push(run)
+        continue
+      }
+      await markRunLost(run)
+    }
+    return active
+  }
+
+  async function markRunLost(run) {
+    const detail = await store.getRun(run.id)
+    const hasFinalText = Boolean(detail?.final?.trim())
+    const next = await store.updateRun(run, {
+      status: hasFinalText ? "succeeded" : "failed",
+      error: hasFinalText
+        ? undefined
+        : "运行进程已不存在，已从持久化运行记录中标记为失败。",
+    })
+    await logEvent({
+      type: "run-reconciled-missing-process",
+      level: hasFinalText ? "info" : "warn",
+      stage: run.stage,
+      projectKey: run.projectKey,
+      issueIdentifier: run.issueIdentifier,
+      runId: run.id,
+      message: hasFinalText ? "运行进程已结束，检测到最终结果并标记成功" : next.error,
+      data: {
+        pid: run.pid || null,
+        supervisorPid: run.supervisorPid || null,
+        codexPid: run.codexPid || null,
+      },
+    })
+  }
+
+  async function getPersistedRun(runId) {
+    const runs = await store.listRuns(500)
+    return runs.find((run) => run.id === runId) || null
+  }
+
+  async function cancelPersistedRun(run, reason) {
+    const supervisorPid = positivePid(run.supervisorPid)
+    const pid = positivePid(run.pid)
+    const codexPid = positivePid(run.codexPid)
+    const targetPid = supervisorPid || pid || codexPid
+    if (!targetPid || !isPidAlive(targetPid)) {
+      return false
+    }
+    try {
+      process.kill(targetPid, "SIGTERM")
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return false
+      }
+      throw error
+    }
+    if (!supervisorPid) {
+      await store.updateRun(run, {
+        status: "canceled",
+        canceledAt: new Date().toISOString(),
+        cancelReason: reason,
+      })
+    }
+    return true
   }
 
   return {
@@ -1031,6 +1260,9 @@ ${(issue.comments || [])
       status: "canceled",
       exitCode: patch.exitCode,
       pid: patch.pid,
+      supervisorPid: patch.supervisorPid,
+      codexPid: patch.codexPid,
+      codexStarted: patch.codexStarted,
       canceledAt: new Date().toISOString(),
       cancelReason: abortReason(signal, "用户中止任务"),
     })
@@ -1100,6 +1332,36 @@ function issueMatchesId(issue, issueId) {
 
 function issueActiveKey(issue) {
   return issue?.id || issue?.identifier || ""
+}
+
+function isRunAlive(run) {
+  return [run.supervisorPid, run.pid, run.codexPid].some((pid) => isPidAlive(pid))
+}
+
+function isWithinStartupGrace(run) {
+  if (run.supervisorPid || run.pid || run.codexPid) {
+    return false
+  }
+  const createdAt = Date.parse(run.createdAt || "")
+  return Number.isFinite(createdAt) && Date.now() - createdAt < 15_000
+}
+
+function positivePid(pid) {
+  const numeric = Number(pid)
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null
+}
+
+function isPidAlive(pid) {
+  const numeric = positivePid(pid)
+  if (!numeric) {
+    return false
+  }
+  try {
+    process.kill(numeric, 0)
+    return true
+  } catch (error) {
+    return error?.code === "EPERM"
+  }
 }
 
 function isCodexStartupFailureRun(run) {

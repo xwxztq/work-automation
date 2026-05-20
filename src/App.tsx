@@ -877,7 +877,9 @@ function ProjectView({
                         <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issue.title}</div>
                       </TableCell>
                       <TableCell>{stageLabel(run.stage)}</TableCell>
-                      <TableCell className="font-mono text-xs">{run.pid || "-"}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {run.codexPid ? `${run.pid || "-"} / ${run.codexPid}` : run.pid || "-"}
+                      </TableCell>
                       <TableCell>
                         <Button
                           size="sm"

@@ -70,6 +70,11 @@ export type RunSummary = {
   dir: string
   exitCode?: number
   error?: string
+  codexStarted?: boolean
+  startupError?: string | null
+  supervisorPid?: number | null
+  codexPid?: number | null
+  supervisorStartedAt?: string
   finalJson?: unknown
   pid?: number | null
   canceledAt?: string
@@ -106,6 +111,8 @@ export type DaemonStatus = {
     stage: string
     startedAt: string
     pid?: number | null
+    supervisorPid?: number | null
+    codexPid?: number | null
     issue: {
       id?: string
       identifier: string
