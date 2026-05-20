@@ -477,6 +477,26 @@ export function createScheduler({ rootDir, configProvider, store }) {
     if (processed?.fingerprint !== fingerprint) {
       return false
     }
+    const startupFailureRun = await getProcessedStartupFailureRun(processed)
+    if (startupFailureRun) {
+      await logEvent({
+        type: "issue-retry-after-startup-failure",
+        level: "warn",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: startupFailureRun.id,
+        message: `${issue.identifier} 上次处理快照来自 Codex 启动失败，本轮继续重试`,
+        data: {
+          fingerprint,
+          recordedAt: processed.recordedAt,
+          issueUpdatedAt: issue.updatedAt,
+          state: issue.state?.name,
+          startupError: startupFailureRun.startupError || startupFailureRun.error || null,
+        },
+      })
+      return false
+    }
     projectSummary.skipped.push(`${issue.identifier}: 自上次处理后没有变化`)
     await logEvent({
       type: "issue-skip-unchanged",
@@ -496,6 +516,23 @@ export function createScheduler({ rootDir, configProvider, store }) {
 
   async function recordProcessedIssue({ linear, project, issue, stage, run }) {
     if (!run?.id || run.status === "already-running" || run.status === "canceled") {
+      return
+    }
+    if (isCodexStartupFailureRun(run)) {
+      await logEvent({
+        type: "issue-processed-not-recorded",
+        level: "warn",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: run.id,
+        message: `${issue.identifier} Codex 子进程未成功启动，未记录处理快照`,
+        data: {
+          runStatus: run.status,
+          codexStarted: run.codexStarted,
+          startupError: run.startupError || run.error || null,
+        },
+      })
       return
     }
     let latestIssue = issue
@@ -536,6 +573,18 @@ export function createScheduler({ rootDir, configProvider, store }) {
         state: entry.stateName,
       },
     })
+  }
+
+  async function getProcessedStartupFailureRun(processed) {
+    if (!processed?.runId) {
+      return null
+    }
+    try {
+      const run = await store.getRun(processed.runId)
+      return isCodexStartupFailureRun(run) ? run : null
+    } catch {
+      return null
+    }
   }
 
   async function executeCodexStage({
@@ -935,6 +984,24 @@ function stageLabel(stage) {
 
 function issueActiveKey(issue) {
   return issue?.id || issue?.identifier || ""
+}
+
+function isCodexStartupFailureRun(run) {
+  if (!run || run.status !== "failed") {
+    return false
+  }
+  if (run.codexStarted === false) {
+    return true
+  }
+  if (run.codexStarted === true) {
+    return false
+  }
+  return !hasPositiveProcessPid(run.pid) && !hasPositiveProcessPid(run.codexPid)
+}
+
+function hasPositiveProcessPid(pid) {
+  const numeric = Number(pid)
+  return Number.isInteger(numeric) && numeric > 0
 }
 
 function issueFingerprint(issue) {
