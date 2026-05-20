@@ -94,6 +94,19 @@ pnpm start -- --host 192.168.1.23
 
    如果改用其他环境变量名，需要同步修改 `linear.apiKeyEnv`，并确保启动服务的进程能读取到这个变量。
 
+   同时，在 Codex 的 `config.toml` 中给 Linear MCP 工具配置审批权限，让当前 Codex agent 可以按流程移动 issue 和写评论:
+
+   ```toml
+   [mcp_servers.linear.tools.save_issue]
+   approval_mode = "approve"
+
+   [mcp_servers.linear.tools.research]
+   approval_mode = "approve"
+
+   [mcp_servers.linear.tools.save_comment]
+   approval_mode = "approve"
+   ```
+
 3. 在 Linear 工作流中创建或确认这些状态名，并让 `config.local.json` 的 `statuses` 与 Linear 中的名称完全一致:
 
    - `Todo`: 阶段一会扫描的新需求入口。
