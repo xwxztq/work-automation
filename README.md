@@ -20,12 +20,100 @@
 - 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Blocked` 进入阶段一，`On Schedule` 进入阶段二，其他状态直接跳过。
 - 不自动移动 issue 到 `Done`。
 
-## 启动
+## 首次使用
+
+先按顺序完成配置，再启动服务，避免 Codex agent 因缺少 Linear 权限或状态配置而中途失败。
+
+1. 安装依赖:
+
+   ```bash
+   pnpm install
+   ```
+
+2. 复制本地配置文件:
+
+   ```bash
+   cp config.example.json config.local.json
+   ```
+
+3. 只在当前 shell 或进程环境中设置 Linear API key，不要写入 `config.local.json`:
+
+   ```bash
+   export LINEAR_API_KEY='你的 Linear API key'
+   ```
+
+   如果改用其他环境变量名，需要同步修改 `linear.apiKeyEnv`，并确保启动服务的进程能读取到这个变量。
+
+4. 在 Codex 的 `config.toml` 中给 Linear MCP 工具配置审批权限，让当前 Codex agent 可以按流程移动 issue 和写评论:
+
+   ```toml
+   [mcp_servers.linear.tools.save_issue]
+   approval_mode = "approve"
+
+   [mcp_servers.linear.tools.research]
+   approval_mode = "approve"
+
+   [mcp_servers.linear.tools.save_comment]
+   approval_mode = "approve"
+   ```
+
+5. 在 Linear 工作流中创建或确认这些状态名，并让 `config.local.json` 的 `statuses` 与 Linear 中的名称完全一致:
+
+   - `Todo`: 阶段一会扫描的新需求入口。
+   - `Needs Clarification`: 阶段一会复查等待用户补充的问题。
+   - `Blocked`: 阶段一会复查阻塞是否解除。
+   - `Ready for Codex`: 阶段一判断可实现后的等待池。
+   - `On Schedule`: 用户人工批准后，阶段二才会认领实现。
+   - `In Progress`: 当前 Codex agent 已认领并正在实现。
+   - `Testing`: Codex 完成 scoped commit 后等待人工验证。
+
+   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。这个转换必须由用户在 Linear 中人工完成。
+
+6. 在界面或 `config.local.json` 中添加项目。必填字段建议按下面填写:
+
+   - `key`: 本机配置内使用的稳定项目标识，例如 `work-automation`。
+   - `repoName`: 展示给用户和写入提示词的仓库名称。
+   - `linearProjectId`: Linear 项目 UUID，只扫描这个项目下的 issue。
+   - `path`: 本机仓库绝对路径，例如 `/Users/san/Projects/Infra/linear/linear-automation`。
+   - `codexCwd`: `codex exec -C` 的执行目录；通常和 `path` 相同。
+   - `branchOrScopePrefix`: 分支或提交 scope 前缀，例如 `main`。
+   - `defaultTests`: AI Triage 没有给出测试命令时使用的默认测试，每行一条。
+   - `extraRules`: 项目特定规则，只写执行约束，不要写密钥。
+
+7. 校验配置:
+
+   ```bash
+   pnpm validate
+   ```
+
+8. 启动本地开发服务:
+
+   ```bash
+   pnpm dev:all
+   ```
+
+   前端地址: `http://127.0.0.1:8888`
+
+   后端地址: `http://127.0.0.1:4378`
+
+9. 首次跑通时建议按这个顺序验证:
+
+   - 新 issue 放在 `Todo`，阶段一只分析和评论，不写代码。
+   - 用户确认范围后，把 issue 移到 `On Schedule`。
+   - 阶段二只认领 `On Schedule`，先移到 `In Progress`，由当前 Codex agent 实现、测试、提交，再移到 `Testing`。
+
+也可以手动触发一次扫描:
 
 ```bash
-pnpm install
-cp config.example.json config.local.json
-export LINEAR_API_KEY='你的 Linear API key'
+pnpm once -- --stage part1
+pnpm once -- --stage part2
+```
+
+## 启动方式
+
+完成首次配置后，本地开发模式使用:
+
+```bash
 pnpm dev:all
 ```
 
@@ -33,7 +121,7 @@ pnpm dev:all
 
 后端地址: `http://127.0.0.1:4378`
 
-如果需要把服务暴露到某个明确的局域网 IP，先确认本机地址，例如 `192.168.1.23`，然后使用:
+如果需要把开发服务暴露到某个明确的局域网 IP，先确认本机地址，例如 `192.168.1.23`，然后使用:
 
 ```bash
 pnpm dev:lan --host 192.168.1.23
@@ -79,78 +167,6 @@ pnpm start -- --host 192.168.1.23
 
 生产启动 `pnpm start` 保持普通 Node 进程，不启用 watch；如果生产环境需要自动拉起或重启，应交给外部进程管理器处理。
 
-## 新用户配置步骤
-
-1. 复制本地配置文件:
-
-   ```bash
-   cp config.example.json config.local.json
-   ```
-
-2. 只在当前 shell 或进程环境中设置 Linear API key，不要写入 `config.local.json`:
-
-   ```bash
-   export LINEAR_API_KEY='你的 Linear API key'
-   ```
-
-   如果改用其他环境变量名，需要同步修改 `linear.apiKeyEnv`，并确保启动服务的进程能读取到这个变量。
-
-   同时，在 Codex 的 `config.toml` 中给 Linear MCP 工具配置审批权限，让当前 Codex agent 可以按流程移动 issue 和写评论:
-
-   ```toml
-   [mcp_servers.linear.tools.save_issue]
-   approval_mode = "approve"
-
-   [mcp_servers.linear.tools.research]
-   approval_mode = "approve"
-
-   [mcp_servers.linear.tools.save_comment]
-   approval_mode = "approve"
-   ```
-
-3. 在 Linear 工作流中创建或确认这些状态名，并让 `config.local.json` 的 `statuses` 与 Linear 中的名称完全一致:
-
-   - `Todo`: 阶段一会扫描的新需求入口。
-   - `Needs Clarification`: 阶段一会复查等待用户补充的问题。
-   - `Blocked`: 阶段一会复查阻塞是否解除。
-   - `Ready for Codex`: 阶段一判断可实现后的等待池。
-   - `On Schedule`: 用户人工批准后，阶段二才会认领实现。
-   - `In Progress`: 当前 Codex agent 已认领并正在实现。
-   - `Testing`: Codex 完成 scoped commit 后等待人工验证。
-
-   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。这个转换必须由用户在 Linear 中人工完成。
-
-4. 在界面或 `config.local.json` 中添加项目。必填字段建议按下面填写:
-
-   - `key`: 本机配置内使用的稳定项目标识，例如 `work-automation`。
-   - `repoName`: 展示给用户和写入提示词的仓库名称。
-   - `linearProjectId`: Linear 项目 UUID，只扫描这个项目下的 issue。
-   - `path`: 本机仓库绝对路径，例如 `/Users/san/Projects/Infra/linear/linear-automation`。
-   - `codexCwd`: `codex exec -C` 的执行目录；通常和 `path` 相同。
-   - `branchOrScopePrefix`: 分支或提交 scope 前缀，例如 `main`。
-   - `defaultTests`: AI Triage 没有给出测试命令时使用的默认测试，每行一条。
-   - `extraRules`: 项目特定规则，只写执行约束，不要写密钥。
-
-5. 校验配置并启动:
-
-   ```bash
-   pnpm validate
-   pnpm dev:all
-   ```
-
-   也可以手动触发一次扫描:
-
-   ```bash
-   pnpm once -- --stage part1
-   pnpm once -- --stage part2
-   ```
-
-6. 首次跑通时建议按这个顺序验证:
-
-   - 新 issue 放在 `Todo`，阶段一只分析和评论，不写代码。
-   - 用户确认范围后，把 issue 移到 `On Schedule`。
-   - 阶段二只认领 `On Schedule`，先移到 `In Progress`，由当前 Codex agent 实现、测试、提交，再移到 `Testing`。
-
 ## 配置
 
 在界面中配置:
@@ -179,7 +195,3 @@ node src/server/index.mjs once --config config.local.json --stage both --issue L
 ```
 
 手动指定 `--issue` 不会绕过状态边界：`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一或阶段二，不会对同一个 issue 同时启动两个阶段。
-
-## shadcn
-
-前端基础组件来自 `src/components/ui` 下的 shadcn/ui 组件。业务页面只组合这些组件。
