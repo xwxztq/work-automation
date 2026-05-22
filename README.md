@@ -10,7 +10,7 @@
 
 - 读取当前机器配置的 Linear 项目。
 - 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
-- 阶段二检测 `On Schedule` 并启动 Codex 做实现。
+- 阶段二检测 `On Schedule` 并启动 Codex 做实现；候选按 Linear 优先级语义排序：`Urgent`、`High`、`Medium`、`Low`、无优先级，同优先级按 issue 编号数字升序执行。
 - 服务端只负责扫描队列、启动独立 Codex supervisor、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
 - 多个项目并行执行；同一项目内阶段一、阶段二互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
 - 使用 `codex exec --json --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。

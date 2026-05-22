@@ -438,7 +438,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       },
     })
 
-    for (const issueRef of candidates.sort(compareIssuePriority)) {
+    for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
       if (signal.aborted) {
         await logEvent({
           type: "part2-aborted",
@@ -1308,6 +1308,44 @@ function compareIssuePriority(a, b) {
     return priorityDiff
   }
   return String(a.updatedAt).localeCompare(String(b.updatedAt))
+}
+
+function comparePart2ScheduleOrder(a, b) {
+  const priorityDiff = linearPriorityRank(a?.priority) - linearPriorityRank(b?.priority)
+  if (priorityDiff !== 0) {
+    return priorityDiff
+  }
+  const issueNumberA = linearIssueNumber(a)
+  const issueNumberB = linearIssueNumber(b)
+  if (issueNumberA !== null && issueNumberB !== null) {
+    const issueNumberDiff = issueNumberA - issueNumberB
+    if (issueNumberDiff !== 0) {
+      return issueNumberDiff
+    }
+  } else if (issueNumberA !== null) {
+    return -1
+  } else if (issueNumberB !== null) {
+    return 1
+  }
+  const updatedAtDiff = String(a?.updatedAt || "").localeCompare(String(b?.updatedAt || ""))
+  if (updatedAtDiff !== 0) {
+    return updatedAtDiff
+  }
+  return String(issueActiveKey(a)).localeCompare(String(issueActiveKey(b)))
+}
+
+function linearPriorityRank(priority) {
+  const numeric = Number(priority)
+  return Number.isInteger(numeric) && numeric >= 1 && numeric <= 4 ? numeric : 5
+}
+
+function linearIssueNumber(issue) {
+  const match = String(issue?.identifier || "").match(/-(\d+)$/)
+  if (!match) {
+    return null
+  }
+  const numeric = Number(match[1])
+  return Number.isSafeInteger(numeric) ? numeric : null
 }
 
 function stageLabel(stage) {
