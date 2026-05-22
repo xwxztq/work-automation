@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url"
 import { createLinearClient } from "./linear-client.mjs"
 import {
   loadConfig,
-  normalizeConfig,
   redactConfig,
   saveConfig,
   validateConfig,
@@ -51,8 +50,14 @@ async function handleApi(req, res, url, context) {
 
   if (method === "PUT" && url.pathname === "/api/config") {
     const body = await readBody(req)
-    const saved = await saveConfig(configPath, normalizeConfig(body), ROOT_DIR)
-    sendJson(res, 200, redactConfig(saved))
+    try {
+      const saved = await saveConfig(configPath, body, ROOT_DIR)
+      sendJson(res, 200, redactConfig(saved))
+    } catch (error) {
+      sendJson(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
     return
   }
 

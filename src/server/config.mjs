@@ -3,6 +3,7 @@ import path from "node:path"
 import { accessSync, constants } from "node:fs"
 import { DEFAULT_CONFIG } from "./defaults.mjs"
 import { isLoopbackHost, validateHost } from "./host.mjs"
+import { validateProjectKeys } from "./project-key.mjs"
 
 export function resolveFromRoot(rootDir, filePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath)
@@ -47,6 +48,14 @@ export async function loadConfig(configPath, rootDir = process.cwd()) {
 export async function saveConfig(configPath, config, rootDir = process.cwd()) {
   const resolved = resolveFromRoot(rootDir, configPath)
   const normalized = normalizeConfig(config)
+  const current = normalizeConfig(await readJsonFile(resolved, DEFAULT_CONFIG))
+  const projectKeyValidation = validateProjectKeys(normalized.projects, {
+    previousProjects: current.projects,
+    allowUnsafeExisting: true,
+  })
+  if (projectKeyValidation.errors.length) {
+    throw new Error(projectKeyValidation.errors.join("\n"))
+  }
   await writeJsonFile(resolved, normalized)
   return normalized
 }
@@ -108,7 +117,7 @@ export function redactConfig(config) {
   }
 }
 
-export async function validateConfig(config, rootDir = process.cwd()) {
+export async function validateConfig(config, rootDir = process.cwd(), options = {}) {
   const errors = []
   const warnings = []
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
@@ -132,16 +141,15 @@ export async function validateConfig(config, rootDir = process.cwd()) {
     warnings.push(`当前进程环境未设置 ${apiKeyEnv}。`)
   }
 
-  const keys = new Set()
+  const projectKeyValidation = validateProjectKeys(config.projects, {
+    previousProjects: options.previousConfig?.projects || config.projects,
+    allowUnsafeExisting: true,
+  })
+  errors.push(...projectKeyValidation.errors)
+  warnings.push(...projectKeyValidation.warnings)
+
   for (const [index, project] of config.projects.entries()) {
     const label = project.key || `projects[${index}]`
-    if (!project.key?.trim()) {
-      errors.push(`第 ${index + 1} 个项目缺少 key。`)
-    }
-    if (project.key && keys.has(project.key)) {
-      errors.push(`项目 key 重复: ${project.key}`)
-    }
-    keys.add(project.key)
     if (!project.linearProjectId?.trim()) {
       errors.push(`${label}: 必须填写 linearProjectId。`)
     }

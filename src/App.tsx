@@ -50,6 +50,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { Toaster } from "@/components/ui/sonner"
+import {
+  generateProjectKey,
+  getProjectKeySafetyError,
+  isSafeProjectKey,
+} from "@/shared/project-key"
 import type {
   AppConfig,
   DaemonStatus,
@@ -213,6 +218,21 @@ function App() {
     () => daemon?.activeRuns.filter((run) => run.projectKey === selectedProjectKey) || [],
     [daemon, selectedProjectKey],
   )
+  const projectKeyError = useMemo(() => {
+    if (!config) return null
+    const key = draftProject.key.trim()
+    if (!key) {
+      return "项目内部标识缺失，请关闭后重新新建项目。"
+    }
+    const duplicate = config.projects.some((project) => project.key === key && project.key !== editingProjectKey)
+    if (duplicate) {
+      return `项目内部标识已存在: ${key}`
+    }
+    if (!isSafeProjectKey(key) && key !== editingProjectKey) {
+      return getProjectKeySafetyError(key)
+    }
+    return null
+  }, [config, draftProject.key, editingProjectKey])
 
   function selectProject(key: string) {
     setSelectedProjectKey(key)
@@ -264,7 +284,11 @@ function App() {
   function openNewProject() {
     if (!config) return
     setEditingProjectKey(null)
-    setDraftProject({ ...emptyProject, branchOrScopePrefix: "main" })
+    setDraftProject({
+      ...emptyProject,
+      key: generateProjectKey(config.projects.map((project) => project.key)),
+      branchOrScopePrefix: "main",
+    })
     setProjectEditorOpen(true)
   }
 
@@ -282,12 +306,16 @@ function App() {
     if (!config) return
     const key = draftProject.key.trim()
     if (!key) {
-      toast.error("项目标识不能为空")
+      toast.error("项目内部标识缺失，请关闭后重新新建项目。")
       return
     }
     const duplicate = config.projects.some((project) => project.key === key && project.key !== editingProjectKey)
     if (duplicate) {
-      toast.error(`项目标识已存在: ${key}`)
+      toast.error(`项目内部标识已存在: ${key}`)
+      return
+    }
+    if (!isSafeProjectKey(key) && key !== editingProjectKey) {
+      toast.error(getProjectKeySafetyError(key) || "项目内部标识格式不正确")
       return
     }
 
@@ -559,6 +587,8 @@ function App() {
         onOpenChange={setProjectEditorOpen}
         onUpdate={updateDraftProject}
         onSave={() => void saveDraftProject()}
+        saveDisabled={Boolean(projectKeyError)}
+        validationMessage={projectKeyError}
         onRemove={editingProjectKey ? () => void removeProject(editingProjectKey) : undefined}
       />
       <Toaster />
@@ -1037,6 +1067,8 @@ function ProjectEditor({
   onOpenChange,
   onUpdate,
   onSave,
+  saveDisabled = false,
+  validationMessage,
   onRemove,
 }: {
   open: boolean
@@ -1046,6 +1078,8 @@ function ProjectEditor({
   onOpenChange: (open: boolean) => void
   onUpdate: (patch: Partial<ProjectConfig>) => void
   onSave: () => void
+  saveDisabled?: boolean
+  validationMessage?: string | null
   onRemove?: () => void
 }) {
   return (
@@ -1055,9 +1089,6 @@ function ProjectEditor({
           <SheetTitle>{editing ? "修改项目" : "新建项目"}</SheetTitle>
         </SheetHeader>
         <div className="grid grid-cols-2 gap-3 px-4">
-          <Field label="项目标识" description={projectFieldDescriptions.key}>
-            <Input value={project.key} onChange={(event) => onUpdate({ key: event.target.value })} />
-          </Field>
           <Field label="仓库名称" description={projectFieldDescriptions.repoName}>
             <Input value={project.repoName} onChange={(event) => onUpdate({ repoName: event.target.value })} />
           </Field>
@@ -1129,13 +1160,16 @@ function ProjectEditor({
           </Field>
         </div>
         <SheetFooter>
+          {validationMessage && (
+            <p className="mr-auto max-w-[420px] text-sm text-destructive">{validationMessage}</p>
+          )}
           {onRemove && (
             <Button variant="destructive" onClick={onRemove} disabled={busy}>
               <Trash2 className="size-4" />
               删除
             </Button>
           )}
-          <Button onClick={onSave} disabled={busy}>
+          <Button onClick={onSave} disabled={busy || saveDisabled}>
             <Save className="size-4" />
             保存
           </Button>

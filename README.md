@@ -69,9 +69,9 @@
 
    `Ready for Codex` 不会被服务自动移动到 `On Schedule`。这个转换必须由用户在 Linear 中人工完成。
 
-6. 在界面或 `config.local.json` 中添加项目。必填字段建议按下面填写:
+6. 在界面或 `config.local.json` 中添加项目。界面新建项目时会自动生成 `key`，用户不需要手动填写。必填字段建议按下面填写:
 
-   - `key`: 本机配置内使用的稳定项目标识，例如 `work-automation`。
+   - `key`: 系统生成的内部稳定标识，用于本机运行目录、处理快照和项目提示词文件名；新增项目会自动生成类似 UUID 的文件夹安全值。如果手写配置，只使用小写字母、数字和连字符。
    - `repoName`: 展示给用户和写入提示词的仓库名称。
    - `linearProjectId`: Linear 项目 UUID，只扫描这个项目下的 issue。
    - `path`: 本机仓库绝对路径，例如 `/Users/san/Projects/Infra/linear/linear-automation`。
