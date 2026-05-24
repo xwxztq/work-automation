@@ -1,5 +1,6 @@
 import type {
   AppConfig,
+  CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
   PromptBundle,
@@ -45,6 +46,14 @@ export const api = {
       search.set("projectKey", projectKey)
     }
     return request<{ events: ExecutionEvent[] }>(`/api/events?${search.toString()}`)
+  },
+  getCodexActivity: (projectKey?: string) => {
+    const search = new URLSearchParams()
+    if (projectKey) {
+      search.set("projectKey", projectKey)
+    }
+    const suffix = search.toString() ? `?${search.toString()}` : ""
+    return request<CodexActivityPayload>(`/api/codex/activity${suffix}`)
   },
   getDaemonStatus: () => request<DaemonStatus>("/api/daemon/status"),
   startDaemon: () => request<DaemonStatus>("/api/daemon/start", { method: "POST" }),
