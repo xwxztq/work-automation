@@ -12,8 +12,10 @@ import {
   drawColorizedFloorTile,
   drawModernOfficeSprite,
   drawOfficeAsset,
+  drawWhiteCatFrame,
   loadPixelAgentAssets,
   paletteIndexFromId,
+  type PixelCatAction,
   type PixelAgentAssets,
   type PixelDirection,
   type PixelFloorColor,
@@ -39,6 +41,15 @@ const ARRIVAL_EPSILON_PX = 0.75
 const WALK_DIRECTION_EPSILON_PX = 4
 const ENTRY_QUEUE_GAP_PX = CHARACTER_WIDTH + 18
 const WAITING_STAND_SIDE_OFFSET_PX = 34
+const WHITE_CAT_SCALE = 1.35
+const WHITE_CAT_FRAME_SIZE_PX = 50
+const WHITE_CAT_SIZE_PX = Math.round(WHITE_CAT_FRAME_SIZE_PX * WHITE_CAT_SCALE)
+const WHITE_CAT_SHADOW_Y_OFFSET_PX = 37 * WHITE_CAT_SCALE
+const WHITE_CAT_WALK_SPEED_PX_PER_SEC = 14
+const WHITE_CAT_RUN_SPEED_PX_PER_SEC = 30
+const WHITE_CAT_ARRIVAL_EPSILON_PX = 1.2
+const WHITE_CAT_EDGE_INSET_PX = 10
+const WHITE_CAT_MIN_MOVE_DISTANCE_PX = 70
 const TILE_WALL = 0
 const TILE_VOID = 255
 const LIGHT_CARPET_COLOR: PixelFloorColor = { h: 42, s: 22, b: 34, c: -48 }
@@ -126,10 +137,77 @@ type ActivityBubble = {
   stage?: string
 }
 
+type SceneWhiteCat = {
+  x: number
+  y: number
+  targetX: number
+  targetY: number
+  action: PixelCatAction
+  facing: "left" | "right"
+  phase: "moving" | "acting"
+  phaseStartedAt: number
+  phaseDuration: number
+  speed: number
+}
+
 type WorkstationLayout = {
   columnCount: number
   rowCount: number
   visualRowBySlotRow: Map<number, number>
+}
+
+type WhiteCatActionChoice = {
+  action: PixelCatAction
+  minDuration: number
+  maxDuration: number
+}
+
+type WhiteCatBounds = {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  blockedZones: WhiteCatBlockedZone[]
+}
+
+type WhiteCatBlockedZone = {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+type WhiteCatPoint = {
+  x: number
+  y: number
+}
+
+const WHITE_CAT_ACTIONS: WhiteCatActionChoice[] = [
+  { action: "idle", minDuration: 1.1, maxDuration: 2.6 },
+  { action: "sitting", minDuration: 1.6, maxDuration: 3.2 },
+  { action: "laying", minDuration: 2.1, maxDuration: 4.2 },
+  { action: "licking1", minDuration: 1.1, maxDuration: 2.2 },
+  { action: "licking2", minDuration: 1.1, maxDuration: 2.2 },
+  { action: "itch", minDuration: 0.8, maxDuration: 1.4 },
+  { action: "meow", minDuration: 0.7, maxDuration: 1.2 },
+  { action: "stretching", minDuration: 1.2, maxDuration: 2 },
+  { action: "sleeping1", minDuration: 2.4, maxDuration: 4.8 },
+  { action: "sleeping2", minDuration: 2.4, maxDuration: 4.8 },
+]
+
+const WHITE_CAT_ANIMATION_SPEED: Record<PixelCatAction, number> = {
+  idle: 5,
+  itch: 6,
+  laying: 4,
+  licking1: 6,
+  licking2: 6,
+  meow: 6,
+  run: 10,
+  sitting: 1,
+  sleeping1: 1,
+  sleeping2: 1,
+  stretching: 7,
+  walk: 8,
 }
 
 export function CodexActivityScene({ agents, lastRun, onSelectRun }: CodexActivitySceneProps) {
@@ -139,6 +217,7 @@ export function CodexActivityScene({ agents, lastRun, onSelectRun }: CodexActivi
   const lastRunRef = useRef<RunSummary | undefined>(lastRun)
   const onSelectRunRef = useRef(onSelectRun)
   const charactersRef = useRef(new Map<string, SceneCharacter>())
+  const whiteCatRef = useRef<SceneWhiteCat | null>(null)
   const hitRegionsRef = useRef<HitRegion[]>([])
   const hoveredRunIdRef = useRef<string | null>(null)
   const assetsRef = useRef<PixelAgentAssets | null>(null)
@@ -210,6 +289,7 @@ export function CodexActivityScene({ agents, lastRun, onSelectRun }: CodexActivi
       const height = canvasNode.height / dpr
       const visibleAgentLimit = visibleAgentLimitForWidth(width)
       const allAgents = agentsRef.current
+      whiteCatRef.current = ensureWhiteCat(whiteCatRef.current, width, height, now)
       drawingContext.setTransform(dpr, 0, 0, dpr, 0, 0)
       drawingContext.imageSmoothingEnabled = false
       drawScene({
@@ -222,6 +302,7 @@ export function CodexActivityScene({ agents, lastRun, onSelectRun }: CodexActivi
         visibleAgentLimit,
         lastRun: lastRunRef.current,
         characters: charactersRef.current,
+        whiteCat: whiteCatRef.current,
         hitRegions: hitRegionsRef.current,
         hoveredRunId: hoveredRunIdRef.current,
         assets: assetsRef.current,
@@ -301,6 +382,7 @@ function drawScene({
   visibleAgentLimit,
   lastRun,
   characters,
+  whiteCat,
   hitRegions,
   hoveredRunId,
   assets,
@@ -316,6 +398,7 @@ function drawScene({
   visibleAgentLimit: number
   lastRun: RunSummary | undefined
   characters: Map<string, SceneCharacter>
+  whiteCat: SceneWhiteCat
   hitRegions: HitRegion[]
   hoveredRunId: string | null
   assets: PixelAgentAssets | null
@@ -326,21 +409,21 @@ function drawScene({
   drawOffice(ctx, width, height, assets)
   syncCharacters(characters, agents, activeRunIds, lastRun, width, height, time, visibleAgentLimit)
   updateCharacters(characters, dt, time, width)
+  updateWhiteCat(whiteCat, dt, time, width, height, characters)
 
   hitRegions.length = 0
 
+  const rest = restAreaPosition(width, height)
+  const drawables: SceneDrawable[] = []
+  queueRestAreaDrawables(drawables, ctx, rest.x, rest.y, assets)
+  queueWhiteCatDrawable(drawables, ctx, whiteCat, assets, time)
+
   if (agents.length === 0 && characters.size === 0) {
-    const rest = restAreaPosition(width, height)
-    const drawables: SceneDrawable[] = []
-    queueRestAreaDrawables(drawables, ctx, rest.x, rest.y, assets)
     renderDrawables(drawables)
     return
   }
 
-  const rest = restAreaPosition(width, height)
   const orderedCharacters = [...characters.values()]
-  const drawables: SceneDrawable[] = []
-  queueRestAreaDrawables(drawables, ctx, rest.x, rest.y, assets)
   for (const character of orderedCharacters) {
     const hovered = hoveredRunId === character.runId
     const motion = renderMotion(character)
@@ -528,6 +611,238 @@ function updateCharacters(
       characters.delete(runId)
     }
   }
+}
+
+function ensureWhiteCat(
+  cat: SceneWhiteCat | null,
+  width: number,
+  height: number,
+  time: number,
+) {
+  const bounds = whiteCatFloorBounds(width, height)
+  if (!cat) {
+    return createWhiteCat(bounds, time)
+  }
+
+  cat.x = clamp(cat.x, bounds.left, bounds.right)
+  cat.y = clamp(cat.y, bounds.top, bounds.bottom)
+  cat.targetX = clamp(cat.targetX, bounds.left, bounds.right)
+  cat.targetY = clamp(cat.targetY, bounds.top, bounds.bottom)
+  return cat
+}
+
+function createWhiteCat(
+  bounds: WhiteCatBounds,
+  time: number,
+): SceneWhiteCat {
+  const start = randomWhiteCatPoint(bounds)
+  return {
+    x: start.x,
+    y: start.y,
+    targetX: start.x,
+    targetY: start.y,
+    action: "sitting",
+    facing: Math.random() < 0.5 ? "left" : "right",
+    phase: "acting",
+    phaseStartedAt: time,
+    phaseDuration: randomRange(0.8, 1.8),
+    speed: 0,
+  }
+}
+
+function updateWhiteCat(
+  cat: SceneWhiteCat,
+  dt: number,
+  time: number,
+  width: number,
+  height: number,
+  characters: Map<string, SceneCharacter>,
+) {
+  const bounds = whiteCatFloorBounds(width, height, characters)
+  if (cat.phase === "moving") {
+    if (!isWhiteCatPathClear({ x: cat.x, y: cat.y }, { x: cat.targetX, y: cat.targetY }, bounds)) {
+      startWhiteCatMove(cat, bounds, time)
+      return
+    }
+    const arrived = moveWhiteCatTowardTarget(cat, dt)
+    if (arrived) {
+      startRandomWhiteCatAction(cat, time)
+    }
+    return
+  }
+
+  if (time - cat.phaseStartedAt >= cat.phaseDuration || !isWhiteCatPointClear(cat, bounds)) {
+    startWhiteCatMove(cat, bounds, time)
+  }
+}
+
+function moveWhiteCatTowardTarget(cat: SceneWhiteCat, dt: number) {
+  const dx = cat.targetX - cat.x
+  const dy = cat.targetY - cat.y
+  const distance = Math.hypot(dx, dy)
+  if (distance <= WHITE_CAT_ARRIVAL_EPSILON_PX) {
+    cat.x = cat.targetX
+    cat.y = cat.targetY
+    return true
+  }
+
+  if (Math.abs(dx) > 2) {
+    cat.facing = dx > 0 ? "right" : "left"
+  }
+
+  const step = cat.speed * dt
+  if (step >= distance) {
+    cat.x = cat.targetX
+    cat.y = cat.targetY
+    return true
+  }
+
+  cat.x += (dx / distance) * step
+  cat.y += (dy / distance) * step
+  return false
+}
+
+function startWhiteCatMove(
+  cat: SceneWhiteCat,
+  bounds: WhiteCatBounds,
+  time: number,
+) {
+  let target = randomWhiteCatPoint(bounds)
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    if (
+      Math.hypot(target.x - cat.x, target.y - cat.y) >= WHITE_CAT_MIN_MOVE_DISTANCE_PX &&
+      isWhiteCatPathClear({ x: cat.x, y: cat.y }, target, bounds)
+    ) {
+      break
+    }
+    target = randomWhiteCatPoint(bounds)
+  }
+
+  const running = Math.random() < 0.18
+  cat.targetX = target.x
+  cat.targetY = target.y
+  cat.action = running ? "run" : "walk"
+  cat.speed = running ? WHITE_CAT_RUN_SPEED_PX_PER_SEC : WHITE_CAT_WALK_SPEED_PX_PER_SEC
+  cat.phase = "moving"
+  cat.phaseStartedAt = time
+  cat.phaseDuration = 0
+  if (Math.abs(cat.targetX - cat.x) > 2) {
+    cat.facing = cat.targetX > cat.x ? "right" : "left"
+  }
+}
+
+function startRandomWhiteCatAction(cat: SceneWhiteCat, time: number) {
+  const choice = WHITE_CAT_ACTIONS[Math.floor(Math.random() * WHITE_CAT_ACTIONS.length)]
+  cat.action = choice.action
+  cat.phase = "acting"
+  cat.phaseStartedAt = time
+  cat.phaseDuration = randomRange(choice.minDuration, choice.maxDuration)
+  cat.speed = 0
+}
+
+function whiteCatFloorBounds(
+  width: number,
+  height: number,
+  characters?: Map<string, SceneCharacter>,
+): WhiteCatBounds {
+  const wallHeight = Math.max(WALL_MIN_HEIGHT_PX, height * WALL_HEIGHT_RATIO)
+  return {
+    left: WHITE_CAT_EDGE_INSET_PX,
+    right: width - WHITE_CAT_SIZE_PX - WHITE_CAT_EDGE_INSET_PX,
+    top: wallHeight + 6,
+    bottom: height - WHITE_CAT_SIZE_PX - 6,
+    blockedZones: whiteCatWorkstationBlockedZones(characters),
+  }
+}
+
+function whiteCatWorkstationBlockedZones(characters: Map<string, SceneCharacter> | undefined) {
+  if (!characters) {
+    return []
+  }
+  const scale = CHARACTER_SCALE
+  const zones: WhiteCatBlockedZone[] = []
+  for (const character of characters.values()) {
+    if (character.phase !== "entering" && character.phase !== "working") {
+      continue
+    }
+    zones.push({
+      left: character.stationX - 34 * scale,
+      right: character.stationX + 34 * scale,
+      top: character.stationY - 34 * scale,
+      bottom: character.stationY + 16 * scale,
+    })
+  }
+  return zones
+}
+
+function randomWhiteCatPoint(bounds: WhiteCatBounds) {
+  let point = randomWhiteCatPointInBounds(bounds)
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    if (isWhiteCatPointClear(point, bounds)) {
+      return point
+    }
+    point = randomWhiteCatPointInBounds(bounds)
+  }
+  return point
+}
+
+function randomWhiteCatPointInBounds(bounds: WhiteCatBounds) {
+  return { x: randomRange(bounds.left, bounds.right), y: randomRange(bounds.top, bounds.bottom) }
+}
+
+function isWhiteCatPointClear(point: WhiteCatPoint, bounds: WhiteCatBounds) {
+  return !whiteCatBlockedZoneAt(point, bounds.blockedZones)
+}
+
+function isWhiteCatPathClear(from: WhiteCatPoint, to: WhiteCatPoint, bounds: WhiteCatBounds) {
+  if (!isWhiteCatPointClear(to, bounds)) {
+    return false
+  }
+  const startZone = whiteCatBlockedZoneAt(from, bounds.blockedZones)
+  let leftStartZone = !startZone
+  const distance = Math.hypot(to.x - from.x, to.y - from.y)
+  const steps = Math.max(8, Math.ceil(distance / 16))
+  for (let step = 1; step <= steps; step += 1) {
+    const progress = step / steps
+    const point = {
+      x: from.x + (to.x - from.x) * progress,
+      y: from.y + (to.y - from.y) * progress,
+    }
+    const zone = whiteCatBlockedZoneAt(point, bounds.blockedZones)
+    if (!zone) {
+      leftStartZone = true
+      continue
+    }
+    if (zone !== startZone || leftStartZone) {
+      return false
+    }
+  }
+  return true
+}
+
+function whiteCatBlockedZoneAt(point: WhiteCatPoint, zones: WhiteCatBlockedZone[]) {
+  const foot = whiteCatFootPoint(point)
+  return zones.find(
+    (zone) =>
+      foot.x >= zone.left &&
+      foot.x <= zone.right &&
+      foot.y >= zone.top &&
+      foot.y <= zone.bottom,
+  )
+}
+
+function whiteCatFootPoint(point: WhiteCatPoint) {
+  return {
+    x: point.x + WHITE_CAT_SIZE_PX / 2,
+    y: point.y + WHITE_CAT_SHADOW_Y_OFFSET_PX,
+  }
+}
+
+function randomRange(min: number, max: number) {
+  if (max < min) {
+    return (min + max) / 2
+  }
+  return min + Math.random() * (max - min)
 }
 
 function moveCharacterTowardTarget(character: SceneCharacter, dt: number) {
@@ -1222,6 +1537,44 @@ function queueCharacterDrawable(
       })
     },
   })
+}
+
+function queueWhiteCatDrawable(
+  drawables: SceneDrawable[],
+  ctx: CanvasRenderingContext2D,
+  cat: SceneWhiteCat,
+  assets: PixelAgentAssets | null,
+  time: number,
+) {
+  const anchorY = cat.y + WHITE_CAT_SIZE_PX - 8 * WHITE_CAT_SCALE
+  drawables.push({
+    zY: anchorY + cat.x / 10000,
+    draw: () => {
+      if (!assets?.whiteCat) {
+        return
+      }
+      const frame = Math.floor((time - cat.phaseStartedAt) * WHITE_CAT_ANIMATION_SPEED[cat.action])
+      drawWhiteCatShadow(ctx, cat)
+      drawWhiteCatFrame(ctx, assets, {
+        x: cat.x,
+        y: cat.y,
+        action: cat.action,
+        frame,
+        scale: WHITE_CAT_SCALE,
+        flipX: cat.facing === "left",
+      })
+    },
+  })
+}
+
+function drawWhiteCatShadow(ctx: CanvasRenderingContext2D, cat: SceneWhiteCat) {
+  ctx.fillStyle = "rgba(48, 38, 27, 0.08)"
+  ctx.fillRect(
+    Math.round(cat.x + 12 * WHITE_CAT_SCALE),
+    Math.round(cat.y + WHITE_CAT_SHADOW_Y_OFFSET_PX),
+    Math.round(25 * WHITE_CAT_SCALE),
+    Math.round(3 * WHITE_CAT_SCALE),
+  )
 }
 
 function renderDrawables(drawables: SceneDrawable[]) {
