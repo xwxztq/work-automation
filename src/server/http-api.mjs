@@ -9,6 +9,7 @@ import {
   saveConfig,
   validateConfig,
 } from "./config.mjs"
+import { createCodexActivityPayload } from "./codex-activity.mjs"
 import { readAllPrompts, readPrompt, writePrompt } from "./prompts.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -192,6 +193,19 @@ async function handleApi(req, res, url, context) {
         projectKey: url.searchParams.get("projectKey") || undefined,
       }),
     })
+    return
+  }
+
+  if (method === "GET" && url.pathname === "/api/codex/activity") {
+    sendJson(
+      res,
+      200,
+      await createCodexActivityPayload({
+        scheduler,
+        store,
+        projectKey: url.searchParams.get("projectKey") || undefined,
+      }),
+    )
     return
   }
 

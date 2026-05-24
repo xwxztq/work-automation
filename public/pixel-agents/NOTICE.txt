@@ -1,0 +1,13 @@
+Pixel Agents asset notice
+
+The files in this directory were copied from:
+https://github.com/pixel-agents-hq/pixel-agents
+
+Pixel Agents is licensed under the MIT License.
+Copyright (c) 2026 Pablo De Lucca
+
+The original project notes that the character sprites are based on
+JIK-A-4, Metro City:
+https://jik-a-4.itch.io/metrocity-free-topdown-character-pack
+
+The full MIT license text is included in this directory as LICENSE.

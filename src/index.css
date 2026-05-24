@@ -3,6 +3,12 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+@font-face {
+  font-family: "Pixel Agents";
+  src: url("/pixel-agents/fonts/FSPixelSansUnicode-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

@@ -88,6 +88,63 @@ export type RunDetail = RunSummary & {
   prompt: string
 }
 
+export type CodexActivityKind =
+  | "booting"
+  | "thinking"
+  | "command"
+  | "tool"
+  | "writing"
+  | "todo"
+  | "searching"
+  | "waiting"
+  | "done"
+  | "failed"
+  | "canceled"
+
+export type CodexActivityMotion =
+  | "idle"
+  | "typing"
+  | "reading"
+  | "running"
+  | "walking"
+  | "waiting"
+  | "success"
+  | "failure"
+
+export type CodexActivityTool =
+  | "shell"
+  | "git"
+  | "test"
+  | "linear"
+  | "search"
+  | "edit"
+  | "todo"
+  | "other"
+
+export type CodexActivityAgent = {
+  runId: string
+  projectKey: string
+  stage: string
+  issueIdentifier: string
+  issueTitle: string
+  startedAt: string
+  status: RunSummary["status"]
+  activityKind: CodexActivityKind
+  activityMotion: CodexActivityMotion
+  activityTool: CodexActivityTool
+  activityLabel: string
+  detail: string
+  updatedAt: string
+  pid?: number | null
+  supervisorPid?: number | null
+  codexPid?: number | null
+}
+
+export type CodexActivityPayload = {
+  generatedAt: string
+  agents: CodexActivityAgent[]
+}
+
 export type ExecutionEvent = {
   timestamp: string
   level: "info" | "warn" | "error"

@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner"
 
 import { api } from "@/app/api"
+import { CodexActivityPanel } from "@/components/codex-activity/CodexActivityPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -57,6 +58,8 @@ import {
 } from "@/shared/project-key"
 import type {
   AppConfig,
+  CodexActivityAgent,
+  CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
   ProjectConfig,
@@ -143,6 +146,17 @@ function resolveSelectedProjectKey(projects: ProjectConfig[], preferredKeys: str
   return projects[0]?.key || ""
 }
 
+function emptyCodexActivity(): CodexActivityPayload {
+  return {
+    generatedAt: new Date().toISOString(),
+    agents: [],
+  }
+}
+
+async function loadCodexActivity(projectKey?: string) {
+  return api.getCodexActivity(projectKey).catch(() => emptyCodexActivity())
+}
+
 function App() {
   const [view, setView] = useState<View>("project")
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -150,6 +164,10 @@ function App() {
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [events, setEvents] = useState<ExecutionEvent[]>([])
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null)
+  const [codexActivity, setCodexActivity] = useState<CodexActivityPayload>({
+    generatedAt: "",
+    agents: [],
+  })
   const [selectedProjectKey, setSelectedProjectKey] = useState(readPersistedSelectedProjectKey)
   const [draftProject, setDraftProject] = useState<ProjectConfig>(emptyProject)
   const [editingProjectKey, setEditingProjectKey] = useState<string | null>(null)
@@ -174,7 +192,17 @@ function App() {
       void refreshRuns(true)
     }, 3000)
     return () => clearInterval(timer)
-  }, [])
+    // Rebind polling when the selected project changes so activity uses the right filter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectKey])
+
+  useEffect(() => {
+    if (!selectedProjectKey) {
+      setCodexActivity({ generatedAt: "", agents: [] })
+      return
+    }
+    void loadCodexActivity(selectedProjectKey).then(setCodexActivity)
+  }, [selectedProjectKey])
 
   useEffect(() => {
     if (!prompts) return
@@ -218,6 +246,10 @@ function App() {
     () => daemon?.activeRuns.filter((run) => run.projectKey === selectedProjectKey) || [],
     [daemon, selectedProjectKey],
   )
+  const projectCodexAgents = useMemo(
+    () => codexActivity.agents.filter((agent) => agent.projectKey === selectedProjectKey),
+    [codexActivity.agents, selectedProjectKey],
+  )
   const projectKeyError = useMemo(() => {
     if (!config) return null
     const key = draftProject.key.trim()
@@ -242,18 +274,20 @@ function App() {
   async function refreshAll() {
     setBusy(true)
     try {
-      const [nextConfig, nextPrompts, nextRuns, nextDaemon, nextEvents] = await Promise.all([
+      const [nextConfig, nextPrompts, nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
         api.getConfig(),
         api.getPrompts(),
         api.getRuns(),
         api.getDaemonStatus(),
         api.getEvents(),
+        loadCodexActivity(selectedProjectKey || undefined),
       ])
       setConfig(nextConfig)
       setPrompts(nextPrompts)
       setRuns(nextRuns.runs)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
+      setCodexActivity(nextCodexActivity)
       selectProject(
         resolveSelectedProjectKey(nextConfig.projects, [selectedProjectKey, readPersistedSelectedProjectKey()]),
       )
@@ -408,14 +442,16 @@ function App() {
 
   async function refreshRuns(silent = false) {
     try {
-      const [nextRuns, nextDaemon, nextEvents] = await Promise.all([
+      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
         api.getRuns(),
         api.getDaemonStatus(),
         api.getEvents(),
+        loadCodexActivity(selectedProjectKey || undefined),
       ])
       setRuns(nextRuns.runs)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
+      setCodexActivity(nextCodexActivity)
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
@@ -541,6 +577,7 @@ function App() {
                 project={selectedProject}
                 runs={projectRuns}
                 activeRuns={activeProjectRuns}
+                codexAgents={projectCodexAgents}
                 selectedRun={selectedRun}
                 manualStage={manualStage}
                 manualIssue={manualIssue}
@@ -770,6 +807,7 @@ function ProjectView({
   project,
   runs,
   activeRuns,
+  codexAgents,
   selectedRun,
   manualStage,
   manualIssue,
@@ -787,6 +825,7 @@ function ProjectView({
   project: ProjectConfig | null
   runs: RunSummary[]
   activeRuns: DaemonStatus["activeRuns"]
+  codexAgents: CodexActivityAgent[]
   selectedRun: RunDetail | null
   manualStage: Stage
   manualIssue: string
@@ -821,6 +860,16 @@ function ProjectView({
         <MetricCard title="历史运行" value={String(runs.length)} />
         <MetricCard title="最近状态" value={lastRun ? runStatusLabel(lastRun.status) : "-"} />
       </div>
+
+      <CodexActivityPanel
+        agents={codexAgents}
+        project={project}
+        lastRun={lastRun}
+        busy={busy}
+        onRefresh={refreshRuns}
+        onCancelRun={cancelRun}
+        onSelectRun={loadRun}
+      />
 
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)] gap-4">
         <div className="flex min-h-0 min-w-0 flex-col gap-4">
@@ -882,56 +931,6 @@ function ProjectView({
                 <Play className="size-4" />
                 执行
               </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="shrink-0">
-            <CardHeader>
-              <CardTitle>正在执行</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>事项</TableHead>
-                    <TableHead>阶段</TableHead>
-                    <TableHead>进程</TableHead>
-                    <TableHead className="w-20" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {activeRuns.map((run) => (
-                    <TableRow key={run.runId}>
-                      <TableCell>
-                        <div className="font-mono text-xs">{run.issue.identifier}</div>
-                        <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issue.title}</div>
-                      </TableCell>
-                      <TableCell>{stageLabel(run.stage)}</TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {run.codexPid ? `${run.pid || "-"} / ${run.codexPid}` : run.pid || "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => cancelRun(run.runId)}
-                        >
-                          <StopCircle className="size-4" />
-                          停止
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {activeRuns.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={4} className="text-muted-foreground">
-                        暂无执行中任务
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
             </CardContent>
           </Card>
 
