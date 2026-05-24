@@ -9,6 +9,28 @@ type PixelPalette = {
   shoe: string
 }
 
+export type PixelFloorColor = {
+  h: number
+  s: number
+  b: number
+  c: number
+}
+
+export type PixelSpriteRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+type PixelOfficeLayout = {
+  version: 1
+  cols: number
+  rows: number
+  tiles: number[]
+  tileColors?: Array<PixelFloorColor | null>
+}
+
 export type PixelDirection = "down" | "up" | "right" | "left"
 
 type FurnitureAssetKey =
@@ -34,6 +56,8 @@ export type PixelAgentAssets = {
   characters: HTMLImageElement[]
   floors: HTMLImageElement[]
   furniture: Record<FurnitureAssetKey, HTMLImageElement>
+  modernOffice: HTMLImageElement
+  layout: PixelOfficeLayout
 }
 
 type DrawCharacterFrameInput = {
@@ -48,10 +72,22 @@ type DrawCharacterFrameInput = {
   assets?: PixelAgentAssets | null
   direction?: PixelDirection
   scale?: number
+  showProp?: boolean
 }
 
 type DrawAssetInput = {
   key: FurnitureAssetKey
+  x: number
+  y: number
+  scale?: number
+  scaleX?: number
+  scaleY?: number
+  alpha?: number
+  flipX?: boolean
+}
+
+type DrawSpriteSheetInput = {
+  source: PixelSpriteRect
   x: number
   y: number
   scale?: number
@@ -63,6 +99,7 @@ const PIXEL = 4
 const CHAR_FRAME_WIDTH = 16
 const CHAR_FRAME_HEIGHT = 32
 const ASSET_BASE = "/pixel-agents/assets"
+const DEFAULT_FLOOR_COLOR: PixelFloorColor = { h: 0, s: 0, b: 0, c: 0 }
 
 const FURNITURE_SOURCES: Record<FurnitureAssetKey, string> = {
   bookshelf: `${ASSET_BASE}/furniture/BOOKSHELF/BOOKSHELF.png`,
@@ -92,6 +129,7 @@ const PALETTES: PixelPalette[] = [
 ]
 
 let cachedAssetsPromise: Promise<PixelAgentAssets> | null = null
+const colorizedFloorCache = new Map<string, HTMLCanvasElement>()
 
 export function loadPixelAgentAssets() {
   cachedAssetsPromise ??= Promise.all([
@@ -103,10 +141,14 @@ export function loadPixelAgentAssets() {
         return [key, image] as const
       }),
     ),
-  ]).then(([characters, floors, furnitureEntries]) => ({
+    loadImage(`${ASSET_BASE}/furniture/Modern%20Office%2048x48.png`),
+    loadLayout(),
+  ]).then(([characters, floors, furnitureEntries, modernOffice, layout]) => ({
     characters,
     floors,
     furniture: Object.fromEntries(furnitureEntries) as Record<FurnitureAssetKey, HTMLImageElement>,
+    modernOffice,
+    layout,
   }))
   return cachedAssetsPromise
 }
@@ -132,22 +174,25 @@ export function drawCharacterFrame(
 export function drawOfficeAsset(
   ctx: CanvasRenderingContext2D,
   assets: PixelAgentAssets | null | undefined,
-  { key, x, y, scale = 2, alpha = 1, flipX = false }: DrawAssetInput,
+  { key, x, y, scale = 2, scaleX = scale, scaleY = scale, alpha = 1, flipX = false }: DrawAssetInput,
 ) {
   const image = assets?.furniture[key]
   if (!isImageReady(image)) {
     return false
   }
 
+  const targetWidth = image.width * scaleX
+  const targetHeight = image.height * scaleY
+
   ctx.save()
   ctx.globalAlpha = alpha
   ctx.imageSmoothingEnabled = false
   if (flipX) {
-    ctx.translate(Math.round(x + image.width * scale), Math.round(y))
+    ctx.translate(Math.round(x + targetWidth), Math.round(y))
     ctx.scale(-1, 1)
-    ctx.drawImage(image, 0, 0, image.width * scale, image.height * scale)
+    ctx.drawImage(image, 0, 0, targetWidth, targetHeight)
   } else {
-    ctx.drawImage(image, Math.round(x), Math.round(y), image.width * scale, image.height * scale)
+    ctx.drawImage(image, Math.round(x), Math.round(y), targetWidth, targetHeight)
   }
   ctx.restore()
   return true
@@ -169,6 +214,61 @@ export function drawFloorTile(
   return true
 }
 
+export function drawModernOfficeSprite(
+  ctx: CanvasRenderingContext2D,
+  assets: PixelAgentAssets | null | undefined,
+  { source, x, y, scale = 1, alpha = 1, flipX = false }: DrawSpriteSheetInput,
+) {
+  const image = assets?.modernOffice
+  if (!isImageReady(image)) {
+    return false
+  }
+
+  const targetWidth = Math.round(source.width * scale)
+  const targetHeight = Math.round(source.height * scale)
+
+  ctx.save()
+  ctx.globalAlpha = alpha
+  ctx.imageSmoothingEnabled = false
+  if (flipX) {
+    ctx.translate(Math.round(x + targetWidth), Math.round(y))
+    ctx.scale(-1, 1)
+    ctx.drawImage(image, source.x, source.y, source.width, source.height, 0, 0, targetWidth, targetHeight)
+  } else {
+    ctx.drawImage(
+      image,
+      source.x,
+      source.y,
+      source.width,
+      source.height,
+      Math.round(x),
+      Math.round(y),
+      targetWidth,
+      targetHeight,
+    )
+  }
+  ctx.restore()
+  return true
+}
+
+export function drawColorizedFloorTile(
+  ctx: CanvasRenderingContext2D,
+  assets: PixelAgentAssets | null | undefined,
+  floorPattern: number,
+  color: PixelFloorColor | null | undefined,
+  x: number,
+  y: number,
+  size: number,
+) {
+  const image = assets?.floors[floorPattern - 1]
+  if (!isImageReady(image)) {
+    return false
+  }
+  const tile = getColorizedFloorCanvas(image, color || DEFAULT_FLOOR_COLOR)
+  ctx.drawImage(tile, Math.round(x), Math.round(y), size, size)
+  return true
+}
+
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image()
@@ -176,6 +276,104 @@ function loadImage(src: string) {
     image.onerror = () => reject(new Error(`Failed to load Pixel Agents asset: ${src}`))
     image.src = src
   })
+}
+
+async function loadLayout() {
+  const response = await fetch(`${ASSET_BASE}/default-layout-1.json`)
+  if (!response.ok) {
+    throw new Error(`Failed to load Pixel Agents layout: ${response.status}`)
+  }
+  return (await response.json()) as PixelOfficeLayout
+}
+
+function getColorizedFloorCanvas(image: HTMLImageElement, color: PixelFloorColor) {
+  const key = `${image.src}:${color.h}:${color.s}:${color.b}:${color.c}`
+  const cached = colorizedFloorCache.get(key)
+  if (cached) {
+    return cached
+  }
+
+  const canvas = document.createElement("canvas")
+  canvas.width = image.naturalWidth
+  canvas.height = image.naturalHeight
+  const context = canvas.getContext("2d")
+  if (!context) {
+    return canvas
+  }
+
+  context.drawImage(image, 0, 0)
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+  const pixels = imageData.data
+  const saturation = color.s / 100
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    if (pixels[index + 3] === 0) {
+      continue
+    }
+
+    const red = pixels[index]
+    const green = pixels[index + 1]
+    const blue = pixels[index + 2]
+    let lightness = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+
+    if (color.c !== 0) {
+      const contrastFactor = (100 + color.c) / 100
+      lightness = 0.5 + (lightness - 0.5) * contrastFactor
+    }
+    if (color.b !== 0) {
+      lightness += color.b / 200
+    }
+    lightness = clamp01(lightness)
+
+    const [nextRed, nextGreen, nextBlue] = hslToRgb(color.h, saturation, lightness)
+    pixels[index] = nextRed
+    pixels[index + 1] = nextGreen
+    pixels[index + 2] = nextBlue
+  }
+
+  context.putImageData(imageData, 0, 0)
+  colorizedFloorCache.set(key, canvas)
+  return canvas
+}
+
+function hslToRgb(hue: number, saturation: number, lightness: number): [number, number, number] {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation
+  const huePrime = hue / 60
+  const x = chroma * (1 - Math.abs((huePrime % 2) - 1))
+  let red = 0
+  let green = 0
+  let blue = 0
+
+  if (huePrime < 1) {
+    red = chroma
+    green = x
+  } else if (huePrime < 2) {
+    red = x
+    green = chroma
+  } else if (huePrime < 3) {
+    green = chroma
+    blue = x
+  } else if (huePrime < 4) {
+    green = x
+    blue = chroma
+  } else if (huePrime < 5) {
+    red = x
+    blue = chroma
+  } else {
+    red = chroma
+    blue = x
+  }
+
+  const match = lightness - chroma / 2
+  return [clamp255(red + match), clamp255(green + match), clamp255(blue + match)]
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value))
+}
+
+function clamp255(value: number) {
+  return Math.max(0, Math.min(255, Math.round(value * 255)))
 }
 
 function drawCharacterAssetFrame(ctx: CanvasRenderingContext2D, input: DrawCharacterFrameInput) {
@@ -242,7 +440,7 @@ function isImageReady(image: HTMLImageElement | undefined): image is HTMLImageEl
 
 function drawFallbackCharacterFrame(
   ctx: CanvasRenderingContext2D,
-  { x, y, motion, tool, frame, palette, alpha = 1, selected = false }: DrawCharacterFrameInput,
+  { x, y, motion, tool, frame, palette, alpha = 1, selected = false, showProp = true }: DrawCharacterFrameInput,
 ) {
   ctx.save()
   ctx.globalAlpha = alpha
@@ -265,7 +463,9 @@ function drawFallbackCharacterFrame(
   drawBody(ctx, baseX, baseY, p, tool)
   drawArms(ctx, baseX, baseY, p, pose, motion)
   drawHead(ctx, baseX, baseY, p, pose)
-  drawProp(ctx, baseX, baseY, motion, tool, frame)
+  if (showProp) {
+    drawProp(ctx, baseX, baseY, motion, tool, frame)
+  }
 
   ctx.restore()
 }

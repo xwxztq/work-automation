@@ -1,4 +1,5 @@
-import { RefreshCcw, StopCircle } from "lucide-react"
+import { useState } from "react"
+import { ChevronDown, RefreshCcw, StopCircle } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -31,12 +32,27 @@ export function CodexActivityPanel({
   onCancelRun,
   onSelectRun,
 }: CodexActivityPanelProps) {
+  const [sceneVisible, setSceneVisible] = useState(true)
+
   return (
     <Card className="shrink-0">
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <CardTitle>Codex 活动</CardTitle>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <CardTitle>Codex 活动</CardTitle>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0 text-muted-foreground"
+                aria-expanded={sceneVisible}
+                aria-label={sceneVisible ? "隐藏像素画面" : "显示像素画面"}
+                onClick={() => setSceneVisible((visible) => !visible)}
+              >
+                <ChevronDown className={`size-4 transition-transform ${sceneVisible ? "" : "-rotate-90"}`} />
+              </Button>
+            </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {agents.length > 0
                 ? `${agents.length} 个运行中任务正在更新`
@@ -49,9 +65,11 @@ export function CodexActivityPanel({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="grid min-w-0 gap-4 xl:grid-cols-[minmax(320px,0.72fr)_minmax(360px,1fr)]">
-        <CodexActivityScene agents={agents} lastRun={lastRun} onSelectRun={onSelectRun} />
-        <div className="min-w-0 space-y-2">
+      <CardContent className="flex min-w-0 flex-col gap-4">
+        {sceneVisible && (
+          <CodexActivityScene agents={agents} lastRun={lastRun} onSelectRun={onSelectRun} />
+        )}
+        <div className="grid max-h-[calc(3*6.5rem+2*0.5rem)] min-w-0 auto-rows-[6.5rem] grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-2 overflow-y-auto pr-1">
           {agents.map((agent) => (
             <ActivityRow
               key={agent.runId}
@@ -60,7 +78,11 @@ export function CodexActivityPanel({
               onCancelRun={onCancelRun}
             />
           ))}
-          {agents.length === 0 && <IdleState lastRun={lastRun} />}
+          {agents.length === 0 && (
+            <div className="col-span-full">
+              <IdleState lastRun={lastRun} />
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -77,10 +99,10 @@ function ActivityRow({
   onCancelRun: (id: string) => void
 }) {
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border bg-background px-3 py-2 sm:grid-cols-[1fr_auto]">
-      <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="font-mono text-xs font-medium">{agent.issueIdentifier || "-"}</span>
+    <div className="grid h-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3 overflow-hidden rounded-lg border bg-background px-3 py-2">
+      <div className="min-w-0 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+          <span className="min-w-0 truncate font-mono text-xs font-medium">{agent.issueIdentifier || "-"}</span>
           <ActivityBadge kind={agent.activityKind} label={agent.activityLabel} />
           <Badge variant="outline">{stageLabel(agent.stage)}</Badge>
         </div>
@@ -88,9 +110,9 @@ function ActivityRow({
         <div className="mt-1 min-w-0 truncate font-mono text-xs text-muted-foreground">
           {agent.detail || "等待 Codex 输出"}
         </div>
-        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span>更新: {formatDate(agent.updatedAt)}</span>
-          <span className="font-mono">PID: {processLabel(agent)}</span>
+        <div className="mt-2 flex min-w-0 gap-3 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
+          <span className="min-w-0 truncate">更新: {formatDate(agent.updatedAt)}</span>
+          <span className="shrink-0 font-mono">PID: {processLabel(agent)}</span>
         </div>
       </div>
       <Button
