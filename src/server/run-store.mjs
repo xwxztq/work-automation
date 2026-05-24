@@ -114,7 +114,22 @@ export function createRunStore(rootDir) {
     return state.issues[processedIssueKey(projectKey, stage, issueId)]
   }
 
-  async function listRuns(limit = 50) {
+  async function listRuns(limit = 50, filters = {}) {
+    const result = await listRunsWithTotal({ limit, ...filters })
+    return result.runs
+  }
+
+  async function listRunsWithTotal({ limit = 50, projectKey } = {}) {
+    const runs = await readRuns()
+    const filteredRuns = projectKey ? runs.filter((run) => run.projectKey === projectKey) : runs
+    const sortedRuns = filteredRuns.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    return {
+      runs: sortedRuns.slice(0, limit),
+      totalCount: sortedRuns.length,
+    }
+  }
+
+  async function readRuns() {
     if (!(await fileExists(runsDir))) {
       return []
     }
@@ -131,8 +146,6 @@ export function createRunStore(rootDir) {
       }
     }
     return runs
-      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-      .slice(0, limit)
   }
 
   async function getRun(id) {
@@ -163,6 +176,7 @@ export function createRunStore(rootDir) {
     getProcessedIssue,
     setProcessedIssue,
     listRuns,
+    listRunsWithTotal,
     getRun,
   }
 

@@ -162,6 +162,7 @@ function App() {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [prompts, setPrompts] = useState<PromptBundle | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
+  const [runTotalCount, setRunTotalCount] = useState(0)
   const [events, setEvents] = useState<ExecutionEvent[]>([])
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null)
   const [codexActivity, setCodexActivity] = useState<CodexActivityPayload>({
@@ -269,28 +270,37 @@ function App() {
   function selectProject(key: string) {
     setSelectedProjectKey(key)
     persistSelectedProjectKey(key)
+    setSelectedRun(null)
+    setRuns([])
+    setRunTotalCount(0)
   }
 
   async function refreshAll() {
     setBusy(true)
     try {
-      const [nextConfig, nextPrompts, nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
+      const [nextConfig, nextPrompts, nextDaemon, nextEvents] = await Promise.all([
         api.getConfig(),
         api.getPrompts(),
-        api.getRuns(),
         api.getDaemonStatus(),
         api.getEvents(),
-        loadCodexActivity(selectedProjectKey || undefined),
+      ])
+      const nextProjectKey = resolveSelectedProjectKey(nextConfig.projects, [
+        selectedProjectKey,
+        readPersistedSelectedProjectKey(),
+      ])
+      const [nextRuns, nextCodexActivity] = await Promise.all([
+        api.getRuns(nextProjectKey || undefined),
+        loadCodexActivity(nextProjectKey || undefined),
       ])
       setConfig(nextConfig)
       setPrompts(nextPrompts)
       setRuns(nextRuns.runs)
+      setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setCodexActivity(nextCodexActivity)
-      selectProject(
-        resolveSelectedProjectKey(nextConfig.projects, [selectedProjectKey, readPersistedSelectedProjectKey()]),
-      )
+      setSelectedProjectKey(nextProjectKey)
+      persistSelectedProjectKey(nextProjectKey)
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -368,6 +378,7 @@ function App() {
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
     selectProject(key)
+    void refreshRuns(true, key)
     setView("project")
     setProjectEditorOpen(false)
   }
@@ -377,7 +388,9 @@ function App() {
     const projects = config.projects.filter((project) => project.key !== key)
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
-    selectProject(resolveSelectedProjectKey(projects, [selectedProjectKey === key ? "" : selectedProjectKey]))
+    const nextProjectKey = resolveSelectedProjectKey(projects, [selectedProjectKey === key ? "" : selectedProjectKey])
+    selectProject(nextProjectKey)
+    void refreshRuns(true, nextProjectKey)
     setSelectedRun(null)
     setProjectEditorOpen(false)
   }
@@ -440,15 +453,16 @@ function App() {
     }
   }
 
-  async function refreshRuns(silent = false) {
+  async function refreshRuns(silent = false, projectKey = selectedProjectKey) {
     try {
       const [nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
-        api.getRuns(),
+        api.getRuns(projectKey || undefined),
         api.getDaemonStatus(),
         api.getEvents(),
-        loadCodexActivity(selectedProjectKey || undefined),
+        loadCodexActivity(projectKey || undefined),
       ])
       setRuns(nextRuns.runs)
+      setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setCodexActivity(nextCodexActivity)
@@ -537,6 +551,7 @@ function App() {
           onSelectProject={(key) => {
             selectProject(key)
             setView("project")
+            void refreshRuns(true, key)
           }}
           onNewProject={openNewProject}
           onEditProject={openEditProject}
@@ -576,6 +591,7 @@ function App() {
               <ProjectView
                 project={selectedProject}
                 runs={projectRuns}
+                runTotalCount={runTotalCount}
                 activeRuns={activeProjectRuns}
                 codexAgents={projectCodexAgents}
                 selectedRun={selectedRun}
@@ -806,6 +822,7 @@ function ProjectNavItem({
 function ProjectView({
   project,
   runs,
+  runTotalCount,
   activeRuns,
   codexAgents,
   selectedRun,
@@ -824,6 +841,7 @@ function ProjectView({
 }: {
   project: ProjectConfig | null
   runs: RunSummary[]
+  runTotalCount: number
   activeRuns: DaemonStatus["activeRuns"]
   codexAgents: CodexActivityAgent[]
   selectedRun: RunDetail | null
@@ -857,7 +875,7 @@ function ProjectView({
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div className="grid shrink-0 grid-cols-3 gap-4">
         <MetricCard title="当前执行" value={String(activeRuns.length)} />
-        <MetricCard title="历史运行" value={String(runs.length)} />
+        <MetricCard title="历史运行" value={String(runTotalCount)} />
         <MetricCard title="最近状态" value={lastRun ? runStatusLabel(lastRun.status) : "-"} />
       </div>
 

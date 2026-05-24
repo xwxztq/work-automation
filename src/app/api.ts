@@ -5,7 +5,7 @@ import type {
   ExecutionEvent,
   PromptBundle,
   RunDetail,
-  RunSummary,
+  RunListResponse,
   Stage,
 } from "@/shared/types"
 
@@ -38,7 +38,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
-  getRuns: () => request<{ runs: RunSummary[] }>("/api/runs"),
+  getRuns: (projectKey?: string) => {
+    const search = new URLSearchParams()
+    if (projectKey) {
+      search.set("projectKey", projectKey)
+    }
+    const suffix = search.toString() ? `?${search.toString()}` : ""
+    return request<RunListResponse>(`/api/runs${suffix}`)
+  },
   getRun: (id: string) => request<RunDetail>(`/api/runs/${id}`),
   getEvents: (limit = 200, projectKey?: string) => {
     const search = new URLSearchParams({ limit: String(limit) })

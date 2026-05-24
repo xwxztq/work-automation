@@ -155,7 +155,14 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "GET" && url.pathname === "/api/runs") {
-    sendJson(res, 200, { runs: await store.listRuns(100) })
+    sendJson(
+      res,
+      200,
+      await store.listRunsWithTotal({
+        limit: 100,
+        projectKey: url.searchParams.get("projectKey") || undefined,
+      }),
+    )
     return
   }
 

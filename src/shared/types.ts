@@ -81,6 +81,11 @@ export type RunSummary = {
   cancelReason?: string
 }
 
+export type RunListResponse = {
+  runs: RunSummary[]
+  totalCount: number
+}
+
 export type RunDetail = RunSummary & {
   stdout: string
   stderr: string
