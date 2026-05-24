@@ -23,6 +23,22 @@ export type PixelSpriteRect = {
   height: number
 }
 
+export type PixelCatAction =
+  | "idle"
+  | "itch"
+  | "laying"
+  | "licking1"
+  | "licking2"
+  | "meow"
+  | "run"
+  | "sitting"
+  | "sleeping1"
+  | "sleeping2"
+  | "stretching"
+  | "walk"
+
+type PixelCatAssets = Record<PixelCatAction, HTMLImageElement>
+
 type PixelOfficeLayout = {
   version: 1
   cols: number
@@ -57,6 +73,7 @@ export type PixelAgentAssets = {
   floors: HTMLImageElement[]
   furniture: Record<FurnitureAssetKey, HTMLImageElement>
   modernOffice: HTMLImageElement
+  whiteCat: PixelCatAssets | null
   layout: PixelOfficeLayout
 }
 
@@ -95,10 +112,22 @@ type DrawSpriteSheetInput = {
   flipX?: boolean
 }
 
+type DrawCatFrameInput = {
+  x: number
+  y: number
+  action: PixelCatAction
+  frame: number
+  scale?: number
+  alpha?: number
+  flipX?: boolean
+}
+
 const PIXEL = 4
 const CHAR_FRAME_WIDTH = 16
 const CHAR_FRAME_HEIGHT = 32
+const CAT_FRAME_SIZE = 50
 const ASSET_BASE = "/pixel-agents/assets"
+const WHITE_CAT_BASE = `${ASSET_BASE}/pets/white-cat`
 const DEFAULT_FLOOR_COLOR: PixelFloorColor = { h: 0, s: 0, b: 0, c: 0 }
 
 const FURNITURE_SOURCES: Record<FurnitureAssetKey, string> = {
@@ -119,6 +148,21 @@ const FURNITURE_SOURCES: Record<FurnitureAssetKey, string> = {
   sofaSide: `${ASSET_BASE}/furniture/SOFA/SOFA_SIDE.png`,
   whiteboard: `${ASSET_BASE}/furniture/WHITEBOARD/WHITEBOARD.png`,
   woodenChairBack: `${ASSET_BASE}/furniture/WOODEN_CHAIR/WOODEN_CHAIR_BACK.png`,
+}
+
+const WHITE_CAT_SOURCES: Record<PixelCatAction, string> = {
+  idle: `${WHITE_CAT_BASE}/idle.png`,
+  itch: `${WHITE_CAT_BASE}/itch.png`,
+  laying: `${WHITE_CAT_BASE}/laying.png`,
+  licking1: `${WHITE_CAT_BASE}/licking-1.png`,
+  licking2: `${WHITE_CAT_BASE}/licking-2.png`,
+  meow: `${WHITE_CAT_BASE}/meow.png`,
+  run: `${WHITE_CAT_BASE}/run.png`,
+  sitting: `${WHITE_CAT_BASE}/sitting.png`,
+  sleeping1: `${WHITE_CAT_BASE}/sleeping-1.png`,
+  sleeping2: `${WHITE_CAT_BASE}/sleeping-2.png`,
+  stretching: `${WHITE_CAT_BASE}/stretching.png`,
+  walk: `${WHITE_CAT_BASE}/walk.png`,
 }
 
 const PALETTES: PixelPalette[] = [
@@ -142,12 +186,14 @@ export function loadPixelAgentAssets() {
       }),
     ),
     loadImage(`${ASSET_BASE}/furniture/Modern%20Office%2048x48.png`),
+    loadWhiteCatAssets().catch(() => null),
     loadLayout(),
-  ]).then(([characters, floors, furnitureEntries, modernOffice, layout]) => ({
+  ]).then(([characters, floors, furnitureEntries, modernOffice, whiteCat, layout]) => ({
     characters,
     floors,
     furniture: Object.fromEntries(furnitureEntries) as Record<FurnitureAssetKey, HTMLImageElement>,
     modernOffice,
+    whiteCat,
     layout,
   }))
   return cachedAssetsPromise
@@ -251,6 +297,54 @@ export function drawModernOfficeSprite(
   return true
 }
 
+export function drawWhiteCatFrame(
+  ctx: CanvasRenderingContext2D,
+  assets: PixelAgentAssets | null | undefined,
+  { x, y, action, frame, scale = 1, alpha = 1, flipX = false }: DrawCatFrameInput,
+) {
+  const image = assets?.whiteCat?.[action]
+  if (!isImageReady(image)) {
+    return false
+  }
+
+  const frameCount = Math.max(1, Math.floor(image.width / CAT_FRAME_SIZE))
+  const sourceFrame = frame % frameCount
+  const targetSize = Math.round(CAT_FRAME_SIZE * scale)
+
+  ctx.save()
+  ctx.globalAlpha = alpha
+  ctx.imageSmoothingEnabled = false
+  if (flipX) {
+    ctx.translate(Math.round(x + targetSize), Math.round(y))
+    ctx.scale(-1, 1)
+    ctx.drawImage(
+      image,
+      sourceFrame * CAT_FRAME_SIZE,
+      0,
+      CAT_FRAME_SIZE,
+      CAT_FRAME_SIZE,
+      0,
+      0,
+      targetSize,
+      targetSize,
+    )
+  } else {
+    ctx.drawImage(
+      image,
+      sourceFrame * CAT_FRAME_SIZE,
+      0,
+      CAT_FRAME_SIZE,
+      CAT_FRAME_SIZE,
+      Math.round(x),
+      Math.round(y),
+      targetSize,
+      targetSize,
+    )
+  }
+  ctx.restore()
+  return true
+}
+
 export function drawColorizedFloorTile(
   ctx: CanvasRenderingContext2D,
   assets: PixelAgentAssets | null | undefined,
@@ -284,6 +378,16 @@ async function loadLayout() {
     throw new Error(`Failed to load Pixel Agents layout: ${response.status}`)
   }
   return (await response.json()) as PixelOfficeLayout
+}
+
+async function loadWhiteCatAssets() {
+  const entries = await Promise.all(
+    Object.entries(WHITE_CAT_SOURCES).map(async ([action, src]) => {
+      const image = await loadImage(src)
+      return [action, image] as const
+    }),
+  )
+  return Object.fromEntries(entries) as PixelCatAssets
 }
 
 function getColorizedFloorCanvas(image: HTMLImageElement, color: PixelFloorColor) {
