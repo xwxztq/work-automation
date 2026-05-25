@@ -69,11 +69,14 @@ const WHITE_CAT_MIN_MOVE_DISTANCE_PX = 70
 const TILE_WALL = 0
 const TILE_VOID = 255
 const LIGHT_CARPET_COLOR: PixelFloorColor = { h: 42, s: 22, b: 34, c: -48 }
-const LIGHT_CARPET_EDGE_COLOR: PixelFloorColor = { h: 38, s: 14, b: 30, c: -82 }
 const CARPET_PLAID_DARK = "rgba(124, 96, 58, 0.13)"
 const CARPET_PLAID_LIGHT = "rgba(255, 248, 226, 0.18)"
 const REST_AREA_MARGIN_PX = 12
 const REST_AREA_MIN_WIDTH_PX = 152
+const REST_AREA_GROUP_TOP_OFFSET_PX = 16 * CHARACTER_SCALE
+const REST_AREA_GROUP_BOTTOM_OFFSET_PX = 48 * CHARACTER_SCALE
+const REST_AREA_GROUP_CENTER_OFFSET_PX =
+  (REST_AREA_GROUP_BOTTOM_OFFSET_PX - REST_AREA_GROUP_TOP_OFFSET_PX) / 2
 const SCENE_BACKDROP = "#e7d4b8"
 const WALL_FILL = "#cbb18c"
 const WALL_TRIM = "#ad8d60"
@@ -1402,11 +1405,8 @@ function activityFloorTile(tile: number) {
 }
 
 function activityFloorColor(tile: number, color: PixelFloorColor | null | undefined) {
-  if (tile === 1) {
+  if (tile === 1 || tile === 9) {
     return LIGHT_CARPET_COLOR
-  }
-  if (tile === 9) {
-    return LIGHT_CARPET_EDGE_COLOR
   }
   return color
 }
@@ -1510,7 +1510,14 @@ function restAreaPosition(width: number, height: number) {
   const restLeft = workAreaRight(width)
   const centeredX = restLeft + (width - restLeft) / 2
   const x = clamp(centeredX, groupHalfWidth + REST_AREA_MARGIN_PX, width - groupHalfWidth - REST_AREA_MARGIN_PX)
-  const y = height * 0.48
+  const floorTop = Math.max(WALL_MIN_HEIGHT_PX, height * WALL_HEIGHT_RATIO) + WALL_FLOOR_DIVIDER_HEIGHT_PX
+  const floorCenter = floorTop + (height - floorTop) / 2
+  const centeredY = floorCenter - REST_AREA_GROUP_CENTER_OFFSET_PX
+  const y = clamp(
+    centeredY,
+    floorTop + REST_AREA_GROUP_TOP_OFFSET_PX + REST_AREA_MARGIN_PX,
+    height - REST_AREA_GROUP_BOTTOM_OFFSET_PX - REST_AREA_MARGIN_PX,
+  )
   return { x, y }
 }
 
