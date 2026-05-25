@@ -17,6 +17,8 @@ type CodexActivityPanelProps = {
   agents: CodexActivityAgent[]
   project: ProjectConfig
   lastRun?: RunSummary
+  title?: string
+  description?: string
   busy: boolean
   onRefresh: () => void
   onCancelRun: (id: string) => void
@@ -27,12 +29,19 @@ export function CodexActivityPanel({
   agents,
   project,
   lastRun,
+  title = "Codex 活动",
+  description,
   busy,
   onRefresh,
   onCancelRun,
   onSelectRun,
 }: CodexActivityPanelProps) {
   const [sceneVisible, setSceneVisible] = useState(true)
+  const activityDescription = description ?? (
+    agents.length > 0
+      ? `${agents.length} 个运行中任务正在更新`
+      : `${project.repoName || project.key} 当前空闲`
+  )
 
   return (
     <Card className="shrink-0">
@@ -40,7 +49,7 @@ export function CodexActivityPanel({
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <CardTitle>Codex 活动</CardTitle>
+              <CardTitle className="min-w-0 truncate">{title}</CardTitle>
               <Button
                 type="button"
                 variant="ghost"
@@ -53,10 +62,8 @@ export function CodexActivityPanel({
                 <ChevronDown className={`size-4 transition-transform ${sceneVisible ? "" : "-rotate-90"}`} />
               </Button>
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {agents.length > 0
-                ? `${agents.length} 个运行中任务正在更新`
-                : `${project.repoName || project.key} 当前空闲`}
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {activityDescription}
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={onRefresh} disabled={busy}>

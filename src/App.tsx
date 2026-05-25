@@ -69,7 +69,7 @@ import type {
   Stage,
 } from "@/shared/types"
 
-type View = "project" | "logs" | "settings"
+type View = "project" | "activity" | "logs" | "settings"
 
 const emptyProject: ProjectConfig = {
   key: "",
@@ -163,9 +163,15 @@ function App() {
   const [prompts, setPrompts] = useState<PromptBundle | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [runTotalCount, setRunTotalCount] = useState(0)
+  const [globalRuns, setGlobalRuns] = useState<RunSummary[]>([])
+  const [globalRunTotalCount, setGlobalRunTotalCount] = useState(0)
   const [events, setEvents] = useState<ExecutionEvent[]>([])
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null)
   const [codexActivity, setCodexActivity] = useState<CodexActivityPayload>({
+    generatedAt: "",
+    agents: [],
+  })
+  const [globalCodexActivity, setGlobalCodexActivity] = useState<CodexActivityPayload>({
     generatedAt: "",
     agents: [],
   })
@@ -190,20 +196,32 @@ function App() {
 
   useEffect(() => {
     const timer = setInterval(() => {
+      if (view === "activity") {
+        void refreshGlobalActivity(true)
+        return
+      }
       void refreshRuns(true)
     }, 3000)
     return () => clearInterval(timer)
-    // Rebind polling when the selected project changes so activity uses the right filter.
+    // Rebind polling when the active view or selected project changes so activity uses the right filter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProjectKey])
+  }, [selectedProjectKey, view])
 
   useEffect(() => {
+    if (view !== "project") {
+      return
+    }
     if (!selectedProjectKey) {
       setCodexActivity({ generatedAt: "", agents: [] })
       return
     }
     void loadCodexActivity(selectedProjectKey).then(setCodexActivity)
-  }, [selectedProjectKey])
+  }, [selectedProjectKey, view])
+
+  useEffect(() => {
+    if (view !== "activity") return
+    void refreshGlobalActivity(true)
+  }, [view])
 
   useEffect(() => {
     if (!prompts) return
@@ -216,7 +234,7 @@ function App() {
 
   useEffect(() => {
     setSelectedRun(null)
-  }, [selectedProjectKey])
+  }, [selectedProjectKey, view])
 
   useEffect(() => {
     if (!daemon || autoStartTried.current) return
@@ -273,6 +291,20 @@ function App() {
     setSelectedRun(null)
     setRuns([])
     setRunTotalCount(0)
+  }
+
+  function openGlobalActivity() {
+    setView("activity")
+    setSelectedRun(null)
+    void refreshGlobalActivity(true)
+  }
+
+  async function refreshCurrentView() {
+    if (view === "activity") {
+      await refreshGlobalActivity()
+      return
+    }
+    await refreshAll()
   }
 
   async function refreshAll() {
@@ -473,6 +505,26 @@ function App() {
     }
   }
 
+  async function refreshGlobalActivity(silent = false) {
+    try {
+      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
+        api.getRuns(),
+        api.getDaemonStatus(),
+        api.getEvents(),
+        loadCodexActivity(),
+      ])
+      setGlobalRuns(nextRuns.runs)
+      setGlobalRunTotalCount(nextRuns.totalCount)
+      setDaemon(nextDaemon)
+      setEvents(nextEvents.events)
+      setGlobalCodexActivity(nextCodexActivity)
+    } catch (error) {
+      if (!silent) {
+        toast.error(errorMessage(error))
+      }
+    }
+  }
+
   async function loadRun(id: string) {
     try {
       setSelectedRun(await api.getRun(id))
@@ -502,7 +554,11 @@ function App() {
     try {
       await api.cancelRun(id)
       toast.success("任务已停止")
-      await refreshRuns()
+      if (view === "activity") {
+        await refreshGlobalActivity(true)
+      } else {
+        await refreshRuns()
+      }
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -557,6 +613,7 @@ function App() {
           onEditProject={openEditProject}
           onToggleProject={(project, enabled) => void toggleProjectEnabled(project, enabled)}
           onToggleDaemon={(enabled) => void setDaemonEnabled(enabled)}
+          onActivity={openGlobalActivity}
           onLogs={() => setView("logs")}
           onSettings={() => setView("settings")}
         />
@@ -575,7 +632,7 @@ function App() {
               )}
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => void refreshAll()} disabled={busy}>
+              <Button variant="outline" onClick={() => void refreshCurrentView()} disabled={busy}>
                 <RefreshCcw className="size-4" />
                 刷新
               </Button>
@@ -607,6 +664,22 @@ function App() {
                 cancelProject={(key) => void cancelProject(key)}
                 editProject={(project) => openEditProject(project)}
                 addProject={openNewProject}
+              />
+            )}
+
+            {view === "activity" && (
+              <GlobalActivityView
+                projects={config.projects}
+                runs={globalRuns}
+                runTotalCount={globalRunTotalCount}
+                activeRuns={daemon?.activeRuns || []}
+                agents={globalCodexActivity.agents}
+                generatedAt={globalCodexActivity.generatedAt}
+                busy={busy}
+                refreshActivity={() => void refreshGlobalActivity()}
+                loadRun={(id) => void loadRun(id)}
+                cancelRun={(id) => void cancelRun(id)}
+                selectedRun={selectedRun}
               />
             )}
 
@@ -660,6 +733,7 @@ function Sidebar({
   onEditProject,
   onToggleProject,
   onToggleDaemon,
+  onActivity,
   onLogs,
   onSettings,
 }: {
@@ -673,13 +747,22 @@ function Sidebar({
   onEditProject: (project: ProjectConfig) => void
   onToggleProject: (project: ProjectConfig, enabled: boolean) => void
   onToggleDaemon: (enabled: boolean) => void
+  onActivity: () => void
   onLogs: () => void
   onSettings: () => void
 }) {
   return (
     <aside className="flex h-svh flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center justify-between px-4 py-4">
-        <div className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          className={[
+            "flex min-w-0 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors",
+            view === "activity" ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/70",
+          ].join(" ")}
+          onClick={onActivity}
+          aria-label="打开全局小人展示"
+        >
           <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-sidebar-border">
             <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-6 object-contain" />
           </div>
@@ -687,7 +770,7 @@ function Sidebar({
             <div className="truncate text-sm font-medium">{APP_BRAND_NAME}</div>
             <div className="truncate text-xs text-muted-foreground">{config.serverId}</div>
           </div>
-        </div>
+        </button>
         <Button size="icon" variant="ghost" onClick={onNewProject} disabled={busy} aria-label="新建项目">
           <Plus className="size-4" />
         </Button>
@@ -972,6 +1055,106 @@ function ProjectView({
 
         <RunDetailPanel selectedRun={selectedRun} />
       </div>
+    </div>
+  )
+}
+
+function GlobalActivityView({
+  projects,
+  runs,
+  runTotalCount,
+  activeRuns,
+  agents,
+  generatedAt,
+  busy,
+  refreshActivity,
+  loadRun,
+  cancelRun,
+  selectedRun,
+}: {
+  projects: ProjectConfig[]
+  runs: RunSummary[]
+  runTotalCount: number
+  activeRuns: DaemonStatus["activeRuns"]
+  agents: CodexActivityAgent[]
+  generatedAt: string
+  busy: boolean
+  refreshActivity: () => void
+  loadRun: (id: string) => void
+  cancelRun: (id: string) => void
+  selectedRun: RunDetail | null
+}) {
+  const projectActivity = useMemo(() => {
+    const runsByProject = new Map<string, RunSummary[]>()
+    const activeRunsByProject = new Map<string, DaemonStatus["activeRuns"]>()
+    const agentsByProject = new Map<string, CodexActivityAgent[]>()
+
+    for (const run of runs) {
+      runsByProject.set(run.projectKey, [...(runsByProject.get(run.projectKey) || []), run])
+    }
+    for (const run of activeRuns) {
+      activeRunsByProject.set(run.projectKey, [...(activeRunsByProject.get(run.projectKey) || []), run])
+    }
+    for (const agent of agents) {
+      agentsByProject.set(agent.projectKey, [...(agentsByProject.get(agent.projectKey) || []), agent])
+    }
+
+    return projects.map((project) => ({
+      project,
+      runs: runsByProject.get(project.key) || [],
+      activeRuns: activeRunsByProject.get(project.key) || [],
+      agents: agentsByProject.get(project.key) || [],
+    }))
+  }, [activeRuns, agents, projects, runs])
+
+  const activeProjectCount = projectActivity.filter((item) => item.activeRuns.length > 0).length
+
+  if (projects.length === 0) {
+    return (
+      <div className="flex min-h-[520px] items-center justify-center rounded-lg border border-dashed bg-background text-sm text-muted-foreground">
+        尚未配置项目
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5 pb-6">
+      <div className="grid grid-cols-3 gap-4">
+        <MetricCard title="项目数" value={String(projects.length)} />
+        <MetricCard title="活跃项目" value={String(activeProjectCount)} />
+        <MetricCard title="历史运行" value={String(runTotalCount)} />
+      </div>
+
+      <div className="flex justify-end font-mono text-xs text-muted-foreground">
+        更新: {generatedAt ? formatDate(generatedAt) : "-"}
+      </div>
+
+      <div className="space-y-7">
+        {projectActivity.map(({ project, runs: projectRuns, activeRuns: projectActiveRuns, agents: projectAgents }) => {
+          const lastRun = projectRuns[0]
+          return (
+            <section key={project.key} className="border-t pt-6 first:border-t-0 first:pt-0">
+              <CodexActivityPanel
+                agents={projectAgents}
+                project={project}
+                lastRun={lastRun}
+                title={project.repoName || project.key}
+                description={globalActivityDescription(project, projectAgents, projectActiveRuns, lastRun)}
+                busy={busy}
+                onRefresh={refreshActivity}
+                onCancelRun={cancelRun}
+                onSelectRun={loadRun}
+              />
+            </section>
+          )
+        })}
+      </div>
+
+      {selectedRun && (
+        <div className="h-[360px] min-h-0">
+          <RunDetailPanel selectedRun={selectedRun} />
+        </div>
+      )}
     </div>
   )
 }
@@ -1557,7 +1740,25 @@ function runStatusLabel(status: string) {
   return "失败"
 }
 
+function globalActivityDescription(
+  project: ProjectConfig,
+  agents: CodexActivityAgent[],
+  activeRuns: DaemonStatus["activeRuns"],
+  lastRun?: RunSummary,
+) {
+  const activeText = agents.length > 0
+    ? `${agents.length} 个小人正在活动`
+    : activeRuns.length > 0
+      ? `${activeRuns.length} 个任务启动中`
+      : "当前空闲"
+  const lastRunText = lastRun
+    ? `最近 ${lastRun.issueIdentifier || "未知事项"} ${runStatusLabel(lastRun.status)}`
+    : "暂无运行记录"
+  return `${project.key} · ${activeText} · ${lastRunText}`
+}
+
 function viewTitle(view: View, selectedProject: ProjectConfig | null) {
+  if (view === "activity") return "全局 Codex 活动"
   if (view === "settings") return "设置"
   if (view === "logs") return "全局日志"
   return selectedProject?.repoName || selectedProject?.key || "项目"
