@@ -1122,7 +1122,7 @@ function GlobalActivityView({
         projects={projects}
         lastRun={lastRun}
         contextKey={`global:${projects.map((project) => project.key).join("|")}`}
-        sceneClassName="h-[min(64vh,620px)] min-h-[380px]"
+        sceneClassName="h-[min(72vh,760px)] min-h-[460px]"
         title="全局小人展示"
         description={globalDescription}
         busy={busy}
