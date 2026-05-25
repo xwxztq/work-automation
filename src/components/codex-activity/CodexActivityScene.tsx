@@ -29,6 +29,9 @@ const MAX_WORKSTATION_COLUMNS = 5
 const WORKSTATION_ROWS = 2
 const WORKSTATION_COLUMN_GAP_PX = 148
 const WORKSTATION_EDGE_INSET_PX = 58
+const WORKSTATION_START_PADDING_PX = 6
+const OFFICE_FLOOR_TILE_SIZE_PX = 32
+const DEFAULT_OFFICE_LAYOUT_COLS = 21
 const PROJECT_ROW_MAX_AGENTS = 5
 const PROJECT_MAX_VISIBLE_AGENTS = 10
 const PROJECT_ROW_INSET_X_PX = 14
@@ -43,6 +46,7 @@ const ENTRY_FLOOR_END_RATIO = 0.18
 const ENTRY_FLOOR_MIN_WIDTH_PX = 72
 const WORK_AREA_MIN_WIDTH_PX = 240
 const CHARACTER_SCALE = 2
+const DESK_LEFT_OFFSET_PX = 24 * CHARACTER_SCALE
 const CHARACTER_WIDTH = 16 * CHARACTER_SCALE
 const CHARACTER_HEIGHT = 32 * CHARACTER_SCALE
 const CHARACTER_SITTING_OFFSET_PX = 6 * CHARACTER_SCALE
@@ -178,6 +182,7 @@ type ProjectActivityRow = {
   x: number
   y: number
   width: number
+  deskStartX: number
   agentRunIds: string[]
 }
 
@@ -1030,6 +1035,7 @@ function projectRowsForScene(
     x: left,
     y: rowDrafts.length <= 1 ? clamp(height * 0.68, topY, bottomY) : topY + yStep * index,
     width: rowWidth,
+    deskStartX: workstationStartDeskLeft(width),
   }))
 }
 
@@ -1068,18 +1074,23 @@ function workstationPosition(
   const column = slot % layout.columnCount
   const slotRow = workstationRowForSlot(slot, layout.columnCount)
   const visualRow = layout.visualRowBySlotRow.get(slotRow) ?? 0
-  const usableWidth = Math.max(1, workArea.width - WORKSTATION_EDGE_INSET_PX * 2)
+  const slotLeft = stationXForDeskLeft(workstationStartDeskLeft(width))
+  const slotRight = Math.max(slotLeft, workArea.right - WORKSTATION_EDGE_INSET_PX)
+  const usableWidth = Math.max(1, slotRight - slotLeft)
   const columnProgress = layout.columnCount <= 1 ? 0.5 : column / (layout.columnCount - 1)
-  const x = workArea.left + WORKSTATION_EDGE_INSET_PX + usableWidth * columnProgress
+  const x = slotLeft + usableWidth * columnProgress
   const y = height * workstationRowYRatio(visualRow, layout.rowCount)
   return { x, y }
 }
 
 function projectRowWorkstationPosition(slot: number, row: ProjectActivityRow) {
   const rowSlot = slot % PROJECT_ROW_MAX_AGENTS
-  const badgeWidth = projectRowBadgeWidth(row.width)
-  const slotLeft = row.x + badgeWidth + PROJECT_ROW_BADGE_GAP_PX
-  const slotRight = row.x + row.width - PROJECT_ROW_RIGHT_INSET_PX
+  const firstDeskLeft = Math.max(
+    row.deskStartX,
+    row.x + PROJECT_ROW_BADGE_MIN_WIDTH_PX + PROJECT_ROW_BADGE_GAP_PX,
+  )
+  const slotLeft = stationXForDeskLeft(firstDeskLeft)
+  const slotRight = Math.max(slotLeft, row.x + row.width - PROJECT_ROW_RIGHT_INSET_PX - DESK_LEFT_OFFSET_PX)
   const usableWidth = Math.max(1, slotRight - slotLeft)
   const columnProgress = PROJECT_ROW_MAX_AGENTS <= 1 ? 0.5 : rowSlot / (PROJECT_ROW_MAX_AGENTS - 1)
   const x = slotLeft + usableWidth * columnProgress
@@ -1244,7 +1255,7 @@ function drawOffice(
   ctx.fillStyle = WALL_TRIM
   ctx.fillRect(0, wallHeight - WALL_TRIM_HEIGHT_PX, width, WALL_TRIM_HEIGHT_PX)
 
-  const tileSize = 32
+  const tileSize = OFFICE_FLOOR_TILE_SIZE_PX
   if (!drawPixelAgentsOfficeFloor(ctx, width, height, wallHeight, tileSize, assets)) {
     for (let y = wallHeight; y < height; y += tileSize) {
       for (let x = 0; x < width; x += tileSize) {
@@ -1583,6 +1594,18 @@ function workstationArea(width: number) {
   }
 }
 
+function workstationStartDeskLeft(width: number) {
+  const sampledCols = Math.max(1, DEFAULT_OFFICE_LAYOUT_COLS - 1)
+  const restStartCol = Math.min(sampledCols - 1, Math.max(1, Math.floor(sampledCols / 2)))
+  const firstFloorColStartX = workAreaRight(width) / restStartCol
+  return Math.ceil(firstFloorColStartX / OFFICE_FLOOR_TILE_SIZE_PX) * OFFICE_FLOOR_TILE_SIZE_PX +
+    WORKSTATION_START_PADDING_PX
+}
+
+function stationXForDeskLeft(deskLeft: number) {
+  return deskLeft + DESK_LEFT_OFFSET_PX
+}
+
 function workAreaRight(width: number) {
   const preferred = width * (width >= 520 ? REST_FLOOR_START_RATIO_DESKTOP : REST_FLOOR_START_RATIO_COMPACT)
   return Math.min(preferred, Math.max(1, width - REST_AREA_MIN_WIDTH_PX))
@@ -1824,7 +1847,7 @@ function drawDeskAndComputer(
   alpha: number,
 ) {
   const scale = CHARACTER_SCALE
-  const deskX = x - 24 * scale
+  const deskX = x - DESK_LEFT_OFFSET_PX
   const deskY = y - 40 * scale
   drawOfficeAsset(ctx, assets, {
     key: "deskFront",
