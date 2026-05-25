@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   CircleDot,
+  FileJson,
   FolderGit2,
   Pencil,
   Play,
@@ -56,6 +59,12 @@ import {
   getProjectKeySafetyError,
   isSafeProjectKey,
 } from "@/shared/project-key"
+import {
+  parseCodexStdout,
+  type CodexStdoutEvent,
+  type CodexStdoutEventKind,
+  type CodexStdoutEventStatus,
+} from "@/shared/codex-stdout"
 import type {
   AppConfig,
   CodexActivityAgent,
@@ -1215,7 +1224,7 @@ function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
               <TabsTrigger value="prompt">提示词</TabsTrigger>
             </TabsList>
             <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
-            <RunLog value="stdout" text={selectedRun.stdout} />
+            <RunStdoutLog text={selectedRun.stdout} />
             <RunLog value="stderr" text={selectedRun.stderr} />
             <RunLog value="prompt" text={selectedRun.prompt} />
           </Tabs>
@@ -1228,6 +1237,183 @@ function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
       </CardContent>
     </Card>
   )
+}
+
+function RunStdoutLog({ text }: { text: string }) {
+  const parsed = useMemo(() => parseCodexStdout(text), [text])
+  const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(() => new Set())
+  const [showRaw, setShowRaw] = useState(false)
+
+  useEffect(() => {
+    setExpandedEventIds(new Set())
+    setShowRaw(false)
+  }, [text])
+
+  if (!parsed.isStructured) {
+    return <RunLog value="stdout" text={text} />
+  }
+
+  const toggleEvent = (id: string) => {
+    setExpandedEventIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  return (
+    <TabsContent value="stdout" className="mt-3 min-h-0 min-w-0 overflow-hidden">
+      <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border bg-background p-2">
+          <StdoutStatChip label="事件" value={parsed.stats.eventCount} />
+          <StdoutStatChip label="消息" value={parsed.stats.messageCount} />
+          <StdoutStatChip label="命令" value={parsed.stats.commandCount} />
+          <StdoutStatChip label="工具" value={parsed.stats.toolCount} />
+          <StdoutStatChip label="错误" value={parsed.stats.errorCount} />
+          <StdoutStatChip label="长输出" value={parsed.stats.longEventCount} />
+          <StdoutStatChip label="原始" value={formatBytes(parsed.stats.rawBytes)} />
+          {parsed.stats.malformedLines > 0 && (
+            <Badge variant="outline">解析跳过 {parsed.stats.malformedLines} 行</Badge>
+          )}
+          <div className="ml-auto flex min-w-0 items-center gap-2">
+            <span className="hidden text-xs text-muted-foreground sm:inline">最新优先</span>
+            <Button type="button" variant="outline" size="xs" onClick={() => setShowRaw((current) => !current)}>
+              <FileJson className="size-3" />
+              {showRaw ? "隐藏原始 JSONL" : "原始 JSONL"}
+            </Button>
+          </div>
+        </div>
+        <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border bg-background">
+          <div className="space-y-1.5 p-2">
+            {showRaw ? (
+              <div className="rounded-lg border bg-muted/40 p-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="text-xs font-medium">原始 JSONL</div>
+                  <div className="text-xs text-muted-foreground">
+                    {parsed.stats.rawLines} 行 · {formatBytes(parsed.stats.rawBytes)}
+                  </div>
+                </div>
+                <pre className="max-h-[520px] min-w-0 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
+                  {parsed.rawText || "（空）"}
+                </pre>
+              </div>
+            ) : (
+              parsed.events.map((event) => (
+                <StdoutEventRow
+                  key={event.id}
+                  event={event}
+                  expanded={expandedEventIds.has(event.id)}
+                  onToggle={() => toggleEvent(event.id)}
+                />
+              ))
+            )}
+          </div>
+        </ScrollArea>
+      </div>
+    </TabsContent>
+  )
+}
+
+function StdoutStatChip({ label, value }: { label: string; value: string | number }) {
+  return (
+    <span className="inline-flex h-6 items-center gap-1 rounded-md border bg-muted/50 px-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-mono font-medium">{value}</span>
+    </span>
+  )
+}
+
+function StdoutEventRow({
+  event,
+  expanded,
+  onToggle,
+}: {
+  event: CodexStdoutEvent
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const hasDetail = event.canExpand && Boolean(event.detail)
+
+  return (
+    <div className="grid min-w-0 grid-cols-[auto_1fr] gap-2 rounded-md border bg-card px-2 py-1.5 text-xs">
+      <div className="flex w-[86px] shrink-0 flex-col items-start gap-1">
+        <StdoutKindBadge kind={event.kind} />
+        <StdoutStatusBadge status={event.status} />
+        <span className="font-mono text-[11px] text-muted-foreground">#{event.lineNumber}</span>
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="break-words font-medium leading-snug">{event.title || stdoutKindLabel(event.kind)}</div>
+            {event.summary && event.summary !== event.title && (
+              <div className="mt-0.5 break-words text-muted-foreground">{event.summary}</div>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {event.outputBytes > 0 && (
+              <span className="hidden font-mono text-[11px] text-muted-foreground sm:inline">
+                {formatBytes(event.outputBytes)}
+              </span>
+            )}
+            {hasDetail && (
+              <Button type="button" variant="ghost" size="xs" onClick={onToggle}>
+                {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                {expanded ? "收起" : "展开"}
+              </Button>
+            )}
+          </div>
+        </div>
+        {event.preview && (
+          <pre className="mt-1 max-h-16 min-w-0 overflow-hidden whitespace-pre-wrap break-words rounded bg-muted/40 px-2 py-1 font-mono text-[11px] leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+            {event.preview}
+          </pre>
+        )}
+        {expanded && hasDetail && (
+          <pre className="mt-1 max-h-[420px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded border bg-background p-2 font-mono text-[11px] leading-relaxed [overflow-wrap:anywhere]">
+            {event.detail}
+          </pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StdoutKindBadge({ kind }: { kind: CodexStdoutEventKind }) {
+  if (kind === "error") return <Badge variant="destructive">错误</Badge>
+  if (kind === "command") return <Badge>命令</Badge>
+  if (kind === "tool") return <Badge variant="secondary">工具</Badge>
+  if (kind === "message") return <Badge variant="outline">消息</Badge>
+  return <Badge variant="outline">{stdoutKindLabel(kind)}</Badge>
+}
+
+function StdoutStatusBadge({ status }: { status: CodexStdoutEventStatus }) {
+  if (status === "failed") return <Badge variant="destructive">失败</Badge>
+  if (status === "running") return <Badge variant="secondary">运行中</Badge>
+  if (status === "completed") return <Badge variant="outline">完成</Badge>
+  if (status === "updated") return <Badge variant="outline">更新</Badge>
+  return <Badge variant="outline">事件</Badge>
+}
+
+function stdoutKindLabel(kind: CodexStdoutEventKind) {
+  if (kind === "message") return "消息"
+  if (kind === "command") return "命令"
+  if (kind === "tool") return "工具"
+  if (kind === "file") return "文件"
+  if (kind === "todo") return "清单"
+  if (kind === "search") return "搜索"
+  if (kind === "lifecycle") return "生命周期"
+  if (kind === "error") return "错误"
+  return "其他"
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function RunLog({ value, text }: { value: string; text: string }) {
