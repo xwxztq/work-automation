@@ -24,6 +24,12 @@ import { CodexActivityPanel } from "@/components/codex-activity/CodexActivityPan
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -59,6 +65,7 @@ import {
   getProjectKeySafetyError,
   isSafeProjectKey,
 } from "@/shared/project-key"
+import { cn } from "@/lib/utils"
 import {
   parseCodexStdout,
   type CodexStdoutEvent,
@@ -164,6 +171,23 @@ function emptyCodexActivity(): CodexActivityPayload {
 
 async function loadCodexActivity(projectKey?: string) {
   return api.getCodexActivity(projectKey).catch(() => emptyCodexActivity())
+}
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => (
+    typeof window !== "undefined" ? window.matchMedia(query).matches : false
+  ))
+
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const handleChange = () => setMatches(media.matches)
+
+    handleChange()
+    media.addEventListener("change", handleChange)
+    return () => media.removeEventListener("change", handleChange)
+  }, [query])
+
+  return matches
 }
 
 function App() {
@@ -537,8 +561,10 @@ function App() {
   async function loadRun(id: string) {
     try {
       setSelectedRun(await api.getRun(id))
+      return true
     } catch (error) {
       toast.error(errorMessage(error))
+      return false
     }
   }
 
@@ -605,8 +631,8 @@ function App() {
   }
 
   return (
-    <main className="h-svh bg-muted/30">
-      <div className="grid h-full min-h-0 grid-cols-[280px_1fr]">
+    <main className="h-svh overflow-x-hidden bg-muted/30">
+      <div className="grid h-full min-h-0 grid-rows-[auto_1fr] md:grid-cols-[280px_1fr] md:grid-rows-none">
         <Sidebar
           config={config}
           daemon={daemon}
@@ -627,20 +653,20 @@ function App() {
           onSettings={() => setView("settings")}
         />
 
-        <section className="flex min-h-0 min-w-0 flex-col px-5 py-4">
-          <header className="mb-4 flex shrink-0 items-center justify-between">
-            <div>
+        <section className="flex min-h-0 min-w-0 flex-col overflow-x-hidden px-3 py-3 sm:px-5 sm:py-4">
+          <header className="mb-3 flex shrink-0 flex-col gap-3 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <h1 className="text-xl font-semibold tracking-normal">
                 {viewTitle(view, selectedProject)}
               </h1>
               {view === "project" && selectedProject && (
-                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                   <span className="font-mono">{selectedProject.key}</span>
-                  <span>{selectedProject.path || selectedProject.codexCwd}</span>
+                  <span className="min-w-0 truncate">{selectedProject.path || selectedProject.codexCwd}</span>
                 </div>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               <Button variant="outline" onClick={() => void refreshCurrentView()} disabled={busy}>
                 <RefreshCcw className="size-4" />
                 刷新
@@ -652,7 +678,7 @@ function App() {
             </div>
           </header>
 
-          <div className={view === "project" ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto pr-1"}>
+          <div className={view === "project" ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-1"}>
             {view === "project" && (
               <ProjectView
                 project={selectedProject}
@@ -667,7 +693,7 @@ function App() {
                 setManualStage={setManualStage}
                 setManualIssue={setManualIssue}
                 refreshRuns={() => void refreshRuns()}
-                loadRun={(id) => void loadRun(id)}
+                loadRun={loadRun}
                 triggerOnce={(stage, issueId, projectKey) => void triggerOnce(stage, issueId, projectKey)}
                 cancelRun={(id) => void cancelRun(id)}
                 cancelProject={(key) => void cancelProject(key)}
@@ -761,8 +787,8 @@ function Sidebar({
   onSettings: () => void
 }) {
   return (
-    <aside className="flex h-svh flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="flex items-center justify-between px-4 py-4">
+    <aside className="flex max-h-[44svh] min-h-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-svh md:max-h-none md:border-r md:border-b-0">
+      <div className="flex shrink-0 items-center justify-between px-3 py-3 md:px-4 md:py-4">
         <button
           type="button"
           className={[
@@ -810,8 +836,8 @@ function Sidebar({
 
       <Separator />
 
-      <div className="space-y-3 p-3">
-        <div className="rounded-lg border bg-background/70 px-3 py-3">
+      <div className="grid shrink-0 grid-cols-[1fr_auto_auto] gap-2 p-3 md:block md:space-y-3">
+        <div className="rounded-lg border bg-background/70 px-3 py-2 md:py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium">轮询</div>
@@ -825,26 +851,26 @@ function Sidebar({
               onCheckedChange={(checked) => onToggleDaemon(checked)}
             />
           </div>
-          <div className="mt-2 text-xs text-muted-foreground">
+          <div className="mt-2 hidden text-xs text-muted-foreground md:block">
             下次扫描: {daemon?.nextRunAt ? formatDate(daemon.nextRunAt) : "-"}
           </div>
           {daemon?.lastError && <div className="mt-2 text-xs text-destructive">错误: {daemon.lastError}</div>}
         </div>
         <Button
           variant={view === "logs" ? "secondary" : "ghost"}
-          className="w-full justify-start"
+          className="h-full justify-center md:h-auto md:w-full md:justify-start"
           onClick={onLogs}
         >
           <ScrollText className="size-4" />
-          全局日志
+          <span className="hidden md:inline">全局日志</span>
         </Button>
         <Button
           variant={view === "settings" ? "secondary" : "ghost"}
-          className="w-full justify-start"
+          className="h-full justify-center md:h-auto md:w-full md:justify-start"
           onClick={onSettings}
         >
           <Settings className="size-4" />
-          设置
+          <span className="hidden md:inline">设置</span>
         </Button>
       </div>
     </aside>
@@ -869,7 +895,7 @@ function ProjectNavItem({
   return (
     <div
       className={[
-        "rounded-lg border px-2 py-2 transition-colors",
+        "min-w-0 rounded-lg border px-2 py-2 transition-colors",
         active ? "border-sidebar-ring bg-sidebar-accent" : "border-transparent hover:bg-sidebar-accent/70",
       ].join(" ")}
       role="button"
@@ -943,13 +969,29 @@ function ProjectView({
   setManualStage: (stage: Stage) => void
   setManualIssue: (issue: string) => void
   refreshRuns: () => void
-  loadRun: (id: string) => void
+  loadRun: (id: string) => Promise<boolean>
   triggerOnce: (stage: Stage, issueId?: string, projectKey?: string) => void
   cancelRun: (id: string) => void
   cancelProject: (key: string) => void
   editProject: (project: ProjectConfig) => void
   addProject: () => void
 }) {
+  const shouldUseRunDialog = useMediaQuery("(max-width: 1535px)")
+  const [runDialogOpen, setRunDialogOpen] = useState(false)
+
+  useEffect(() => {
+    if (!shouldUseRunDialog) {
+      setRunDialogOpen(false)
+    }
+  }, [shouldUseRunDialog])
+
+  const handleRunSelect = async (id: string) => {
+    const loaded = await loadRun(id)
+    if (loaded && shouldUseRunDialog) {
+      setRunDialogOpen(true)
+    }
+  }
+
   if (!project) {
     return (
       <div className="flex min-h-[520px] items-center justify-center rounded-lg border border-dashed bg-background">
@@ -964,8 +1006,8 @@ function ProjectView({
   const lastRun = runs[0]
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="grid shrink-0 grid-cols-3 gap-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1 2xl:overflow-hidden 2xl:pr-0">
+      <div className="grid min-w-0 shrink-0 grid-cols-3 gap-2 sm:gap-3">
         <MetricCard title="当前执行" value={String(activeRuns.length)} />
         <MetricCard title="历史运行" value={String(runTotalCount)} />
         <MetricCard title="最近状态" value={lastRun ? runStatusLabel(lastRun.status) : "-"} />
@@ -978,16 +1020,16 @@ function ProjectView({
         busy={busy}
         onRefresh={refreshRuns}
         onCancelRun={cancelRun}
-        onSelectRun={loadRun}
+        onSelectRun={(id) => void loadRun(id)}
       />
 
-      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)] gap-4">
-        <div className="flex min-h-0 min-w-0 flex-col gap-4">
+      <div className="grid min-h-[520px] min-w-0 flex-1 gap-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] 2xl:min-h-0 2xl:grid-cols-[minmax(360px,0.75fr)_minmax(420px,0.9fr)_minmax(0,1.2fr)]">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3">
           <Card className="shrink-0">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle>当前项目</CardTitle>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button variant="outline" size="sm" onClick={() => editProject(project)} disabled={busy}>
                     <Pencil className="size-4" />
                     修改
@@ -1004,7 +1046,7 @@ function ProjectView({
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-3 text-sm">
+            <CardContent className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
               <InfoItem label="仓库" value={project.repoName || "-"} />
               <InfoItem label="状态" value={project.enabled ? "启用" : "停用"} />
               <InfoItem label="Linear 项目 ID" value={project.linearProjectId || "-"} />
@@ -1018,7 +1060,7 @@ function ProjectView({
             <CardHeader>
               <CardTitle>执行</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-[150px_1fr_auto] gap-2">
+            <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-[150px_1fr_auto]">
               <Select value={manualStage} onValueChange={(value) => setManualStage(value as Stage)}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -1035,6 +1077,7 @@ function ProjectView({
                 onChange={(event) => setManualIssue(event.target.value)}
               />
               <Button
+                className="w-full sm:w-auto"
                 onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key)}
                 disabled={busy}
               >
@@ -1044,26 +1087,26 @@ function ProjectView({
             </CardContent>
           </Card>
 
-          <Card className="min-h-[240px] flex-1">
-            <CardHeader className="shrink-0">
-              <div className="flex items-center justify-between">
-                <CardTitle>历史</CardTitle>
-                <Button variant="outline" size="sm" onClick={refreshRuns} disabled={busy}>
-                  <RefreshCcw className="size-4" />
-                  刷新
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <ScrollArea className="h-full rounded-lg border">
-                <RunTable runs={runs} loadRun={loadRun} />
-              </ScrollArea>
-            </CardContent>
-          </Card>
         </div>
 
-        <RunDetailPanel selectedRun={selectedRun} />
+        <RunHistoryCard
+          className="min-h-[360px] lg:min-h-0"
+          runs={runs}
+          busy={busy}
+          refreshRuns={refreshRuns}
+          loadRun={handleRunSelect}
+        />
+
+        <div className="hidden min-h-0 2xl:block">
+          <RunDetailPanel selectedRun={selectedRun} />
+        </div>
       </div>
+
+      <RunDetailDialog
+        open={runDialogOpen}
+        onOpenChange={setRunDialogOpen}
+        selectedRun={selectedRun}
+      />
     </div>
   )
 }
@@ -1151,12 +1194,14 @@ function GlobalActivityView({
 
 function MetricCard({ title, value }: { title: string; value: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm text-muted-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-semibold">{value}</div>
+    <Card size="sm" className="min-h-14 min-w-0 justify-center gap-0 py-2 sm:min-h-16">
+      <CardContent className="flex min-w-0 items-center justify-between gap-2 px-2 sm:px-3">
+        <div className="min-w-0 truncate whitespace-nowrap text-xs font-medium text-muted-foreground">
+          {title}
+        </div>
+        <div className="min-w-0 truncate text-right text-base font-semibold leading-none sm:text-lg">
+          {value}
+        </div>
       </CardContent>
     </Card>
   )
@@ -1164,10 +1209,43 @@ function MetricCard({ title, value }: { title: string; value: string }) {
 
 function InfoItem({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className={wide ? "col-span-2" : ""}>
+    <div className={wide ? "sm:col-span-2" : ""}>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 break-words font-mono text-xs">{value}</div>
     </div>
+  )
+}
+
+function RunHistoryCard({
+  runs,
+  busy,
+  refreshRuns,
+  loadRun,
+  className,
+}: {
+  runs: RunSummary[]
+  busy: boolean
+  refreshRuns: () => void
+  loadRun: (id: string) => void
+  className?: string
+}) {
+  return (
+    <Card className={cn("min-w-0", className)}>
+      <CardHeader className="shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>历史</CardTitle>
+          <Button variant="outline" size="sm" onClick={refreshRuns} disabled={busy}>
+            <RefreshCcw className="size-4" />
+            刷新
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="min-h-0 flex-1 overflow-hidden">
+        <ScrollArea className="h-full rounded-lg border">
+          <RunTable runs={runs} loadRun={loadRun} />
+        </ScrollArea>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -1179,12 +1257,16 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
           <TableHead>事项</TableHead>
           <TableHead>阶段</TableHead>
           <TableHead>状态</TableHead>
-          <TableHead>更新时间</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {runs.map((run) => (
-          <TableRow key={run.id} className="cursor-pointer" onClick={() => loadRun(run.id)}>
+          <TableRow
+            key={run.id}
+            className="cursor-pointer"
+            title={`更新时间: ${formatDate(run.updatedAt)}`}
+            onClick={() => loadRun(run.id)}
+          >
             <TableCell>
               <div className="font-mono text-xs">{run.issueIdentifier}</div>
               <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
@@ -1193,18 +1275,41 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
             <TableCell>
               <StatusBadge status={run.status} />
             </TableCell>
-            <TableCell className="text-xs">{formatDate(run.updatedAt)}</TableCell>
           </TableRow>
         ))}
         {runs.length === 0 && (
           <TableRow>
-            <TableCell colSpan={4} className="text-muted-foreground">
+            <TableCell colSpan={3} className="text-muted-foreground">
               暂无运行记录
             </TableCell>
           </TableRow>
         )}
       </TableBody>
     </Table>
+  )
+}
+
+function RunDetailDialog({
+  open,
+  onOpenChange,
+  selectedRun,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  selectedRun: RunDetail | null
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="h-[min(86svh,760px)] max-w-[calc(100vw-1rem)] grid-rows-[1fr] p-3 sm:max-w-[min(980px,calc(100vw-2rem))] sm:p-4">
+        <DialogTitle className="sr-only">运行详情</DialogTitle>
+        <DialogDescription className="sr-only">
+          查看选中历史运行的最终结果、标准输出、错误输出和提示词。
+        </DialogDescription>
+        <div className="min-h-0 min-w-0">
+          <RunDetailPanel selectedRun={selectedRun} />
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

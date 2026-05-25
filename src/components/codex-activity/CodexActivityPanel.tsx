@@ -51,7 +51,7 @@ export function CodexActivityPanel({
   const sceneContextKey = contextKey ?? project?.key ?? projects?.map((item) => item.key).join("|") ?? "activity"
 
   return (
-    <Card className="shrink-0">
+    <Card className="min-w-0 shrink-0">
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
