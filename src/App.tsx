@@ -1084,30 +1084,18 @@ function GlobalActivityView({
   cancelRun: (id: string) => void
   selectedRun: RunDetail | null
 }) {
-  const projectActivity = useMemo(() => {
-    const runsByProject = new Map<string, RunSummary[]>()
-    const activeRunsByProject = new Map<string, DaemonStatus["activeRuns"]>()
-    const agentsByProject = new Map<string, CodexActivityAgent[]>()
-
-    for (const run of runs) {
-      runsByProject.set(run.projectKey, [...(runsByProject.get(run.projectKey) || []), run])
-    }
+  const activeProjectCount = useMemo(() => {
+    const projectKeys = new Set<string>()
     for (const run of activeRuns) {
-      activeRunsByProject.set(run.projectKey, [...(activeRunsByProject.get(run.projectKey) || []), run])
+      projectKeys.add(run.projectKey)
     }
     for (const agent of agents) {
-      agentsByProject.set(agent.projectKey, [...(agentsByProject.get(agent.projectKey) || []), agent])
+      projectKeys.add(agent.projectKey)
     }
-
-    return projects.map((project) => ({
-      project,
-      runs: runsByProject.get(project.key) || [],
-      activeRuns: activeRunsByProject.get(project.key) || [],
-      agents: agentsByProject.get(project.key) || [],
-    }))
-  }, [activeRuns, agents, projects, runs])
-
-  const activeProjectCount = projectActivity.filter((item) => item.activeRuns.length > 0).length
+    return projectKeys.size
+  }, [activeRuns, agents])
+  const lastRun = runs[0]
+  const globalDescription = globalRoomDescription(agents, activeRuns, lastRun)
 
   if (projects.length === 0) {
     return (
@@ -1129,26 +1117,19 @@ function GlobalActivityView({
         更新: {generatedAt ? formatDate(generatedAt) : "-"}
       </div>
 
-      <div className="space-y-7">
-        {projectActivity.map(({ project, runs: projectRuns, activeRuns: projectActiveRuns, agents: projectAgents }) => {
-          const lastRun = projectRuns[0]
-          return (
-            <section key={project.key} className="border-t pt-6 first:border-t-0 first:pt-0">
-              <CodexActivityPanel
-                agents={projectAgents}
-                project={project}
-                lastRun={lastRun}
-                title={project.repoName || project.key}
-                description={globalActivityDescription(project, projectAgents, projectActiveRuns, lastRun)}
-                busy={busy}
-                onRefresh={refreshActivity}
-                onCancelRun={cancelRun}
-                onSelectRun={loadRun}
-              />
-            </section>
-          )
-        })}
-      </div>
+      <CodexActivityPanel
+        agents={agents}
+        projects={projects}
+        lastRun={lastRun}
+        contextKey={`global:${projects.map((project) => project.key).join("|")}`}
+        sceneClassName="h-[min(64vh,620px)] min-h-[380px]"
+        title="全局小人展示"
+        description={globalDescription}
+        busy={busy}
+        onRefresh={refreshActivity}
+        onCancelRun={cancelRun}
+        onSelectRun={loadRun}
+      />
 
       {selectedRun && (
         <div className="h-[360px] min-h-0">
@@ -1740,8 +1721,7 @@ function runStatusLabel(status: string) {
   return "失败"
 }
 
-function globalActivityDescription(
-  project: ProjectConfig,
+function globalRoomDescription(
   agents: CodexActivityAgent[],
   activeRuns: DaemonStatus["activeRuns"],
   lastRun?: RunSummary,
@@ -1754,7 +1734,7 @@ function globalActivityDescription(
   const lastRunText = lastRun
     ? `最近 ${lastRun.issueIdentifier || "未知事项"} ${runStatusLabel(lastRun.status)}`
     : "暂无运行记录"
-  return `${project.key} · ${activeText} · ${lastRunText}`
+  return `单房间分区 · ${activeText} · ${lastRunText}`
 }
 
 function viewTitle(view: View, selectedProject: ProjectConfig | null) {

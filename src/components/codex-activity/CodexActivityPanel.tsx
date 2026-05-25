@@ -15,8 +15,11 @@ import { CodexActivityScene } from "./CodexActivityScene"
 
 type CodexActivityPanelProps = {
   agents: CodexActivityAgent[]
-  project: ProjectConfig
+  project?: ProjectConfig
+  projects?: ProjectConfig[]
   lastRun?: RunSummary
+  contextKey?: string
+  sceneClassName?: string
   title?: string
   description?: string
   busy: boolean
@@ -28,7 +31,10 @@ type CodexActivityPanelProps = {
 export function CodexActivityPanel({
   agents,
   project,
+  projects,
   lastRun,
+  contextKey,
+  sceneClassName,
   title = "Codex 活动",
   description,
   busy,
@@ -40,8 +46,9 @@ export function CodexActivityPanel({
   const activityDescription = description ?? (
     agents.length > 0
       ? `${agents.length} 个运行中任务正在更新`
-      : `${project.repoName || project.key} 当前空闲`
+      : `${project?.repoName || project?.key || "全局活动"} 当前空闲`
   )
+  const sceneContextKey = contextKey ?? project?.key ?? projects?.map((item) => item.key).join("|") ?? "activity"
 
   return (
     <Card className="shrink-0">
@@ -75,10 +82,12 @@ export function CodexActivityPanel({
       <CardContent className="flex min-w-0 flex-col gap-4">
         {sceneVisible && (
           <CodexActivityScene
-            key={project.key}
-            contextKey={project.key}
+            key={sceneContextKey}
+            contextKey={sceneContextKey}
             agents={agents}
             lastRun={lastRun}
+            projects={projects}
+            className={sceneClassName}
             onSelectRun={onSelectRun}
           />
         )}

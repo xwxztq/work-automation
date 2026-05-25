@@ -4,8 +4,10 @@ import type {
   CodexActivityAgent,
   CodexActivityMotion,
   CodexActivityTool,
+  ProjectConfig,
   RunSummary,
 } from "@/shared/types"
+import { cn } from "@/lib/utils"
 
 import {
   drawCharacterFrame,
@@ -27,6 +29,10 @@ const MAX_WORKSTATION_COLUMNS = 5
 const WORKSTATION_ROWS = 2
 const WORKSTATION_COLUMN_GAP_PX = 148
 const WORKSTATION_EDGE_INSET_PX = 58
+const PROJECT_WORKSTATION_COLUMN_GAP_PX = 126
+const PROJECT_WORKSTATION_EDGE_INSET_PX = 42
+const PROJECT_AREA_GAP_PX = 10
+const PROJECT_AREA_INSET_PX = 10
 const ENTRY_FLOOR_END_RATIO = 0.18
 const ENTRY_FLOOR_MIN_WIDTH_PX = 72
 const WORK_AREA_MIN_WIDTH_PX = 240
@@ -79,11 +85,29 @@ const MODERN_WATER_COOLER_SOURCE: PixelSpriteRect = { x: 576, y: 736, width: 48,
 const WALL_FURNITURE_BASE_DEPTH_PX = 28
 const MODERN_WATER_COOLER_SCALE = 0.55
 const WATER_COOLER_REST_AREA_OFFSET_PX = 34
+const PROJECT_AREA_FILLS = [
+  "#d6b76c",
+  "#9fc0a2",
+  "#bda4c4",
+  "#8fb8c7",
+  "#cf9f7e",
+  "#b4bb78",
+] as const
+const PROJECT_AREA_STROKES = [
+  "#a47b35",
+  "#5e8963",
+  "#8b7095",
+  "#5f8796",
+  "#9c6d4e",
+  "#808947",
+] as const
 
 type CodexActivitySceneProps = {
   contextKey: string
   agents: CodexActivityAgent[]
   lastRun?: RunSummary
+  projects?: ProjectConfig[]
+  className?: string
   onSelectRun: (id: string) => void
 }
 
@@ -157,6 +181,17 @@ type WorkstationLayout = {
   visualRowBySlotRow: Map<number, number>
 }
 
+type ProjectArea = {
+  project: ProjectConfig
+  index: number
+  x: number
+  y: number
+  width: number
+  height: number
+  fill: string
+  stroke: string
+}
+
 type WhiteCatActionChoice = {
   action: PixelCatAction
   minDuration: number
@@ -211,9 +246,17 @@ const WHITE_CAT_ANIMATION_SPEED: Record<PixelCatAction, number> = {
   walk: 8,
 }
 
-export function CodexActivityScene({ contextKey, agents, lastRun, onSelectRun }: CodexActivitySceneProps) {
+export function CodexActivityScene({
+  contextKey,
+  agents,
+  lastRun,
+  projects = [],
+  className,
+  onSelectRun,
+}: CodexActivitySceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const agentsRef = useRef<CodexActivityAgent[]>([])
+  const projectsRef = useRef<ProjectConfig[]>([])
   const totalAgentsRef = useRef(0)
   const lastRunRef = useRef<RunSummary | undefined>(lastRun)
   const onSelectRunRef = useRef(onSelectRun)
@@ -234,19 +277,25 @@ export function CodexActivityScene({ contextKey, agents, lastRun, onSelectRun }:
   }, [contextKey])
 
   const ariaLabel = useMemo(() => {
+    if (projects.length > 0) {
+      return agents.length > 0
+        ? `全局 Codex 活动大房间，${projects.length} 个项目区域，${agents.length} 个运行中任务，点击小人可查看运行详情`
+        : `全局 Codex 活动大房间，${projects.length} 个项目区域，当前没有运行中任务`
+    }
     if (agents.length === 0) {
       return lastRun
         ? `Codex 空闲，最近运行 ${lastRun.issueIdentifier} ${lastRun.status}`
         : "Codex 空闲，暂无运行记录"
     }
     return `Codex 活动场景，${agents.length} 个运行中任务，点击小人可查看运行详情`
-  }, [agents.length, lastRun])
+  }, [agents.length, lastRun, projects.length])
 
   useEffect(() => {
     agentsRef.current = agents
+    projectsRef.current = projects
     totalAgentsRef.current = agents.length
     lastRunRef.current = lastRun
-  }, [agents, lastRun])
+  }, [agents, lastRun, projects])
 
   useEffect(() => {
     onSelectRunRef.current = onSelectRun
@@ -299,8 +348,11 @@ export function CodexActivityScene({ contextKey, agents, lastRun, onSelectRun }:
       const dpr = window.devicePixelRatio || 1
       const width = canvasNode.width / dpr
       const height = canvasNode.height / dpr
-      const visibleAgentLimit = visibleAgentLimitForWidth(width)
       const allAgents = agentsRef.current
+      const projects = projectsRef.current
+      const projectAreas = projectAreasForScene(projects, width, height)
+      const visibleAgents = visibleAgentsForScene(allAgents, projectAreas, width)
+      const visibleAgentLimit = visibleAgents.length
       whiteCatRef.current = ensureWhiteCat(whiteCatRef.current, width, height, now)
       drawingContext.setTransform(dpr, 0, 0, dpr, 0, 0)
       drawingContext.imageSmoothingEnabled = false
@@ -308,10 +360,11 @@ export function CodexActivityScene({ contextKey, agents, lastRun, onSelectRun }:
         ctx: drawingContext,
         width,
         height,
-        agents: allAgents.slice(0, visibleAgentLimit),
+        agents: visibleAgents,
         totalAgents: totalAgentsRef.current,
         activeRunIds: new Set(allAgents.map((agent) => agent.runId)),
         visibleAgentLimit,
+        projectAreas,
         lastRun: lastRunRef.current,
         characters: charactersRef.current,
         whiteCat: whiteCatRef.current,
@@ -375,7 +428,7 @@ export function CodexActivityScene({ contextKey, agents, lastRun, onSelectRun }:
 
   return (
     <div
-      className="h-[230px] min-w-0 overflow-hidden rounded-lg border bg-[#e7d4b8]"
+      className={cn("h-[230px] min-w-0 overflow-hidden rounded-lg border bg-[#e7d4b8]", className)}
       aria-label={ariaLabel}
       role="img"
     >
@@ -392,6 +445,7 @@ function drawScene({
   totalAgents,
   activeRunIds,
   visibleAgentLimit,
+  projectAreas,
   lastRun,
   characters,
   whiteCat,
@@ -408,6 +462,7 @@ function drawScene({
   totalAgents: number
   activeRunIds: Set<string>
   visibleAgentLimit: number
+  projectAreas: ProjectArea[]
   lastRun: RunSummary | undefined
   characters: Map<string, SceneCharacter>
   whiteCat: SceneWhiteCat
@@ -418,8 +473,8 @@ function drawScene({
   dt: number
 }) {
   ctx.clearRect(0, 0, width, height)
-  drawOffice(ctx, width, height, assets)
-  syncCharacters(characters, agents, activeRunIds, lastRun, width, height, time, visibleAgentLimit)
+  drawOffice(ctx, width, height, assets, projectAreas)
+  syncCharacters(characters, agents, activeRunIds, lastRun, width, height, time, visibleAgentLimit, projectAreas)
   updateCharacters(characters, dt, time, width)
   updateWhiteCat(whiteCat, dt, time, width, height, characters)
 
@@ -501,31 +556,48 @@ function syncCharacters(
   height: number,
   time: number,
   visibleAgentLimit: number,
+  projectAreas: ProjectArea[],
 ) {
   const activeIds = new Set(agents.map((agent) => agent.runId))
-  const occupiedWorkstationSlots = new Set<number>()
+  const projectAreaByKey = projectAreaMap(projectAreas)
+  const occupiedWorkstationSlots = new Map<string, Set<number>>()
 
   const workstationAssignments = agents.map((agent) => {
     const existing = characters.get(agent.runId)
+    const area = projectAreaByKey.get(agent.projectKey)
+    const areaKey = area?.project.key || "__room__"
+    const occupiedSlots = occupiedWorkstationSlots.get(areaKey) || new Set<number>()
+    const areaLimit = area ? visibleAgentLimitForProjectArea(area.width) : visibleAgentLimit
+    const maxSlots = Math.max(1, areaLimit)
     let slot = existing?.slot
     if (
       slot === undefined ||
-      slot >= visibleAgentLimit ||
-      occupiedWorkstationSlots.has(slot)
+      slot >= maxSlots ||
+      occupiedSlots.has(slot)
     ) {
-      slot = pickWorkstationSlot(occupiedWorkstationSlots, visibleAgentLimit)
+      slot = pickWorkstationSlot(occupiedSlots, maxSlots)
     }
-    occupiedWorkstationSlots.add(slot)
-    return { agent, existing, slot }
+    occupiedSlots.add(slot)
+    occupiedWorkstationSlots.set(areaKey, occupiedSlots)
+    return { agent, existing, slot, area }
   })
 
-  const workstationLayout = workstationLayoutForSlots(
-    workstationAssignments.map(({ slot }) => slot),
-    width,
-  )
+  const workstationLayouts = new Map<string, WorkstationLayout>()
+  for (const { area } of workstationAssignments) {
+    const areaKey = area?.project.key || "__room__"
+    if (workstationLayouts.has(areaKey)) {
+      continue
+    }
+    const areaSlots = workstationAssignments
+      .filter((assignment) => (assignment.area?.project.key || "__room__") === areaKey)
+      .map(({ slot }) => slot)
+    workstationLayouts.set(areaKey, workstationLayoutForSlots(areaSlots, area?.width ?? width, area))
+  }
 
-  for (const { agent, existing, slot } of workstationAssignments) {
-    const { x, y } = workstationPosition(slot, width, height, workstationLayout)
+  for (const { agent, existing, slot, area } of workstationAssignments) {
+    const areaKey = area?.project.key || "__room__"
+    const workstationLayout = workstationLayouts.get(areaKey) || workstationLayoutForSlots([slot], area?.width ?? width, area)
+    const { x, y } = workstationPosition(slot, width, height, workstationLayout, area)
 
     const { x: targetX, y: targetY } = workstationCharacterTarget(x, y, slot, agent.activityMotion)
     if (existing) {
@@ -545,7 +617,7 @@ function syncCharacters(
 
     characters.set(agent.runId, {
       runId: agent.runId,
-      x: entryStartX(slot),
+      x: entryStartX(slot, area),
       y: targetY,
       targetX,
       targetY,
@@ -888,8 +960,87 @@ function pickWorkstationSlot(occupiedSlots: Set<number>, maxSlots: number) {
   return 0
 }
 
-function workstationLayoutForSlots(slots: number[], width: number): WorkstationLayout {
-  const columnCount = workstationColumnCount(width)
+function visibleAgentsForScene(
+  agents: CodexActivityAgent[],
+  projectAreas: ProjectArea[],
+  width: number,
+) {
+  if (projectAreas.length === 0) {
+    return agents.slice(0, visibleAgentLimitForWidth(width))
+  }
+
+  const visibleAgents: CodexActivityAgent[] = []
+  const projectKeys = new Set(projectAreas.map((area) => area.project.key))
+  for (const area of projectAreas) {
+    const projectAgents = agents.filter((agent) => agent.projectKey === area.project.key)
+    visibleAgents.push(...projectAgents.slice(0, visibleAgentLimitForProjectArea(area.width)))
+  }
+
+  const unknownProjectAgents = agents.filter((agent) => !projectKeys.has(agent.projectKey))
+  if (unknownProjectAgents.length > 0) {
+    visibleAgents.push(...unknownProjectAgents.slice(0, visibleAgentLimitForWidth(width)))
+  }
+
+  return visibleAgents
+}
+
+function projectAreaMap(projectAreas: ProjectArea[]) {
+  return new Map(projectAreas.map((area) => [area.project.key, area]))
+}
+
+function projectAreasForScene(
+  projects: ProjectConfig[],
+  width: number,
+  height: number,
+): ProjectArea[] {
+  if (projects.length === 0) {
+    return []
+  }
+
+  const wallHeight = Math.max(WALL_MIN_HEIGHT_PX, height * WALL_HEIGHT_RATIO)
+  const columnCount = projectAreaColumnCount(width, projects.length)
+  const rowCount = Math.ceil(projects.length / columnCount)
+  const left = PROJECT_AREA_INSET_PX
+  const top = wallHeight + PROJECT_AREA_INSET_PX
+  const floorWidth = Math.max(1, width - PROJECT_AREA_INSET_PX * 2)
+  const floorHeight = Math.max(1, height - top - PROJECT_AREA_INSET_PX)
+  const areaWidth = Math.max(1, (floorWidth - PROJECT_AREA_GAP_PX * (columnCount - 1)) / columnCount)
+  const areaHeight = Math.max(1, (floorHeight - PROJECT_AREA_GAP_PX * (rowCount - 1)) / rowCount)
+
+  return projects.map((project, index) => {
+    const column = index % columnCount
+    const row = Math.floor(index / columnCount)
+    return {
+      project,
+      index,
+      x: left + column * (areaWidth + PROJECT_AREA_GAP_PX),
+      y: top + row * (areaHeight + PROJECT_AREA_GAP_PX),
+      width: areaWidth,
+      height: areaHeight,
+      fill: PROJECT_AREA_FILLS[index % PROJECT_AREA_FILLS.length],
+      stroke: PROJECT_AREA_STROKES[index % PROJECT_AREA_STROKES.length],
+    }
+  })
+}
+
+function projectAreaColumnCount(width: number, projectCount: number) {
+  if (projectCount <= 1) {
+    return 1
+  }
+  if (width < 360) {
+    return 1
+  }
+  if (width < 620) {
+    return Math.min(projectCount, 2)
+  }
+  if (width < 980) {
+    return Math.min(projectCount, 3)
+  }
+  return Math.min(projectCount, 4)
+}
+
+function workstationLayoutForSlots(slots: number[], width: number, area?: ProjectArea): WorkstationLayout {
+  const columnCount = area ? projectAreaWorkstationColumnCount(width) : workstationColumnCount(width)
   const slotRows = [
     ...new Set(slots.map((slot) => workstationRowForSlot(slot, columnCount))),
   ].sort((a, b) => a - b)
@@ -900,7 +1051,17 @@ function workstationLayoutForSlots(slots: number[], width: number): WorkstationL
   return { columnCount, rowCount: slotRows.length, visualRowBySlotRow }
 }
 
-function workstationPosition(slot: number, width: number, height: number, layout: WorkstationLayout) {
+function workstationPosition(
+  slot: number,
+  width: number,
+  height: number,
+  layout: WorkstationLayout,
+  area?: ProjectArea,
+) {
+  if (area) {
+    return projectAreaWorkstationPosition(slot, layout, area)
+  }
+
   const workArea = workstationArea(width)
   const column = slot % layout.columnCount
   const slotRow = workstationRowForSlot(slot, layout.columnCount)
@@ -909,6 +1070,18 @@ function workstationPosition(slot: number, width: number, height: number, layout
   const columnProgress = layout.columnCount <= 1 ? 0.5 : column / (layout.columnCount - 1)
   const x = workArea.left + WORKSTATION_EDGE_INSET_PX + usableWidth * columnProgress
   const y = height * workstationRowYRatio(visualRow, layout.rowCount)
+  return { x, y }
+}
+
+function projectAreaWorkstationPosition(slot: number, layout: WorkstationLayout, area: ProjectArea) {
+  const column = slot % layout.columnCount
+  const slotRow = workstationRowForSlot(slot, layout.columnCount)
+  const visualRow = layout.visualRowBySlotRow.get(slotRow) ?? 0
+  const inset = Math.min(PROJECT_WORKSTATION_EDGE_INSET_PX, Math.max(22, area.width * 0.22))
+  const usableWidth = Math.max(1, area.width - inset * 2)
+  const columnProgress = layout.columnCount <= 1 ? 0.5 : column / (layout.columnCount - 1)
+  const x = area.x + inset + usableWidth * columnProgress
+  const y = area.y + area.height * projectAreaWorkstationRowYRatio(visualRow, layout.rowCount)
   return { x, y }
 }
 
@@ -949,7 +1122,10 @@ function waitingStandDirection(slot: number): PixelDirection {
   return slot % 2 === 0 ? "right" : "left"
 }
 
-function entryStartX(slot: number) {
+function entryStartX(slot: number, area?: ProjectArea) {
+  if (area) {
+    return area.x - CHARACTER_WIDTH - (slot % Math.max(1, projectAreaWorkstationColumnCount(area.width))) * 16
+  }
   return -CHARACTER_WIDTH - slot * ENTRY_QUEUE_GAP_PX
 }
 
@@ -1050,7 +1226,13 @@ function bubbleForCharacter(
   }
 }
 
-function drawOffice(ctx: CanvasRenderingContext2D, width: number, height: number, assets: PixelAgentAssets | null) {
+function drawOffice(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  assets: PixelAgentAssets | null,
+  projectAreas: ProjectArea[],
+) {
   ctx.fillStyle = SCENE_BACKDROP
   ctx.fillRect(0, 0, width, height)
 
@@ -1067,6 +1249,10 @@ function drawOffice(ctx: CanvasRenderingContext2D, width: number, height: number
         drawOfficeTile(ctx, x, y, tileSize, x < workAreaRight(width) ? "wood" : "stone")
       }
     }
+  }
+
+  if (projectAreas.length > 0) {
+    drawProjectAreaFloors(ctx, projectAreas)
   }
 
   ctx.fillStyle = "rgba(126, 91, 48, 0.14)"
@@ -1099,6 +1285,96 @@ function drawOffice(ctx: CanvasRenderingContext2D, width: number, height: number
     y: waterCoolerY,
     scale: MODERN_WATER_COOLER_SCALE,
   })
+
+  if (projectAreas.length > 0) {
+    drawProjectAreaLabels(ctx, projectAreas)
+  }
+}
+
+function drawProjectAreaFloors(ctx: CanvasRenderingContext2D, areas: ProjectArea[]) {
+  for (const area of areas) {
+    const left = Math.round(area.x)
+    const top = Math.round(area.y)
+    const width = Math.round(area.width)
+    const height = Math.round(area.height)
+
+    ctx.save()
+    ctx.globalAlpha = 0.82
+    ctx.fillStyle = area.fill
+    ctx.fillRect(left, top, width, height)
+    ctx.restore()
+
+    drawProjectAreaTiles(ctx, area)
+    ctx.strokeStyle = area.stroke
+    ctx.lineWidth = 2
+    ctx.strokeRect(left + 0.5, top + 0.5, Math.max(1, width - 1), Math.max(1, height - 1))
+  }
+}
+
+function drawProjectAreaTiles(ctx: CanvasRenderingContext2D, area: ProjectArea) {
+  const tileSize = 24
+  const left = Math.round(area.x)
+  const top = Math.round(area.y)
+  const right = Math.round(area.x + area.width)
+  const bottom = Math.round(area.y + area.height)
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(left, top, Math.max(1, right - left), Math.max(1, bottom - top))
+  ctx.clip()
+
+  ctx.strokeStyle = "rgba(255, 248, 228, 0.22)"
+  ctx.lineWidth = 1
+  for (let x = left; x <= right; x += tileSize) {
+    ctx.beginPath()
+    ctx.moveTo(x + 0.5, top)
+    ctx.lineTo(x + 0.5, bottom)
+    ctx.stroke()
+  }
+  for (let y = top; y <= bottom; y += tileSize) {
+    ctx.beginPath()
+    ctx.moveTo(left, y + 0.5)
+    ctx.lineTo(right, y + 0.5)
+    ctx.stroke()
+  }
+
+  ctx.fillStyle = "rgba(58, 45, 35, 0.08)"
+  for (let y = top; y < bottom; y += tileSize) {
+    for (let x = left; x < right; x += tileSize) {
+      if (((x - left) / tileSize + (y - top) / tileSize + area.index) % 2 !== 0) {
+        continue
+      }
+      ctx.fillRect(x, y, Math.min(tileSize, right - x), Math.min(tileSize, bottom - y))
+    }
+  }
+
+  ctx.restore()
+}
+
+function drawProjectAreaLabels(ctx: CanvasRenderingContext2D, areas: ProjectArea[]) {
+  for (const area of areas) {
+    const label = projectAreaLabel(area.project)
+    const labelX = Math.round(area.x + 10)
+    const labelY = Math.round(area.y + 9)
+    const maxLabelWidth = Math.max(56, area.width - 20)
+
+    ctx.font = "600 11px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+    const measuredWidth = Math.min(maxLabelWidth, Math.ceil(ctx.measureText(label).width) + 18)
+    ctx.fillStyle = "rgba(251, 248, 239, 0.94)"
+    ctx.fillRect(labelX, labelY, measuredWidth, 23)
+    ctx.strokeStyle = area.stroke
+    ctx.lineWidth = 1
+    ctx.strokeRect(labelX + 0.5, labelY + 0.5, measuredWidth - 1, 22)
+
+    ctx.fillStyle = "#3f382f"
+    ctx.textBaseline = "middle"
+    ctx.fillText(label, labelX + 9, labelY + 12, measuredWidth - 16)
+    ctx.textBaseline = "alphabetic"
+  }
+}
+
+function projectAreaLabel(project: ProjectConfig) {
+  return project.repoName || project.key
 }
 
 function drawPixelAgentsOfficeFloor(
@@ -1345,6 +1621,10 @@ function visibleAgentLimitForWidth(width: number) {
   return workstationColumnCount(width) * WORKSTATION_ROWS
 }
 
+function visibleAgentLimitForProjectArea(width: number) {
+  return projectAreaWorkstationColumnCount(width) * WORKSTATION_ROWS
+}
+
 function workstationColumnCount(width: number) {
   const workArea = workstationArea(width)
   const safeWidth = Math.max(0, workArea.width - WORKSTATION_EDGE_INSET_PX * 2)
@@ -1353,6 +1633,24 @@ function workstationColumnCount(width: number) {
     MIN_WORKSTATION_COLUMNS,
     Math.min(MAX_WORKSTATION_COLUMNS, fittedColumns),
   )
+}
+
+function projectAreaWorkstationColumnCount(width: number) {
+  const inset = Math.min(PROJECT_WORKSTATION_EDGE_INSET_PX, Math.max(22, width * 0.22))
+  const safeWidth = Math.max(0, width - inset * 2)
+  const fittedColumns = Math.floor(safeWidth / PROJECT_WORKSTATION_COLUMN_GAP_PX) + 1
+  return Math.max(1, Math.min(3, fittedColumns))
+}
+
+function projectAreaWorkstationRowYRatio(visualRow: number, rowCount: number) {
+  if (rowCount <= 1) {
+    return 0.72
+  }
+  if (rowCount === 2) {
+    return visualRow === 0 ? 0.78 : 0.56
+  }
+  const progress = visualRow / Math.max(1, rowCount - 1)
+  return 0.8 + (0.52 - 0.8) * progress
 }
 
 function workstationArea(width: number) {
