@@ -81,6 +81,7 @@ const MODERN_WATER_COOLER_SCALE = 0.55
 const WATER_COOLER_REST_AREA_OFFSET_PX = 34
 
 type CodexActivitySceneProps = {
+  contextKey: string
   agents: CodexActivityAgent[]
   lastRun?: RunSummary
   onSelectRun: (id: string) => void
@@ -210,7 +211,7 @@ const WHITE_CAT_ANIMATION_SPEED: Record<PixelCatAction, number> = {
   walk: 8,
 }
 
-export function CodexActivityScene({ agents, lastRun, onSelectRun }: CodexActivitySceneProps) {
+export function CodexActivityScene({ contextKey, agents, lastRun, onSelectRun }: CodexActivitySceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const agentsRef = useRef<CodexActivityAgent[]>([])
   const totalAgentsRef = useRef(0)
@@ -221,6 +222,17 @@ export function CodexActivityScene({ agents, lastRun, onSelectRun }: CodexActivi
   const hitRegionsRef = useRef<HitRegion[]>([])
   const hoveredRunIdRef = useRef<string | null>(null)
   const assetsRef = useRef<PixelAgentAssets | null>(null)
+
+  useEffect(() => {
+    charactersRef.current.clear()
+    whiteCatRef.current = null
+    hitRegionsRef.current = []
+    hoveredRunIdRef.current = null
+    if (canvasRef.current) {
+      canvasRef.current.style.cursor = "default"
+    }
+  }, [contextKey])
+
   const ariaLabel = useMemo(() => {
     if (agents.length === 0) {
       return lastRun

@@ -67,7 +67,13 @@ export function CodexActivityPanel({
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-4">
         {sceneVisible && (
-          <CodexActivityScene agents={agents} lastRun={lastRun} onSelectRun={onSelectRun} />
+          <CodexActivityScene
+            key={project.key}
+            contextKey={project.key}
+            agents={agents}
+            lastRun={lastRun}
+            onSelectRun={onSelectRun}
+          />
         )}
         <div className="grid max-h-[calc(3*6.5rem+2*0.5rem)] min-w-0 auto-rows-[6.5rem] grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-2 overflow-y-auto pr-1">
           {agents.map((agent) => (
