@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto"
 import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
+import {
+  diagnoseCodexLinearAuthFailure,
+  isCodexLinearAuthFailureRun,
+} from "./linear-auth-diagnostics.mjs"
 import { buildPromptContext, readPrompt, renderPrompt } from "./prompts.mjs"
 
 export function createScheduler({ rootDir, configProvider, store }) {
@@ -623,6 +627,27 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       return false
     }
+    const linearAuthFailureRun = await getProcessedCodexLinearAuthFailureRun(processed)
+    if (linearAuthFailureRun) {
+      await logEvent({
+        type: "issue-retry-after-linear-auth-failure",
+        level: "warn",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: linearAuthFailureRun.id,
+        message: `${issue.identifier} 上次处理快照来自 Codex Linear 授权失效，本轮继续重试`,
+        data: {
+          fingerprint,
+          recordedAt: processed.recordedAt,
+          issueUpdatedAt: issue.updatedAt,
+          state: issue.state?.name,
+          failureKind: linearAuthFailureRun.failureKind,
+          action: linearAuthFailureRun.failureAction || null,
+        },
+      })
+      return false
+    }
     projectSummary.skipped.push(`${issue.identifier}: 自上次处理后没有变化`)
     await logEvent({
       type: "issue-skip-unchanged",
@@ -657,6 +682,25 @@ export function createScheduler({ rootDir, configProvider, store }) {
           runStatus: run.status,
           codexStarted: run.codexStarted,
           startupError: run.startupError || run.error || null,
+        },
+      })
+      return
+    }
+    if (isCodexLinearAuthFailureRun(run)) {
+      await logEvent({
+        type: "issue-processed-not-recorded",
+        level: "warn",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: run.id,
+        message: `${issue.identifier} Codex Linear 授权失效，需要重新登录，未记录处理快照`,
+        data: {
+          runStatus: run.status,
+          codexStarted: run.codexStarted,
+          failureKind: run.failureKind,
+          retryable: true,
+          action: run.failureAction || null,
         },
       })
       return
@@ -708,6 +752,18 @@ export function createScheduler({ rootDir, configProvider, store }) {
     try {
       const run = await store.getRun(processed.runId)
       return isCodexStartupFailureRun(run) ? run : null
+    } catch {
+      return null
+    }
+  }
+
+  async function getProcessedCodexLinearAuthFailureRun(processed) {
+    if (!processed?.runId) {
+      return null
+    }
+    try {
+      const run = await store.getRun(processed.runId)
+      return isCodexLinearAuthFailureRun(run) ? run : null
     } catch {
       return null
     }
@@ -853,6 +909,13 @@ export function createScheduler({ rootDir, configProvider, store }) {
 
       const succeeded = codexResult.exitCode === 0
       const startupError = codexResult.started ? null : codexResult.startError
+      const fallbackError = startupError || `Codex 退出码为 ${codexResult.exitCode}`
+      const authDiagnostic = succeeded
+        ? null
+        : await diagnoseRunFailure(run, {
+            finalText: codexResult.finalText,
+            error: fallbackError,
+          })
       active.supervisorPid = codexResult.supervisorPid || active.supervisorPid
       active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
@@ -863,23 +926,32 @@ export function createScheduler({ rootDir, configProvider, store }) {
         codexPid: active.codexPid,
         codexStarted: codexResult.started,
         startupError,
-        error: succeeded
-          ? undefined
-          : startupError || `Codex 退出码为 ${codexResult.exitCode}`,
+        error: succeeded ? undefined : authDiagnostic?.message || fallbackError,
+        failureKind: authDiagnostic?.kind,
+        failureSummary: authDiagnostic?.summary,
+        failureAction: authDiagnostic?.action,
+        retryableFailure: authDiagnostic?.retryable,
       })
       await logEvent({
-        type: succeeded ? "run-succeeded" : "run-failed",
+        type: succeeded ? "run-succeeded" : authDiagnostic ? "run-codex-linear-auth-required" : "run-failed",
         level: succeeded ? "info" : "error",
         stage,
         projectKey: project.key,
         issueIdentifier: issue.identifier,
         runId: run.id,
-        message: `${issue.identifier} ${stageLabel(stage)} ${succeeded ? "成功" : startupError ? "启动失败" : "失败"}`,
+        message: succeeded
+          ? `${issue.identifier} ${stageLabel(stage)} 成功`
+          : authDiagnostic
+            ? `${issue.identifier} ${stageLabel(stage)}失败: ${authDiagnostic.summary}`
+            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? "启动失败" : "失败"}`,
         data: {
           exitCode: codexResult.exitCode,
           runDir: run.dir,
           codexStarted: codexResult.started,
           startupError,
+          failureKind: authDiagnostic?.kind,
+          retryableFailure: authDiagnostic?.retryable,
+          action: authDiagnostic?.action,
         },
       })
       return run
@@ -895,24 +967,35 @@ export function createScheduler({ rootDir, configProvider, store }) {
         })
       }
       const codexStarted = Boolean(active.codexPid)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const authDiagnostic = await diagnoseRunFailure(run, { error: errorMessage })
       run = await store.updateRun(run, {
         status: "failed",
         pid: active.pid,
         supervisorPid: active.supervisorPid,
         codexPid: active.codexPid,
         codexStarted,
-        startupError: codexStarted ? null : error instanceof Error ? error.message : String(error),
-        error: error instanceof Error ? error.message : String(error),
+        startupError: codexStarted ? null : errorMessage,
+        error: authDiagnostic?.message || errorMessage,
+        failureKind: authDiagnostic?.kind,
+        failureSummary: authDiagnostic?.summary,
+        failureAction: authDiagnostic?.action,
+        retryableFailure: authDiagnostic?.retryable,
       })
       await logEvent({
-        type: "run-error",
+        type: authDiagnostic ? "run-codex-linear-auth-required" : "run-error",
         level: "error",
         stage,
         projectKey: project.key,
         issueIdentifier: issue.identifier,
         runId: run.id,
-        message: error instanceof Error ? error.message : String(error),
-        data: { runDir: run.dir },
+        message: authDiagnostic?.summary || errorMessage,
+        data: {
+          runDir: run.dir,
+          failureKind: authDiagnostic?.kind,
+          retryableFailure: authDiagnostic?.retryable,
+          action: authDiagnostic?.action,
+        },
       })
       throw error
     } finally {
@@ -922,6 +1005,22 @@ export function createScheduler({ rootDir, configProvider, store }) {
         activeRunsById.delete(run.id)
       }
     }
+  }
+
+  async function diagnoseRunFailure(run, extra = {}) {
+    let detail = null
+    try {
+      detail = await store.getRun(run.id)
+    } catch {
+      detail = null
+    }
+    return diagnoseCodexLinearAuthFailure({
+      stdout: detail?.stdout,
+      stderr: detail?.stderr,
+      final: detail?.final,
+      finalText: extra.finalText,
+      error: extra.error || detail?.error || run.error || run.startupError,
+    })
   }
 
   async function buildStagePrompt({ config, project, issue, stage }) {

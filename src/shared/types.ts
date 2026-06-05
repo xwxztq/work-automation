@@ -70,6 +70,10 @@ export type RunSummary = {
   dir: string
   exitCode?: number
   error?: string
+  failureKind?: string
+  failureSummary?: string
+  failureAction?: string
+  retryableFailure?: boolean
   codexStarted?: boolean
   startupError?: string | null
   supervisorPid?: number | null
