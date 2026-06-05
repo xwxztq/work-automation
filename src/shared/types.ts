@@ -90,6 +90,14 @@ export type RunListResponse = {
   totalCount: number
 }
 
+export type RunRequestAccepted = {
+  accepted: true
+  stage: Stage
+  projectKey?: string | null
+  issueId?: string | null
+  submittedAt: string
+}
+
 export type RunDetail = RunSummary & {
   stdout: string
   stderr: string

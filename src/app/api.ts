@@ -6,6 +6,7 @@ import type {
   PromptBundle,
   RunDetail,
   RunListResponse,
+  RunRequestAccepted,
   Stage,
 } from "@/shared/types"
 
@@ -66,9 +67,9 @@ export const api = {
   startDaemon: () => request<DaemonStatus>("/api/daemon/start", { method: "POST" }),
   stopDaemon: () => request<DaemonStatus>("/api/daemon/stop", { method: "POST" }),
   runOnce: (stage: Stage, projectKey?: string) =>
-    request<unknown>("/api/runs/once", { method: "POST", body: JSON.stringify({ stage, projectKey }) }),
+    request<RunRequestAccepted>("/api/runs/once", { method: "POST", body: JSON.stringify({ stage, projectKey }) }),
   runIssue: (stage: Stage, issueId: string, projectKey?: string) =>
-    request<unknown>("/api/runs/issue", {
+    request<RunRequestAccepted>("/api/runs/issue", {
       method: "POST",
       body: JSON.stringify({ stage, issueId, projectKey }),
     }),

@@ -219,6 +219,7 @@ function App() {
   const [manualStage, setManualStage] = useState<Stage>("part1")
   const [manualIssue, setManualIssue] = useState("")
   const [busy, setBusy] = useState(false)
+  const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
   const autoStartTried = useRef(false)
 
   useEffect(() => {
@@ -502,19 +503,20 @@ function App() {
   }
 
   async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string) {
-    setBusy(true)
+    setManualRunSubmitting(true)
     try {
       if (issueId) {
         await api.runIssue(stage, issueId, projectKey)
       } else {
         await api.runOnce(stage, projectKey)
       }
-      toast.success("执行已完成")
-      await refreshRuns()
+      toast.success("执行已提交")
+      setManualRunSubmitting(false)
+      void refreshRuns()
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
-      setBusy(false)
+      setManualRunSubmitting(false)
     }
   }
 
@@ -690,6 +692,7 @@ function App() {
                 manualStage={manualStage}
                 manualIssue={manualIssue}
                 busy={busy}
+                manualRunSubmitting={manualRunSubmitting}
                 setManualStage={setManualStage}
                 setManualIssue={setManualIssue}
                 refreshRuns={() => void refreshRuns()}
@@ -947,6 +950,7 @@ function ProjectView({
   manualStage,
   manualIssue,
   busy,
+  manualRunSubmitting,
   setManualStage,
   setManualIssue,
   refreshRuns,
@@ -966,6 +970,7 @@ function ProjectView({
   manualStage: Stage
   manualIssue: string
   busy: boolean
+  manualRunSubmitting: boolean
   setManualStage: (stage: Stage) => void
   setManualIssue: (issue: string) => void
   refreshRuns: () => void
@@ -1079,10 +1084,10 @@ function ProjectView({
               <Button
                 className="w-full sm:w-auto"
                 onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key)}
-                disabled={busy}
+                disabled={busy || manualRunSubmitting}
               >
                 <Play className="size-4" />
-                执行
+                {manualRunSubmitting ? "提交中" : "执行"}
               </Button>
             </CardContent>
           </Card>

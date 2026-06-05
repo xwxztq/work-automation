@@ -133,18 +133,17 @@ async function handleApi(req, res, url, context) {
 
   if (method === "POST" && url.pathname === "/api/runs/once") {
     const body = await readBody(req)
-    const summary = await scheduler.runOnce(body.stage || "both", { projectKey: body.projectKey })
-    sendJson(res, 200, summary)
+    const stage = body.stage || "both"
+    startManualRunInBackground({ scheduler, store, stage, projectKey: body.projectKey })
+    sendJson(res, 202, acceptedRunPayload({ stage, projectKey: body.projectKey }))
     return
   }
 
   if (method === "POST" && url.pathname === "/api/runs/issue") {
     const body = await readBody(req)
-    const summary = await scheduler.runOnce(body.stage || "both", {
-      issueId: body.issueId,
-      projectKey: body.projectKey,
-    })
-    sendJson(res, 200, summary)
+    const stage = body.stage || "both"
+    startManualRunInBackground({ scheduler, store, stage, issueId: body.issueId, projectKey: body.projectKey })
+    sendJson(res, 202, acceptedRunPayload({ stage, issueId: body.issueId, projectKey: body.projectKey }))
     return
   }
 
@@ -217,6 +216,36 @@ async function handleApi(req, res, url, context) {
   }
 
   sendJson(res, 404, { error: `未找到接口: ${method} ${url.pathname}` })
+}
+
+function startManualRunInBackground({ scheduler, store, stage, issueId, projectKey }) {
+  void scheduler
+    .runOnce(stage, { issueId, projectKey })
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      await store
+        .appendEvent({
+          type: "manual-run-error",
+          level: "error",
+          stage,
+          projectKey,
+          message,
+          data: {
+            issueId,
+          },
+        })
+        .catch(() => {})
+    })
+}
+
+function acceptedRunPayload({ stage, issueId, projectKey }) {
+  return {
+    accepted: true,
+    stage,
+    projectKey: projectKey || null,
+    issueId: issueId || null,
+    submittedAt: new Date().toISOString(),
+  }
 }
 
 async function readBody(req) {
