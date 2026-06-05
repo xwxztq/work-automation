@@ -1257,6 +1257,7 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
           <TableHead>事项</TableHead>
           <TableHead>阶段</TableHead>
           <TableHead>状态</TableHead>
+          <TableHead>时间</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -1275,11 +1276,14 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
             <TableCell>
               <StatusBadge status={run.status} />
             </TableCell>
+            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+              {formatDate(run.updatedAt)}
+            </TableCell>
           </TableRow>
         ))}
         {runs.length === 0 && (
           <TableRow>
-            <TableCell colSpan={3} className="text-muted-foreground">
+            <TableCell colSpan={4} className="text-muted-foreground">
               暂无运行记录
             </TableCell>
           </TableRow>
