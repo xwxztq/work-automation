@@ -30,19 +30,22 @@
    pnpm install
    ```
 
-2. 复制本地配置文件:
+2. 复制本地配置文件和本地 env 文件:
 
    ```bash
    cp config.example.json config.local.json
+   cp .env.example .env.local
    ```
 
-3. 只在当前 shell 或进程环境中设置 Linear API key，不要写入 `config.local.json`:
+3. 在 `.env.local` 中填写 Linear API key，不要写入 `config.local.json`:
 
-   ```bash
-   export LINEAR_API_KEY='你的 Linear API key'
+   ```dotenv
+   LINEAR_API_KEY=你的 Linear API key
    ```
 
-   如果改用其他环境变量名，需要同步修改 `linear.apiKeyEnv`，并确保启动服务的进程能读取到这个变量。
+   `.env.local` 和 `.env` 已加入 `.gitignore`，不会被追踪；`.env.example` 只保留空占位，不要写入真实密钥。服务启动时会按 `.env.local`、`.env` 的顺序加载本地 env 文件，并且不会覆盖当前 shell 或进程里已经存在的同名环境变量。
+
+   如果改用其他环境变量名，需要同步修改 `linear.apiKeyEnv`，并在 `.env.local` 中使用同一个变量名。
 
 4. 在 Codex 的 `config.toml` 中给 Linear MCP 工具配置审批权限，让当前 Codex agent 可以按流程移动 issue 和写评论:
 
@@ -141,7 +144,6 @@ pnpm dev:lan --host 192.168.1.23
 
 ```bash
 pnpm build
-export LINEAR_API_KEY='你的 Linear API key'
 pnpm start
 ```
 
@@ -151,7 +153,6 @@ pnpm start
 
 ```bash
 pnpm build
-export LINEAR_API_KEY='你的 Linear API key'
 pnpm start:lan --host 192.168.1.23
 ```
 
@@ -172,7 +173,7 @@ pnpm start -- --host 192.168.1.23
 在界面中配置:
 
 - 服务 ID、监听地址、端口、轮询间隔
-- Linear API 密钥环境变量名
+- Linear API 密钥环境变量名；真实密钥放在当前进程环境、`.env.local` 或 `.env` 中，不写入 `config.local.json`
 - Codex 命令和默认参数
 - Codex 默认只附加 `--json`；阶段一默认 sandbox 为 `read-only`，阶段二默认 sandbox 为 `danger-full-access`。
 - Linear 工作流状态名
@@ -183,7 +184,7 @@ pnpm start -- --host 192.168.1.23
 
 提示词负责指导 Codex 直接操作 Linear。默认提示词参考上级目录的 `automation-prompt` 两阶段规则，但当前版本不再创建子代理。
 
-`config.local.json` 已加入 `.gitignore`。接口不会返回 Linear API 密钥明文。
+`config.local.json`、`.env.local` 和 `.env` 已加入 `.gitignore`。接口不会返回 Linear API 密钥明文。`.env.example` 是可追踪样例文件，只包含空占位。
 
 ## 命令
 

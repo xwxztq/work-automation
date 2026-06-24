@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHttpApi } from "./http-api.mjs"
 import { loadConfig, validateConfig } from "./config.mjs"
+import { loadLocalEnv } from "./env.mjs"
 import { createRunStore } from "./run-store.mjs"
 import { createScheduler } from "./scheduler.mjs"
 import { applyHostOverride, RUNTIME_HOST_ENV, normalizeHost, validateHost } from "./host.mjs"
@@ -9,6 +10,7 @@ const ROOT_DIR = process.cwd()
 const args = parseArgs(process.argv.slice(2))
 const command = args._[0] || "serve"
 const configPath = args.config || "config.local.json"
+await loadLocalEnv(ROOT_DIR)
 const hostOverride = resolveHostOverride(args)
 
 const store = createRunStore(ROOT_DIR)
