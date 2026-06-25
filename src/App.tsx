@@ -219,6 +219,7 @@ function App() {
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null)
   const [manualStage, setManualStage] = useState<Stage>("part1")
   const [manualIssue, setManualIssue] = useState("")
+  const [manualForce, setManualForce] = useState(false)
   const [busy, setBusy] = useState(false)
   const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
   const autoStartTried = useRef(false)
@@ -503,22 +504,34 @@ function App() {
     }
   }
 
-  async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string) {
+  async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string, force = false) {
     setManualRunSubmitting(true)
     try {
       if (issueId) {
-        await api.runIssue(stage, issueId, projectKey)
+        await api.runIssue(stage, issueId, projectKey, force)
       } else {
-        await api.runOnce(stage, projectKey)
+        await api.runOnce(stage, projectKey, force)
       }
       toast.success("执行已提交")
-      setManualRunSubmitting(false)
-      void refreshRuns()
+      if (view === "activity") {
+        void refreshGlobalActivity(true)
+      } else {
+        void refreshRuns(true, projectKey || selectedProjectKey)
+      }
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
       setManualRunSubmitting(false)
     }
+  }
+
+  function retryRun(run: RunDetail | RunSummary) {
+    const issueId = run.issueIdentifier?.trim()
+    if (!issueId) {
+      toast.error("当前运行记录缺少 issue 标识，无法重试")
+      return
+    }
+    void triggerOnce(run.stage as Stage, issueId, run.projectKey, true)
   }
 
   async function refreshRuns(silent = false, projectKey = selectedProjectKey) {
@@ -692,13 +705,16 @@ function App() {
                 selectedRun={selectedRun}
                 manualStage={manualStage}
                 manualIssue={manualIssue}
+                manualForce={manualForce}
                 busy={busy}
                 manualRunSubmitting={manualRunSubmitting}
                 setManualStage={setManualStage}
                 setManualIssue={setManualIssue}
+                setManualForce={setManualForce}
                 refreshRuns={() => void refreshRuns()}
                 loadRun={loadRun}
-                triggerOnce={(stage, issueId, projectKey) => void triggerOnce(stage, issueId, projectKey)}
+                triggerOnce={(stage, issueId, projectKey, force) => void triggerOnce(stage, issueId, projectKey, force)}
+                retryRun={retryRun}
                 cancelRun={(id) => void cancelRun(id)}
                 cancelProject={(key) => void cancelProject(key)}
                 editProject={(project) => openEditProject(project)}
@@ -715,8 +731,10 @@ function App() {
                 agents={globalCodexActivity.agents}
                 generatedAt={globalCodexActivity.generatedAt}
                 busy={busy}
+                manualRunSubmitting={manualRunSubmitting}
                 refreshActivity={() => void refreshGlobalActivity()}
                 loadRun={(id) => void loadRun(id)}
+                retryRun={retryRun}
                 cancelRun={(id) => void cancelRun(id)}
                 selectedRun={selectedRun}
               />
@@ -950,13 +968,16 @@ function ProjectView({
   selectedRun,
   manualStage,
   manualIssue,
+  manualForce,
   busy,
   manualRunSubmitting,
   setManualStage,
   setManualIssue,
+  setManualForce,
   refreshRuns,
   loadRun,
   triggerOnce,
+  retryRun,
   cancelRun,
   cancelProject,
   editProject,
@@ -970,13 +991,16 @@ function ProjectView({
   selectedRun: RunDetail | null
   manualStage: Stage
   manualIssue: string
+  manualForce: boolean
   busy: boolean
   manualRunSubmitting: boolean
   setManualStage: (stage: Stage) => void
   setManualIssue: (issue: string) => void
+  setManualForce: (force: boolean) => void
   refreshRuns: () => void
   loadRun: (id: string) => Promise<boolean>
-  triggerOnce: (stage: Stage, issueId?: string, projectKey?: string) => void
+  triggerOnce: (stage: Stage, issueId?: string, projectKey?: string, force?: boolean) => void
+  retryRun: (run: RunDetail | RunSummary) => void
   cancelRun: (id: string) => void
   cancelProject: (key: string) => void
   editProject: (project: ProjectConfig) => void
@@ -1084,12 +1108,21 @@ function ProjectView({
               />
               <Button
                 className="w-full sm:w-auto"
-                onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key)}
+                onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key, manualForce)}
                 disabled={busy || manualRunSubmitting}
               >
                 <Play className="size-4" />
                 {manualRunSubmitting ? "提交中" : "执行"}
               </Button>
+              <div className="col-span-full flex items-start justify-between gap-3 rounded-lg border px-3 py-2">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">强制执行</div>
+                  <div className="text-xs leading-5 text-muted-foreground">
+                    不填 issue ID 时会绕过“已处理快照”跳过；填写 issue ID 且选择 `阶段一` 或 `阶段二` 时，会按所选阶段强制重跑。
+                  </div>
+                </div>
+                <Switch checked={manualForce} onCheckedChange={setManualForce} />
+              </div>
             </CardContent>
           </Card>
 
@@ -1104,7 +1137,11 @@ function ProjectView({
         />
 
         <div className="hidden min-h-0 2xl:block">
-          <RunDetailPanel selectedRun={selectedRun} />
+          <RunDetailPanel
+            selectedRun={selectedRun}
+            manualRunSubmitting={manualRunSubmitting}
+            onRetry={retryRun}
+          />
         </div>
       </div>
 
@@ -1112,6 +1149,8 @@ function ProjectView({
         open={runDialogOpen}
         onOpenChange={setRunDialogOpen}
         selectedRun={selectedRun}
+        manualRunSubmitting={manualRunSubmitting}
+        onRetry={retryRun}
       />
     </div>
   )
@@ -1125,8 +1164,10 @@ function GlobalActivityView({
   agents,
   generatedAt,
   busy,
+  manualRunSubmitting,
   refreshActivity,
   loadRun,
+  retryRun,
   cancelRun,
   selectedRun,
 }: {
@@ -1137,8 +1178,10 @@ function GlobalActivityView({
   agents: CodexActivityAgent[]
   generatedAt: string
   busy: boolean
+  manualRunSubmitting: boolean
   refreshActivity: () => void
   loadRun: (id: string) => void
+  retryRun: (run: RunDetail | RunSummary) => void
   cancelRun: (id: string) => void
   selectedRun: RunDetail | null
 }) {
@@ -1191,7 +1234,11 @@ function GlobalActivityView({
 
       {selectedRun && (
         <div className="h-[360px] min-h-0">
-          <RunDetailPanel selectedRun={selectedRun} />
+          <RunDetailPanel
+            selectedRun={selectedRun}
+            manualRunSubmitting={manualRunSubmitting}
+            onRetry={retryRun}
+          />
         </div>
       )}
     </div>
@@ -1245,6 +1292,9 @@ function runFailureSummary(run: Partial<RunSummary> & { stdout?: string; stderr?
 function runFailureHint(run: Partial<RunDetail>) {
   if (run.status !== "failed") {
     return ""
+  }
+  if (run.failureAction?.trim()) {
+    return run.failureAction.trim()
   }
   const hasArtifacts = Boolean(run.stdout?.trim() || run.stderr?.trim() || run.final?.trim())
   if (run.codexStarted === false && !hasArtifacts) {
@@ -1339,10 +1389,14 @@ function RunDetailDialog({
   open,
   onOpenChange,
   selectedRun,
+  manualRunSubmitting,
+  onRetry,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   selectedRun: RunDetail | null
+  manualRunSubmitting: boolean
+  onRetry: (run: RunDetail | RunSummary) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1352,20 +1406,46 @@ function RunDetailDialog({
           查看选中历史运行的最终结果、标准输出、错误输出和提示词。
         </DialogDescription>
         <div className="min-h-0 min-w-0">
-          <RunDetailPanel selectedRun={selectedRun} />
+          <RunDetailPanel
+            selectedRun={selectedRun}
+            manualRunSubmitting={manualRunSubmitting}
+            onRetry={onRetry}
+          />
         </div>
       </DialogContent>
     </Dialog>
   )
 }
 
-function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
+function RunDetailPanel({
+  selectedRun,
+  manualRunSubmitting,
+  onRetry,
+}: {
+  selectedRun: RunDetail | null
+  manualRunSubmitting: boolean
+  onRetry: (run: RunDetail | RunSummary) => void
+}) {
   const failureSummary = selectedRun ? runFailureSummary(selectedRun) : ""
   const failureHint = selectedRun ? runFailureHint(selectedRun) : ""
+  const canRetry = Boolean(selectedRun?.status === "failed" && selectedRun.issueIdentifier && selectedRun.projectKey)
   return (
     <Card className="h-full min-h-0 min-w-0 overflow-hidden">
       <CardHeader className="shrink-0">
-        <CardTitle>运行详情</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>运行详情</CardTitle>
+          {selectedRun && canRetry && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onRetry(selectedRun)}
+              disabled={manualRunSubmitting}
+            >
+              <RefreshCcw className="size-4" />
+              {manualRunSubmitting ? "提交中" : "重试此事项"}
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedRun ? (

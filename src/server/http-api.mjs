@@ -148,16 +148,18 @@ async function handleApi(req, res, url, context) {
   if (method === "POST" && url.pathname === "/api/runs/once") {
     const body = await readBody(req)
     const stage = body.stage || "both"
-    startManualRunInBackground({ scheduler, store, stage, projectKey: body.projectKey })
-    sendJson(res, 202, acceptedRunPayload({ stage, projectKey: body.projectKey }))
+    const force = Boolean(body.force)
+    startManualRunInBackground({ scheduler, store, stage, projectKey: body.projectKey, force })
+    sendJson(res, 202, acceptedRunPayload({ stage, projectKey: body.projectKey, force }))
     return
   }
 
   if (method === "POST" && url.pathname === "/api/runs/issue") {
     const body = await readBody(req)
     const stage = body.stage || "both"
-    startManualRunInBackground({ scheduler, store, stage, issueId: body.issueId, projectKey: body.projectKey })
-    sendJson(res, 202, acceptedRunPayload({ stage, issueId: body.issueId, projectKey: body.projectKey }))
+    const force = Boolean(body.force)
+    startManualRunInBackground({ scheduler, store, stage, issueId: body.issueId, projectKey: body.projectKey, force })
+    sendJson(res, 202, acceptedRunPayload({ stage, issueId: body.issueId, projectKey: body.projectKey, force }))
     return
   }
 
@@ -232,9 +234,9 @@ async function handleApi(req, res, url, context) {
   sendJson(res, 404, { error: `未找到接口: ${method} ${url.pathname}` })
 }
 
-function startManualRunInBackground({ scheduler, store, stage, issueId, projectKey }) {
+function startManualRunInBackground({ scheduler, store, stage, issueId, projectKey, force = false }) {
   void scheduler
-    .runOnce(stage, { issueId, projectKey })
+    .runOnce(stage, { issueId, projectKey, force })
     .catch(async (error) => {
       const message = error instanceof Error ? error.message : String(error)
       await store
@@ -246,18 +248,20 @@ function startManualRunInBackground({ scheduler, store, stage, issueId, projectK
           message,
           data: {
             issueId,
+            force,
           },
         })
         .catch(() => {})
     })
 }
 
-function acceptedRunPayload({ stage, issueId, projectKey }) {
+function acceptedRunPayload({ stage, issueId, projectKey, force = false }) {
   return {
     accepted: true,
     stage,
     projectKey: projectKey || null,
     issueId: issueId || null,
+    force,
     submittedAt: new Date().toISOString(),
   }
 }

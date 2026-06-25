@@ -12,6 +12,7 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
   await fs.writeFile(run.promptPath, prompt)
 
   const sandbox = stage === "part1" ? config.codex.part1Sandbox : config.codex.part2Sandbox
+  const defaultArgs = normalizeCodexDefaultArgs(config.codex.defaultArgs)
   const configuredCodexBin = config.codex.bin || "codex"
   const resolvedCodexBin = await resolveExecutable(configuredCodexBin, {
     cwd: project.codexCwd || project.path,
@@ -23,7 +24,7 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
   }
   const args = [
     "exec",
-    ...config.codex.defaultArgs,
+    ...defaultArgs,
     "--sandbox",
     sandbox,
     "-C",
@@ -125,6 +126,16 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
     supervisorPid: latestRun.supervisorPid || supervisorPid,
     codexPid: latestRun.codexPid || null,
   }
+}
+
+function normalizeCodexDefaultArgs(defaultArgs = []) {
+  const normalized = Array.isArray(defaultArgs)
+    ? defaultArgs.map((value) => String(value).trim()).filter(Boolean)
+    : []
+  if (normalized.includes("--skip-git-repo-check")) {
+    return normalized
+  }
+  return [...normalized, "--skip-git-repo-check"]
 }
 
 function abortReason(signal, fallback) {

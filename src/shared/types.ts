@@ -103,6 +103,7 @@ export type RunRequestAccepted = {
   stage: Stage
   projectKey?: string | null
   issueId?: string | null
+  force?: boolean | null
   submittedAt: string
 }
 
