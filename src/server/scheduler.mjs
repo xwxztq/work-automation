@@ -908,7 +908,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
       }
 
       const succeeded = codexResult.exitCode === 0
-      const startupError = codexResult.started ? null : codexResult.startError
+      const startupError = codexResult.started
+        ? null
+        : codexResult.startError || `Codex 子进程未成功启动（退出码 ${codexResult.exitCode}）`
       const fallbackError = startupError || `Codex 退出码为 ${codexResult.exitCode}`
       const authDiagnostic = succeeded
         ? null
@@ -943,7 +945,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           ? `${issue.identifier} ${stageLabel(stage)} 成功`
           : authDiagnostic
             ? `${issue.identifier} ${stageLabel(stage)}失败: ${authDiagnostic.summary}`
-            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? "启动失败" : "失败"}`,
+            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? `启动失败: ${startupError}` : `失败: ${fallbackError}`}`,
         data: {
           exitCode: codexResult.exitCode,
           runDir: run.dir,

@@ -3,6 +3,7 @@ import type {
   CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
+  LinearProjectListResponse,
   PromptBundle,
   RunDetail,
   RunListResponse,
@@ -75,5 +76,6 @@ export const api = {
     }),
   cancelRun: (id: string) => request<unknown>(`/api/runs/${id}/cancel`, { method: "POST" }),
   cancelProject: (key: string) => request<unknown>(`/api/projects/${key}/cancel`, { method: "POST" }),
+  listLinearProjects: () => request<LinearProjectListResponse>("/api/linear/projects"),
   previewProject: (key: string) => request<unknown>(`/api/projects/${key}/linear-preview`),
 }

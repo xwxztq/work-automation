@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { accessSync, constants } from "node:fs"
 import { DEFAULT_CONFIG } from "./defaults.mjs"
+import { resolveExecutable } from "./executable.mjs"
 import { isLoopbackHost, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
 
@@ -139,6 +140,12 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   }
   if (!process.env[apiKeyEnv]) {
     warnings.push(`当前进程环境未设置 ${apiKeyEnv}。`)
+  }
+  const codexBin = config.codex?.bin || DEFAULT_CONFIG.codex.bin
+  if (!(await resolveExecutable(codexBin, { cwd: rootDir }))) {
+    warnings.push(
+      `当前进程 PATH 中找不到 codex.bin (${codexBin})。事项执行时可能直接启动失败；建议改成绝对路径或在启动服务前补齐 PATH。`,
+    )
   }
 
   const projectKeyValidation = validateProjectKeys(config.projects, {

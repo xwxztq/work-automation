@@ -74,6 +74,20 @@ async function handleApi(req, res, url, context) {
     return
   }
 
+  if (method === "GET" && url.pathname === "/api/linear/projects") {
+    const config = await loadConfig(configPath, ROOT_DIR)
+    const apiKey = process.env[config.linear.apiKeyEnv]
+    if (!apiKey) {
+      sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
+      return
+    }
+    const linear = createLinearClient(apiKey)
+    sendJson(res, 200, {
+      projects: await linear.listProjects(),
+    })
+    return
+  }
+
   if (method === "PUT" && parts[1] === "prompts" && parts.length === 4) {
     const [, , scope, stage] = parts
     const body = await readBody(req)

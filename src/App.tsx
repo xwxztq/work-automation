@@ -78,6 +78,7 @@ import type {
   CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
+  LinearProjectOption,
   ProjectConfig,
   PromptBundle,
   RunDetail,
@@ -1221,6 +1222,37 @@ function InfoItem({ label, value, wide = false }: { label: string; value: string
   )
 }
 
+function runFailureSummary(run: Partial<RunSummary> & { stdout?: string; stderr?: string; final?: string }) {
+  if (run.status !== "failed") {
+    return ""
+  }
+  if (run.failureSummary?.trim()) return run.failureSummary.trim()
+  const genericExitError =
+    run.codexStarted === false && /^Codex 退出码为 \d+$/u.test(run.error?.trim() || "")
+  if (!genericExitError && run.error?.trim()) return run.error.trim()
+  if (run.startupError?.trim()) return run.startupError.trim()
+  if (genericExitError || run.exitCode != null) {
+    const exitCode =
+      run.exitCode ??
+      Number.parseInt((run.error || "").replace("Codex 退出码为", "").trim(), 10)
+    return run.codexStarted === false
+      ? `Codex 子进程未成功启动（退出码 ${Number.isFinite(exitCode) ? exitCode : 1}）`
+      : `Codex 退出码为 ${Number.isFinite(exitCode) ? exitCode : 1}`
+  }
+  return "运行失败"
+}
+
+function runFailureHint(run: Partial<RunDetail>) {
+  if (run.status !== "failed") {
+    return ""
+  }
+  const hasArtifacts = Boolean(run.stdout?.trim() || run.stderr?.trim() || run.final?.trim())
+  if (run.codexStarted === false && !hasArtifacts) {
+    return "当前记录没有 stdout、stderr 或 final 输出。常见原因是服务进程 PATH 中没有 `codex`，或 Codex CLI 无法在当前非交互环境启动。"
+  }
+  return ""
+}
+
 function RunHistoryCard({
   runs,
   busy,
@@ -1276,6 +1308,11 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
             <TableCell>
               <div className="font-mono text-xs">{run.issueIdentifier}</div>
               <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
+              {run.status === "failed" && runFailureSummary(run) && (
+                <div className="mt-1 max-w-[320px] truncate text-xs text-destructive">
+                  {runFailureSummary(run)}
+                </div>
+              )}
             </TableCell>
             <TableCell>{stageLabel(run.stage)}</TableCell>
             <TableCell>
@@ -1323,6 +1360,8 @@ function RunDetailDialog({
 }
 
 function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
+  const failureSummary = selectedRun ? runFailureSummary(selectedRun) : ""
+  const failureHint = selectedRun ? runFailureHint(selectedRun) : ""
   return (
     <Card className="h-full min-h-0 min-w-0 overflow-hidden">
       <CardHeader className="shrink-0">
@@ -1330,18 +1369,37 @@ function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
       </CardHeader>
       <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedRun ? (
-          <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
-            <TabsList className="max-w-full shrink-0 overflow-x-auto">
-              <TabsTrigger value="final">最终结果</TabsTrigger>
-              <TabsTrigger value="stdout">标准输出</TabsTrigger>
-              <TabsTrigger value="stderr">错误输出</TabsTrigger>
-              <TabsTrigger value="prompt">提示词</TabsTrigger>
-            </TabsList>
-            <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
-            <RunStdoutLog text={selectedRun.stdout} />
-            <RunLog value="stderr" text={selectedRun.stderr} />
-            <RunLog value="prompt" text={selectedRun.prompt} />
-          </Tabs>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/20 p-3 text-xs">
+              <InfoItem label="事项" value={selectedRun.issueIdentifier || "-"} />
+              <InfoItem label="状态" value={runStatusLabel(selectedRun.status)} />
+              <InfoItem label="阶段" value={stageLabel(selectedRun.stage)} />
+              <InfoItem label="退出码" value={selectedRun.exitCode == null ? "-" : String(selectedRun.exitCode)} />
+              <InfoItem label="Codex PID" value={selectedRun.codexPid == null ? "-" : String(selectedRun.codexPid)} />
+              <InfoItem label="更新时间" value={formatDate(selectedRun.updatedAt)} />
+            </div>
+            {failureSummary && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                <div className="font-medium">失败摘要</div>
+                <div className="mt-1 whitespace-pre-wrap break-words">{failureSummary}</div>
+                {failureHint && (
+                  <div className="mt-2 text-xs leading-5 text-destructive/90">{failureHint}</div>
+                )}
+              </div>
+            )}
+            <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
+              <TabsList className="max-w-full shrink-0 overflow-x-auto">
+                <TabsTrigger value="final">最终结果</TabsTrigger>
+                <TabsTrigger value="stdout">标准输出</TabsTrigger>
+                <TabsTrigger value="stderr">错误输出</TabsTrigger>
+                <TabsTrigger value="prompt">提示词</TabsTrigger>
+              </TabsList>
+              <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
+              <RunStdoutLog text={selectedRun.stdout} />
+              <RunLog value="stderr" text={selectedRun.stderr} />
+              <RunLog value="prompt" text={selectedRun.prompt} />
+            </Tabs>
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
             <CircleDot className="mr-2 size-4" />
@@ -1563,6 +1621,52 @@ function ProjectEditor({
   validationMessage?: string | null
   onRemove?: () => void
 }) {
+  const [linearProjectPickerOpen, setLinearProjectPickerOpen] = useState(false)
+  const [linearProjectFilter, setLinearProjectFilter] = useState("")
+  const [linearProjectOptions, setLinearProjectOptions] = useState<LinearProjectOption[]>([])
+  const [linearProjectLoading, setLinearProjectLoading] = useState(false)
+  const [linearProjectError, setLinearProjectError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setLinearProjectPickerOpen(false)
+      setLinearProjectFilter("")
+      setLinearProjectError(null)
+      setLinearProjectLoading(false)
+      return
+    }
+  }, [open])
+
+  const filteredLinearProjects = useMemo(() => {
+    const query = linearProjectFilter.trim().toLowerCase()
+    if (!query) return linearProjectOptions
+    return linearProjectOptions.filter((item) =>
+      [item.displayName, item.name, item.id, item.teamNames.join(" ")]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [linearProjectFilter, linearProjectOptions])
+
+  async function openLinearProjectPicker() {
+    setLinearProjectPickerOpen(true)
+    setLinearProjectLoading(true)
+    setLinearProjectError(null)
+    try {
+      const response = await api.listLinearProjects()
+      setLinearProjectOptions(response.projects)
+    } catch (error) {
+      setLinearProjectError(errorMessage(error))
+    } finally {
+      setLinearProjectLoading(false)
+    }
+  }
+
+  function selectLinearProject(item: LinearProjectOption) {
+    onUpdate({ linearProjectId: item.id })
+    setLinearProjectPickerOpen(false)
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-[720px] overflow-y-auto sm:max-w-[720px]">
@@ -1574,10 +1678,17 @@ function ProjectEditor({
             <Input value={project.repoName} onChange={(event) => onUpdate({ repoName: event.target.value })} />
           </Field>
           <Field label="Linear 项目 ID" description={projectFieldDescriptions.linearProjectId}>
-            <Input
-              value={project.linearProjectId}
-              onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
-            />
+            <div className="flex gap-2">
+              <Input
+                className="font-mono"
+                value={project.linearProjectId}
+                onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
+              />
+              <Button type="button" variant="outline" onClick={() => void openLinearProjectPicker()} disabled={busy || linearProjectLoading}>
+                <RefreshCcw className={cn("size-4", linearProjectLoading && "animate-spin")} />
+                选择
+              </Button>
+            </div>
           </Field>
           <Field label="分支 / 提交范围前缀" description={projectFieldDescriptions.branchOrScopePrefix}>
             <Input
@@ -1656,6 +1767,87 @@ function ProjectEditor({
           </Button>
         </SheetFooter>
       </SheetContent>
+
+      <Dialog open={linearProjectPickerOpen} onOpenChange={setLinearProjectPickerOpen}>
+        <DialogContent className="max-h-[min(82svh,720px)] max-w-[min(900px,calc(100vw-2rem))] grid-rows-[auto_1fr] overflow-hidden p-0">
+          <div className="flex flex-col gap-4 p-4 pb-0">
+            <div className="space-y-1">
+              <DialogTitle>选择 Linear 项目</DialogTitle>
+              <DialogDescription>
+                点击按钮会实时拉取当前 Linear workspace 的项目列表，选择后自动回填项目 UUID。
+              </DialogDescription>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="按 display name、team 或 UUID 过滤"
+                value={linearProjectFilter}
+                onChange={(event) => setLinearProjectFilter(event.target.value)}
+              />
+              <Button type="button" variant="outline" onClick={() => void openLinearProjectPicker()} disabled={linearProjectLoading}>
+                <RefreshCcw className={cn("size-4", linearProjectLoading && "animate-spin")} />
+                刷新
+              </Button>
+            </div>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>共 {linearProjectOptions.length} 个项目</span>
+              <span>当前值: {project.linearProjectId || "未填写"}</span>
+            </div>
+          </div>
+          <ScrollArea className="min-h-0 px-4 pb-4">
+            <div className="space-y-2">
+              {linearProjectError && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                  {linearProjectError}
+                </div>
+              )}
+              {!linearProjectError && linearProjectLoading && linearProjectOptions.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                  正在从 Linear 拉取项目列表...
+                </div>
+              )}
+              {!linearProjectError && !linearProjectLoading && linearProjectOptions.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                  未拉取到任何 Linear 项目。
+                </div>
+              )}
+              {!linearProjectError && !linearProjectLoading && linearProjectOptions.length > 0 && filteredLinearProjects.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                  没有匹配当前过滤条件的项目。
+                </div>
+              )}
+              {filteredLinearProjects.map((item) => {
+                const selected = item.id === project.linearProjectId
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={cn(
+                      "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
+                      selected && "border-primary bg-primary/5",
+                    )}
+                    onClick={() => selectLinearProject(item)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{item.displayName}</div>
+                        <div className="mt-1 font-mono text-xs text-muted-foreground">{item.id}</div>
+                        {item.teamNames.length > 0 && (
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            Teams: {item.teamNames.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                      <Badge variant={selected ? "default" : "outline"}>
+                        {selected ? "当前已选" : "选择"}
+                      </Badge>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   )
 }

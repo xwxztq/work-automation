@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { resolveExecutable } from "./executable.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -11,6 +12,15 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
   await fs.writeFile(run.promptPath, prompt)
 
   const sandbox = stage === "part1" ? config.codex.part1Sandbox : config.codex.part2Sandbox
+  const configuredCodexBin = config.codex.bin || "codex"
+  const resolvedCodexBin = await resolveExecutable(configuredCodexBin, {
+    cwd: project.codexCwd || project.path,
+  })
+  if (!resolvedCodexBin) {
+    throw new Error(
+      `未找到 Codex 可执行文件: ${configuredCodexBin}。请在启动服务的进程 PATH 中加入 codex，或把 config.local.json 的 codex.bin 改成绝对路径。`,
+    )
+  }
   const args = [
     "exec",
     ...config.codex.defaultArgs,
@@ -27,7 +37,7 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
     supervisorInputPath,
     `${JSON.stringify(
       {
-        codexBin: config.codex.bin || "codex",
+        codexBin: resolvedCodexBin,
         args,
         cwd: project.codexCwd || project.path,
         promptPath: run.promptPath,
