@@ -6,6 +6,7 @@ import {
   CircleDot,
   FileJson,
   FolderGit2,
+  Maximize2,
   Pencil,
   Play,
   Plus,
@@ -79,6 +80,7 @@ import type {
   DaemonStatus,
   ExecutionEvent,
   LinearProjectOption,
+  PromptStage,
   ProjectConfig,
   PromptBundle,
   RunDetail,
@@ -87,6 +89,7 @@ import type {
 } from "@/shared/types"
 
 type View = "project" | "activity" | "logs" | "settings"
+type PersistedView = Extract<View, "project" | "activity">
 
 const emptyProject: ProjectConfig = {
   key: "",
@@ -100,6 +103,7 @@ const emptyProject: ProjectConfig = {
   defaultTests: [],
   part1PromptMode: "global",
   part2PromptMode: "global",
+  part3PromptMode: "global",
   extraRules: "无额外项目规则。",
 }
 
@@ -108,6 +112,7 @@ const APP_BRAND_NAME = "Work Automation"
 const APP_TITLE_PREFIX = "WA"
 const DEFAULT_SERVER_ID = "本机"
 const SELECTED_PROJECT_KEY_STORAGE_KEY = "linearAutomation.selectedProjectKey"
+const MAIN_VIEW_STORAGE_KEY = "linearAutomation.mainView"
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
   key: "本机配置用的稳定标识，日志和提示词会引用它。",
@@ -128,7 +133,8 @@ const statusConfigDescriptions: Record<keyof AppConfig["statuses"], string> = {
   ready: "阶段一判断可实现后的等待池，不会自动进入已排期。",
   schedule: "用户人工批准后，阶段二才会认领实现。",
   inProgress: "当前 Codex agent 已认领并正在实现。",
-  testing: "实现完成后等待人工验证；不会自动 Done。",
+  testing: "阶段二完成后进入阶段三 Auto Review 队列。",
+  readyForReview: "阶段三自动复查完成后等待人工验证。",
 }
 
 function readPersistedSelectedProjectKey() {
@@ -150,6 +156,29 @@ function persistSelectedProjectKey(key: string) {
     window.localStorage.removeItem(SELECTED_PROJECT_KEY_STORAGE_KEY)
   } catch {
     // Browser storage may be unavailable; keep the in-memory selection working.
+  }
+}
+
+function isPersistedView(value: string | null): value is PersistedView {
+  return value === "project" || value === "activity"
+}
+
+function readPersistedView(): PersistedView {
+  if (typeof window === "undefined") return "project"
+  try {
+    const value = window.localStorage.getItem(MAIN_VIEW_STORAGE_KEY)
+    return isPersistedView(value) ? value : "project"
+  } catch {
+    return "project"
+  }
+}
+
+function persistView(view: PersistedView) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(MAIN_VIEW_STORAGE_KEY, view)
+  } catch {
+    // Browser storage may be unavailable; keep the in-memory view working.
   }
 }
 
@@ -192,7 +221,7 @@ function useMediaQuery(query: string) {
 }
 
 function App() {
-  const [view, setView] = useState<View>("project")
+  const [view, setView] = useState<View>(readPersistedView)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [prompts, setPrompts] = useState<PromptBundle | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
@@ -214,7 +243,7 @@ function App() {
   const [editingProjectKey, setEditingProjectKey] = useState<string | null>(null)
   const [projectEditorOpen, setProjectEditorOpen] = useState(false)
   const [promptScope, setPromptScope] = useState("global")
-  const [promptStage, setPromptStage] = useState<"part1" | "part2">("part1")
+  const [promptStage, setPromptStage] = useState<PromptStage>("part1")
   const [promptText, setPromptText] = useState("")
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null)
   const [manualStage, setManualStage] = useState<Stage>("part1")
@@ -329,8 +358,17 @@ function App() {
     setRunTotalCount(0)
   }
 
+  function openProjectView(key?: string) {
+    if (key !== undefined) {
+      selectProject(key)
+    }
+    setView("project")
+    persistView("project")
+  }
+
   function openGlobalActivity() {
     setView("activity")
+    persistView("activity")
     setSelectedRun(null)
     void refreshGlobalActivity(true)
   }
@@ -445,9 +483,8 @@ function App() {
       : [...config.projects, nextProject]
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
-    selectProject(key)
+    openProjectView(key)
     void refreshRuns(true, key)
-    setView("project")
     setProjectEditorOpen(false)
   }
 
@@ -656,8 +693,7 @@ function App() {
           view={view}
           busy={busy}
           onSelectProject={(key) => {
-            selectProject(key)
-            setView("project")
+            openProjectView(key)
             void refreshRuns(true, key)
           }}
           onNewProject={openNewProject}
@@ -1010,10 +1046,10 @@ function ProjectView({
   const [runDialogOpen, setRunDialogOpen] = useState(false)
 
   useEffect(() => {
-    if (!shouldUseRunDialog) {
+    if (!selectedRun) {
       setRunDialogOpen(false)
     }
-  }, [shouldUseRunDialog])
+  }, [selectedRun])
 
   const handleRunSelect = async (id: string) => {
     const loaded = await loadRun(id)
@@ -1099,6 +1135,7 @@ function ProjectView({
                   <SelectItem value="both">全部</SelectItem>
                   <SelectItem value="part1">阶段一</SelectItem>
                   <SelectItem value="part2">阶段二</SelectItem>
+                  <SelectItem value="part3">阶段三 / Auto Review</SelectItem>
                 </SelectContent>
               </Select>
               <Input
@@ -1118,7 +1155,7 @@ function ProjectView({
                 <div className="space-y-1">
                   <div className="text-sm font-medium">强制执行</div>
                   <div className="text-xs leading-5 text-muted-foreground">
-                    不填 issue ID 时会绕过“已处理快照”跳过；填写 issue ID 且选择 `阶段一` 或 `阶段二` 时，会按所选阶段强制重跑。
+                    不填 issue ID 时会绕过“已处理快照”跳过；填写 issue ID 且显式选择某个阶段时，会按所选阶段强制重跑。
                   </div>
                 </div>
                 <Switch checked={manualForce} onCheckedChange={setManualForce} />
@@ -1138,9 +1175,11 @@ function ProjectView({
 
         <div className="hidden min-h-0 2xl:block">
           <RunDetailPanel
+            runs={runs}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={retryRun}
+            onExpand={() => setRunDialogOpen(true)}
           />
         </div>
       </div>
@@ -1148,6 +1187,7 @@ function ProjectView({
       <RunDetailDialog
         open={runDialogOpen}
         onOpenChange={setRunDialogOpen}
+        runs={runs}
         selectedRun={selectedRun}
         manualRunSubmitting={manualRunSubmitting}
         onRetry={retryRun}
@@ -1197,6 +1237,13 @@ function GlobalActivityView({
   }, [activeRuns, agents])
   const lastRun = runs[0]
   const globalDescription = globalRoomDescription(agents, activeRuns, lastRun)
+  const [runDialogOpen, setRunDialogOpen] = useState(false)
+
+  useEffect(() => {
+    if (!selectedRun) {
+      setRunDialogOpen(false)
+    }
+  }, [selectedRun])
 
   if (projects.length === 0) {
     return (
@@ -1233,13 +1280,26 @@ function GlobalActivityView({
       />
 
       {selectedRun && (
-        <div className="h-[360px] min-h-0">
-          <RunDetailPanel
+        <>
+          <div className="h-[360px] min-h-0">
+            <RunDetailPanel
+              runs={runs}
+              selectedRun={selectedRun}
+              manualRunSubmitting={manualRunSubmitting}
+              onRetry={retryRun}
+              onExpand={() => setRunDialogOpen(true)}
+            />
+          </div>
+
+          <RunDetailDialog
+            open={runDialogOpen}
+            onOpenChange={setRunDialogOpen}
+            runs={runs}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={retryRun}
           />
-        </div>
+        </>
       )}
     </div>
   )
@@ -1303,6 +1363,32 @@ function runFailureHint(run: Partial<RunDetail>) {
   return ""
 }
 
+function hasLaterSucceededStageRun(
+  run: Pick<RunSummary, "id" | "createdAt" | "issueIdentifier" | "projectKey" | "stage">,
+  runs: RunSummary[],
+) {
+  const issueIdentifier = run.issueIdentifier?.trim()
+  if (!issueIdentifier) {
+    return false
+  }
+
+  const createdAt = Date.parse(run.createdAt)
+
+  return runs.some((candidate) => {
+    if (candidate.id === run.id) return false
+    if (candidate.status !== "succeeded") return false
+    if (candidate.projectKey !== run.projectKey) return false
+    if (candidate.stage !== run.stage) return false
+    if (candidate.issueIdentifier?.trim() !== issueIdentifier) return false
+
+    const candidateCreatedAt = Date.parse(candidate.createdAt)
+    if (Number.isNaN(createdAt) || Number.isNaN(candidateCreatedAt)) {
+      return candidate.createdAt > run.createdAt
+    }
+    return candidateCreatedAt > createdAt
+  })
+}
+
 function RunHistoryCard({
   runs,
   busy,
@@ -1328,9 +1414,9 @@ function RunHistoryCard({
         </div>
       </CardHeader>
       <CardContent className="min-h-0 flex-1 overflow-hidden">
-        <ScrollArea className="h-full rounded-lg border">
+        <div className="h-full overflow-auto rounded-lg border">
           <RunTable runs={runs} loadRun={loadRun} />
-        </ScrollArea>
+        </div>
       </CardContent>
     </Card>
   )
@@ -1338,41 +1424,47 @@ function RunHistoryCard({
 
 function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string) => void }) {
   return (
-    <Table>
+    <Table className="table-fixed">
       <TableHeader className="sticky top-0 z-10 bg-card">
         <TableRow>
-          <TableHead>事项</TableHead>
-          <TableHead>阶段</TableHead>
-          <TableHead>状态</TableHead>
-          <TableHead>时间</TableHead>
+          <TableHead className="whitespace-normal">事项</TableHead>
+          <TableHead className="w-20">阶段</TableHead>
+          <TableHead className="w-24">状态</TableHead>
+          <TableHead className="w-36">时间</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {runs.map((run) => (
-          <TableRow
-            key={run.id}
-            className="cursor-pointer"
-            title={`更新时间: ${formatDate(run.updatedAt)}`}
-            onClick={() => loadRun(run.id)}
-          >
-            <TableCell>
-              <div className="font-mono text-xs">{run.issueIdentifier}</div>
-              <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
-              {run.status === "failed" && runFailureSummary(run) && (
-                <div className="mt-1 max-w-[320px] truncate text-xs text-destructive">
-                  {runFailureSummary(run)}
+        {runs.map((run) => {
+          const failureSummary = run.status === "failed" ? runFailureSummary(run) : ""
+
+          return (
+            <TableRow
+              key={run.id}
+              className="cursor-pointer"
+              title={`更新时间: ${formatDate(run.updatedAt)}`}
+              onClick={() => loadRun(run.id)}
+            >
+              <TableCell className="align-top whitespace-normal">
+                <div className="font-mono text-xs break-all">{run.issueIdentifier}</div>
+                <div className="mt-1 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                  {run.issueTitle}
                 </div>
-              )}
-            </TableCell>
-            <TableCell>{stageLabel(run.stage)}</TableCell>
-            <TableCell>
-              <StatusBadge status={run.status} />
-            </TableCell>
-            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-              {formatDate(run.updatedAt)}
-            </TableCell>
-          </TableRow>
-        ))}
+                {failureSummary && (
+                  <div className="mt-1 text-xs leading-5 text-destructive [overflow-wrap:anywhere]">
+                    {failureSummary}
+                  </div>
+                )}
+              </TableCell>
+              <TableCell className="align-top whitespace-nowrap">{stageLabel(run.stage)}</TableCell>
+              <TableCell className="align-top whitespace-nowrap">
+                <StatusBadge status={run.status} />
+              </TableCell>
+              <TableCell className="align-top whitespace-nowrap text-xs text-muted-foreground">
+                {formatDate(run.updatedAt)}
+              </TableCell>
+            </TableRow>
+          )
+        })}
         {runs.length === 0 && (
           <TableRow>
             <TableCell colSpan={4} className="text-muted-foreground">
@@ -1388,12 +1480,14 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
 function RunDetailDialog({
   open,
   onOpenChange,
+  runs,
   selectedRun,
   manualRunSubmitting,
   onRetry,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  runs: RunSummary[]
   selectedRun: RunDetail | null
   manualRunSubmitting: boolean
   onRetry: (run: RunDetail | RunSummary) => void
@@ -1407,6 +1501,7 @@ function RunDetailDialog({
         </DialogDescription>
         <div className="min-h-0 min-w-0">
           <RunDetailPanel
+            runs={runs}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={onRetry}
@@ -1418,33 +1513,52 @@ function RunDetailDialog({
 }
 
 function RunDetailPanel({
+  runs,
   selectedRun,
   manualRunSubmitting,
   onRetry,
+  onExpand,
 }: {
+  runs: RunSummary[]
   selectedRun: RunDetail | null
   manualRunSubmitting: boolean
   onRetry: (run: RunDetail | RunSummary) => void
+  onExpand?: () => void
 }) {
   const failureSummary = selectedRun ? runFailureSummary(selectedRun) : ""
   const failureHint = selectedRun ? runFailureHint(selectedRun) : ""
-  const canRetry = Boolean(selectedRun?.status === "failed" && selectedRun.issueIdentifier && selectedRun.projectKey)
+  const hasLaterSuccess = selectedRun ? hasLaterSucceededStageRun(selectedRun, runs) : false
+  const canRetry = Boolean(
+    selectedRun?.status === "failed" &&
+      selectedRun.issueIdentifier?.trim() &&
+      selectedRun.projectKey &&
+      !hasLaterSuccess,
+  )
+  const canExpand = Boolean(selectedRun && onExpand)
   return (
     <Card className="h-full min-h-0 min-w-0 overflow-hidden">
       <CardHeader className="shrink-0">
         <div className="flex items-center justify-between gap-2">
           <CardTitle>运行详情</CardTitle>
-          {selectedRun && canRetry && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onRetry(selectedRun)}
-              disabled={manualRunSubmitting}
-            >
-              <RefreshCcw className="size-4" />
-              {manualRunSubmitting ? "提交中" : "重试此事项"}
-            </Button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {canExpand && (
+              <Button size="sm" variant="outline" onClick={onExpand}>
+                <Maximize2 className="size-4" />
+                展开
+              </Button>
+            )}
+            {selectedRun && canRetry && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onRetry(selectedRun)}
+                disabled={manualRunSubmitting}
+              >
+                <RefreshCcw className="size-4" />
+                {manualRunSubmitting ? "提交中" : "重试此事项"}
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -1809,6 +1923,9 @@ function ProjectEditor({
           <Field label="阶段二提示词模式">
             <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
           </Field>
+          <Field label="阶段三提示词模式">
+            <ModeSelect value={project.part3PromptMode} onValueChange={(value) => onUpdate({ part3PromptMode: value })} />
+          </Field>
           <Field label="默认测试命令" description={projectFieldDescriptions.defaultTests} className="col-span-2">
             <Textarea
               className="min-h-24 font-mono text-xs"
@@ -1951,12 +2068,12 @@ function SettingsPage({
   prompts: PromptBundle
   projectKeys: string[]
   promptScope: string
-  promptStage: "part1" | "part2"
+  promptStage: PromptStage
   promptText: string
   setConfig: (config: AppConfig) => void
   saveConfig: () => void
   setPromptScope: (scope: string) => void
-  setPromptStage: (stage: "part1" | "part2") => void
+  setPromptStage: (stage: PromptStage) => void
   setPromptText: (text: string) => void
   savePrompt: () => void
   busy: boolean
@@ -2033,7 +2150,7 @@ function SettingsPage({
                 }
               />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <Field label="阶段一沙箱">
                 <Input
                   value={config.codex.part1Sandbox}
@@ -2050,6 +2167,14 @@ function SettingsPage({
                   }
                 />
               </Field>
+              <Field label="阶段三沙箱">
+                <Input
+                  value={config.codex.part3Sandbox}
+                  onChange={(event) =>
+                    setConfig({ ...config, codex: { ...config.codex, part3Sandbox: event.target.value } })
+                  }
+                />
+              </Field>
             </div>
           </CardContent>
         </Card>
@@ -2061,7 +2186,7 @@ function SettingsPage({
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；阶段二只扫描已排期状态。Ready for Codex 到 On Schedule 需要用户人工批准。
+            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；阶段二只扫描已排期状态；阶段三只扫描 Testing。Ready for Codex 到 On Schedule 需要用户人工批准，阶段三完成后最小支持流转到 Ready for Review 或回到 On Schedule。
           </p>
           <div className="grid grid-cols-4 gap-3">
             {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
@@ -2093,10 +2218,11 @@ function SettingsPage({
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-3">
-            <Tabs value={promptStage} onValueChange={(value) => setPromptStage(value as "part1" | "part2")}>
+            <Tabs value={promptStage} onValueChange={(value) => setPromptStage(value as PromptStage)}>
               <TabsList>
                 <TabsTrigger value="part1">阶段一</TabsTrigger>
                 <TabsTrigger value="part2">阶段二</TabsTrigger>
+                <TabsTrigger value="part3">阶段三</TabsTrigger>
               </TabsList>
             </Tabs>
             <Select value={promptScope} onValueChange={setPromptScope}>
@@ -2107,7 +2233,11 @@ function SettingsPage({
                 <SelectItem value="global">全局</SelectItem>
                 {projectKeys.map((key) => (
                   <SelectItem key={key} value={key}>
-                    {prompts.projects[key]?.part1IsOverride || prompts.projects[key]?.part2IsOverride ? `${key}` : key}
+                    {prompts.projects[key]?.part1IsOverride ||
+                    prompts.projects[key]?.part2IsOverride ||
+                    prompts.projects[key]?.part3IsOverride
+                      ? `${key}`
+                      : key}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -2282,6 +2412,7 @@ function StatusBadge({ status }: { status: string }) {
 function stageLabel(stage: string) {
   if (stage === "part1") return "阶段一"
   if (stage === "part2") return "阶段二"
+  if (stage === "part3") return "阶段三"
   if (stage === "both") return "全部"
   return stage
 }
@@ -2324,7 +2455,8 @@ function statusConfigLabel(key: keyof AppConfig["statuses"]) {
     ready: "可交给 Codex",
     schedule: "已排期",
     inProgress: "处理中",
-    testing: "测试",
+    testing: "待自动复查",
+    readyForReview: "待人工评审",
   }
   return labels[key]
 }

@@ -11,7 +11,12 @@ const SUPERVISOR_PATH = path.join(__dirname, "codex-supervisor.mjs")
 export async function runCodex({ config, project, stage, run, prompt, store, signal, onChild }) {
   await fs.writeFile(run.promptPath, prompt)
 
-  const sandbox = stage === "part1" ? config.codex.part1Sandbox : config.codex.part2Sandbox
+  const sandbox =
+    stage === "part1"
+      ? config.codex.part1Sandbox
+      : stage === "part2"
+        ? config.codex.part2Sandbox
+        : config.codex.part3Sandbox
   const defaultArgs = normalizeCodexDefaultArgs(config.codex.defaultArgs)
   const configuredCodexBin = config.codex.bin || "codex"
   const resolvedCodexBin = await resolveExecutable(configuredCodexBin, {

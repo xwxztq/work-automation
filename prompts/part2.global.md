@@ -59,8 +59,8 @@ Codex Handoff
 - 完成后创建一个只包含相关改动的 scoped commit。
 
 完成要求:
-- 将这个 issue 移动到 `{{STATUS_TESTING}}`，等待人工验证。
-- 评论需要包含摘要、变更文件、测试、手动验证、提交和风险。
+- 将这个 issue 移动到 `{{STATUS_TESTING}}`，进入阶段三 Auto Review。
+- 评论需要包含摘要、变更文件、测试、手动验证、Review 基线、提交和风险。
 
 6. 检查本地仓库:
    - 读 AGENTS.md、README、项目说明和已有开发约定。
@@ -92,6 +92,9 @@ Codex Implementation Complete
 手动验证:
 1. <中文步骤>
 
+Review 基线:
+- <新增功能写 `spec-only`；已有功能写 `commit-parent` 或现有产物路径>
+
 提交:
 - <commit hash and message>
 
@@ -102,7 +105,7 @@ Diff 检查:
 - <风险或“暂无已知风险”>
 
 状态:
-已移动到 `{{STATUS_TESTING}}`，等待人工验证。
+已移动到 `{{STATUS_TESTING}}`，等待阶段三 Auto Review。
 
 COMPLETE 状态流转:
 - 写入上述评论。

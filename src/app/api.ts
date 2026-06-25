@@ -4,6 +4,7 @@ import type {
   DaemonStatus,
   ExecutionEvent,
   LinearProjectListResponse,
+  PromptStage,
   PromptBundle,
   RunDetail,
   RunListResponse,
@@ -35,7 +36,7 @@ export const api = {
       method: "POST",
     }),
   getPrompts: () => request<PromptBundle>("/api/prompts"),
-  savePrompt: (scope: string, stage: "part1" | "part2", content: string) =>
+  savePrompt: (scope: string, stage: PromptStage, content: string) =>
     request<{ filePath: string }>(`/api/prompts/${scope}/${stage}`, {
       method: "PUT",
       body: JSON.stringify({ content }),

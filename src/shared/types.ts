@@ -1,4 +1,5 @@
-export type Stage = "part1" | "part2" | "both"
+export type PromptStage = "part1" | "part2" | "part3"
+export type Stage = PromptStage | "both"
 
 export type LinearProjectOption = {
   id: string
@@ -20,6 +21,7 @@ export type ProjectConfig = {
   defaultTests: string[]
   part1PromptMode: "global" | "override"
   part2PromptMode: "global" | "override"
+  part3PromptMode: "global" | "override"
   extraRules: string
 }
 
@@ -37,6 +39,7 @@ export type AppConfig = {
     defaultArgs: string[]
     part1Sandbox: string
     part2Sandbox: string
+    part3Sandbox: string
   }
   statuses: {
     todo: string
@@ -46,6 +49,7 @@ export type AppConfig = {
     schedule: string
     inProgress: string
     testing: string
+    readyForReview: string
   }
   projects: ProjectConfig[]
 }
@@ -54,14 +58,17 @@ export type PromptBundle = {
   global: {
     part1: string
     part2: string
+    part3: string
   }
   projects: Record<
     string,
     {
       part1: string
       part2: string
+      part3: string
       part1IsOverride: boolean
       part2IsOverride: boolean
+      part3IsOverride: boolean
     }
   >
 }
@@ -69,7 +76,7 @@ export type PromptBundle = {
 export type RunSummary = {
   id: string
   projectKey: string
-  stage: "part1" | "part2"
+  stage: PromptStage
   issueIdentifier: string
   issueTitle: string
   status: "running" | "succeeded" | "failed" | "canceled"
