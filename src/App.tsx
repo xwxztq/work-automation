@@ -6,6 +6,7 @@ import {
   CircleDot,
   FileJson,
   FolderGit2,
+  Maximize2,
   Pencil,
   Play,
   Plus,
@@ -1013,10 +1014,10 @@ function ProjectView({
   const [runDialogOpen, setRunDialogOpen] = useState(false)
 
   useEffect(() => {
-    if (!shouldUseRunDialog) {
+    if (!selectedRun) {
       setRunDialogOpen(false)
     }
-  }, [shouldUseRunDialog])
+  }, [selectedRun])
 
   const handleRunSelect = async (id: string) => {
     const loaded = await loadRun(id)
@@ -1145,6 +1146,7 @@ function ProjectView({
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={retryRun}
+            onExpand={() => setRunDialogOpen(true)}
           />
         </div>
       </div>
@@ -1201,6 +1203,13 @@ function GlobalActivityView({
   }, [activeRuns, agents])
   const lastRun = runs[0]
   const globalDescription = globalRoomDescription(agents, activeRuns, lastRun)
+  const [runDialogOpen, setRunDialogOpen] = useState(false)
+
+  useEffect(() => {
+    if (!selectedRun) {
+      setRunDialogOpen(false)
+    }
+  }, [selectedRun])
 
   if (projects.length === 0) {
     return (
@@ -1237,13 +1246,24 @@ function GlobalActivityView({
       />
 
       {selectedRun && (
-        <div className="h-[360px] min-h-0">
-          <RunDetailPanel
+        <>
+          <div className="h-[360px] min-h-0">
+            <RunDetailPanel
+              selectedRun={selectedRun}
+              manualRunSubmitting={manualRunSubmitting}
+              onRetry={retryRun}
+              onExpand={() => setRunDialogOpen(true)}
+            />
+          </div>
+
+          <RunDetailDialog
+            open={runDialogOpen}
+            onOpenChange={setRunDialogOpen}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={retryRun}
           />
-        </div>
+        </>
       )}
     </div>
   )
@@ -1431,30 +1451,41 @@ function RunDetailPanel({
   selectedRun,
   manualRunSubmitting,
   onRetry,
+  onExpand,
 }: {
   selectedRun: RunDetail | null
   manualRunSubmitting: boolean
   onRetry: (run: RunDetail | RunSummary) => void
+  onExpand?: () => void
 }) {
   const failureSummary = selectedRun ? runFailureSummary(selectedRun) : ""
   const failureHint = selectedRun ? runFailureHint(selectedRun) : ""
   const canRetry = Boolean(selectedRun?.status === "failed" && selectedRun.issueIdentifier && selectedRun.projectKey)
+  const canExpand = Boolean(selectedRun && onExpand)
   return (
     <Card className="h-full min-h-0 min-w-0 overflow-hidden">
       <CardHeader className="shrink-0">
         <div className="flex items-center justify-between gap-2">
           <CardTitle>运行详情</CardTitle>
-          {selectedRun && canRetry && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onRetry(selectedRun)}
-              disabled={manualRunSubmitting}
-            >
-              <RefreshCcw className="size-4" />
-              {manualRunSubmitting ? "提交中" : "重试此事项"}
-            </Button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {canExpand && (
+              <Button size="sm" variant="outline" onClick={onExpand}>
+                <Maximize2 className="size-4" />
+                展开
+              </Button>
+            )}
+            {selectedRun && canRetry && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onRetry(selectedRun)}
+                disabled={manualRunSubmitting}
+              >
+                <RefreshCcw className="size-4" />
+                {manualRunSubmitting ? "提交中" : "重试此事项"}
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
