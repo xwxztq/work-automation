@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { ensureDir, fileExists } from "./config.mjs"
 
-const STAGES = new Set(["part1", "part2"])
+const STAGES = new Set(["part1", "part2", "part3"])
 
 export function promptPath(rootDir, scope, stage) {
   if (!STAGES.has(stage)) {
@@ -33,14 +33,17 @@ export async function readAllPrompts(rootDir, projects) {
   const global = {
     part1: await readPrompt(rootDir, "global", "part1"),
     part2: await readPrompt(rootDir, "global", "part2"),
+    part3: await readPrompt(rootDir, "global", "part3"),
   }
   const projectPrompts = {}
   for (const project of projects) {
     projectPrompts[project.key] = {
       part1: await readPrompt(rootDir, project.key, "part1"),
       part2: await readPrompt(rootDir, project.key, "part2"),
+      part3: await readPrompt(rootDir, project.key, "part3"),
       part1IsOverride: await fileExists(promptPath(rootDir, project.key, "part1")),
       part2IsOverride: await fileExists(promptPath(rootDir, project.key, "part2")),
+      part3IsOverride: await fileExists(promptPath(rootDir, project.key, "part3")),
     }
   }
   return { global, projects: projectPrompts }
@@ -74,6 +77,7 @@ export function buildPromptContext(config, project) {
     STATUS_SCHEDULE: statuses.schedule,
     STATUS_IN_PROGRESS: statuses.inProgress,
     STATUS_TESTING: statuses.testing,
+    STATUS_READY_FOR_REVIEW: statuses.readyForReview,
   }
 }
 

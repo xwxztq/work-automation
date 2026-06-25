@@ -10,7 +10,8 @@
     "bin": "codex",
     "defaultArgs": ["--json", "--skip-git-repo-check"],
     "part1Sandbox": "read-only",
-    "part2Sandbox": "danger-full-access"
+    "part2Sandbox": "danger-full-access",
+    "part3Sandbox": "read-only"
   },
   "statuses": {
     "todo": "Todo",
@@ -19,7 +20,8 @@
     "ready": "Ready for Codex",
     "schedule": "On Schedule",
     "inProgress": "In Progress",
-    "testing": "Testing"
+    "testing": "Testing",
+    "readyForReview": "Ready for Review"
   },
   "projects": []
 }

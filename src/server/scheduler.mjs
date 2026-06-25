@@ -62,6 +62,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
             key: project.key,
             part1: [],
             part2: [],
+            part3: [],
             skipped: [],
             error: message,
           }
@@ -87,6 +88,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       key: project.key,
       part1: [],
       part2: [],
+      part3: [],
       skipped: [],
     }
     const controller = new AbortController()
@@ -145,6 +147,21 @@ export function createScheduler({ rootDir, configProvider, store }) {
                 signal: controller.signal,
               }),
           }),
+          runProjectStageBranch({
+            project,
+            stage: "part3",
+            projectSummary,
+            run: () =>
+              runProjectPart3({
+                config,
+                project,
+                linear,
+                projectSummary,
+                issueId,
+                force,
+                signal: controller.signal,
+              }),
+          }),
         ])
       } else if (effectiveStage === "part1") {
         await runProjectPart1({
@@ -158,6 +175,16 @@ export function createScheduler({ rootDir, configProvider, store }) {
         })
       } else if (!controller.signal.aborted && effectiveStage === "part2") {
         await runProjectPart2({
+          config,
+          project,
+          linear,
+          projectSummary,
+          issueId,
+          force,
+          signal: controller.signal,
+        })
+      } else if (!controller.signal.aborted && effectiveStage === "part3") {
+        await runProjectPart3({
           config,
           project,
           linear,
@@ -185,6 +212,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         data: {
           part1: projectSummary.part1.length,
           part2: projectSummary.part2.length,
+          part3: projectSummary.part3.length,
           skipped: projectSummary.skipped.length,
         },
       })
@@ -279,6 +307,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
       effectiveStage = "part1"
     } else if (stateName === config.statuses.schedule) {
       effectiveStage = "part2"
+    } else if (stateName === config.statuses.testing) {
+      effectiveStage = "part3"
     }
 
     if (effectiveStage) {
@@ -305,15 +335,16 @@ export function createScheduler({ rootDir, configProvider, store }) {
       projectKey: project.key,
       issueIdentifier: issue.identifier,
       message: `${issue.identifier} 当前状态 ${stateName || "未知"} 不属于手动执行可路由阶段，跳过`,
-        data: {
-          issueId,
-          state: stateName,
-          part1Statuses: [...eligiblePart1Statuses],
-          part2Status: config.statuses.schedule,
-          force,
-        },
-      })
-      return null
+      data: {
+        issueId,
+        state: stateName,
+        part1Statuses: [...eligiblePart1Statuses],
+        part2Status: config.statuses.schedule,
+        part3Status: config.statuses.testing,
+        force,
+      },
+    })
+    return null
   }
 
   async function runProjectPart1({ config, project, linear, projectSummary, issueId, force = false, signal }) {
@@ -522,6 +553,74 @@ export function createScheduler({ rootDir, configProvider, store }) {
       })
       const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
       projectSummary.part2.push({ issue: issue.identifier, result: finalizedRun.status })
+    }
+  }
+
+  async function runProjectPart3({ config, project, linear, projectSummary, issueId, force = false, signal }) {
+    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const candidates = issueId
+      ? issues.filter((issue) => issueMatchesId(issue, issueId))
+      : issues.filter((issue) => issue.state?.name === config.statuses.testing)
+
+    await logEvent({
+      type: "part3-candidates",
+      stage: "part3",
+      projectKey: project.key,
+      message: `阶段三候选 ${candidates.length} 个`,
+      data: {
+        issueCount: issues.length,
+        candidateCount: candidates.length,
+        issueId,
+        force,
+      },
+    })
+
+    for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
+      if (signal.aborted) {
+        await logEvent({
+          type: "part3-aborted",
+          level: "warn",
+          stage: "part3",
+          projectKey: project.key,
+          message: "阶段三项目信号已中止，停止处理后续候选",
+        })
+        break
+      }
+
+      const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
+      if (!force && issue.state?.name !== config.statuses.testing) {
+        projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.testing}`)
+        await logEvent({
+          type: "part3-skip-state-changed",
+          stage: "part3",
+          projectKey: project.key,
+          issueIdentifier: issue.identifier,
+          message: `${issue.identifier} 状态已不是 ${config.statuses.testing}，跳过`,
+          data: { state: issue.state?.name },
+        })
+        continue
+      }
+      if (!force && !issueId && (await skipUnchangedIssue({ project, issue, stage: "part3", projectSummary }))) {
+        continue
+      }
+
+      await logEvent({
+        type: "run-queue",
+        stage: "part3",
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        message: `${issue.identifier} 进入阶段三执行`,
+        data: { state: issue.state?.name },
+      })
+      const result = await executeCodexStage({
+        config,
+        project,
+        issue,
+        stage: "part3",
+        signal,
+      })
+      const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "part3", run: result })
+      projectSummary.part3.push({ issue: issue.identifier, result: finalizedRun.status })
     }
   }
 
@@ -1075,14 +1174,13 @@ export function createScheduler({ rootDir, configProvider, store }) {
   }
 
   async function buildStagePrompt({ config, project, issue, stage }) {
-    const scope =
+    const promptMode =
       stage === "part1"
-        ? project.part1PromptMode === "override"
-          ? project.key
-          : "global"
-        : project.part2PromptMode === "override"
-          ? project.key
-          : "global"
+        ? project.part1PromptMode
+        : stage === "part2"
+          ? project.part2PromptMode
+          : project.part3PromptMode
+    const scope = promptMode === "override" ? project.key : "global"
     const template = await readPrompt(rootDir, scope, stage)
     const context = buildPromptContext(config, project)
     return `${renderPrompt(template, context)}
@@ -1501,6 +1599,7 @@ function linearIssueNumber(issue) {
 function stageLabel(stage) {
   if (stage === "part1") return "阶段一"
   if (stage === "part2") return "阶段二"
+  if (stage === "part3") return "阶段三"
   if (stage === "both") return "全部"
   return stage
 }

@@ -93,6 +93,7 @@ const WORKSTATION_STACKED_FRONT_ROW_Y_RATIO = 0.82
 const WORKSTATION_BACK_ROW_Y_RATIO = 0.59
 const PART1_BUBBLE_TONE = "#c59a4a"
 const PART2_BUBBLE_TONE = "#5f9a94"
+const PART3_BUBBLE_TONE = "#a26d57"
 const MODERN_DESK_LAMP_SOURCE: PixelSpriteRect = { x: 528, y: 720, width: 48, height: 72 }
 const MODERN_WATER_COOLER_SOURCE: PixelSpriteRect = { x: 576, y: 736, width: 48, height: 128 }
 const WALL_FURNITURE_BASE_DEPTH_PX = 28
@@ -1989,6 +1990,7 @@ function bubbleTone(motion: CodexActivityMotion, stage?: string) {
 function stageBubbleTone(stage: string | undefined) {
   if (stage === "part1") return PART1_BUBBLE_TONE
   if (stage === "part2") return PART2_BUBBLE_TONE
+  if (stage === "part3") return PART3_BUBBLE_TONE
   return null
 }
 

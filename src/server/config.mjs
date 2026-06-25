@@ -88,6 +88,7 @@ export function normalizeConfig(raw) {
       defaultTests: [],
       part1PromptMode: "global",
       part2PromptMode: "global",
+      part3PromptMode: "global",
       extraRules: "无额外项目规则。",
       ...project,
       defaultTests: Array.isArray(project.defaultTests)
@@ -187,6 +188,7 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
     "schedule",
     "inProgress",
     "testing",
+    "readyForReview",
   ]) {
     if (!config.statuses?.[statusKey]?.trim()) {
       errors.push(`必须填写 statuses.${statusKey}。`)
