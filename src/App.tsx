@@ -1332,9 +1332,9 @@ function RunHistoryCard({
         </div>
       </CardHeader>
       <CardContent className="min-h-0 flex-1 overflow-hidden">
-        <ScrollArea className="h-full rounded-lg border">
+        <div className="h-full overflow-auto rounded-lg border">
           <RunTable runs={runs} loadRun={loadRun} />
-        </ScrollArea>
+        </div>
       </CardContent>
     </Card>
   )
@@ -1342,41 +1342,47 @@ function RunHistoryCard({
 
 function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string) => void }) {
   return (
-    <Table>
+    <Table className="table-fixed">
       <TableHeader className="sticky top-0 z-10 bg-card">
         <TableRow>
-          <TableHead>事项</TableHead>
-          <TableHead>阶段</TableHead>
-          <TableHead>状态</TableHead>
-          <TableHead>时间</TableHead>
+          <TableHead className="whitespace-normal">事项</TableHead>
+          <TableHead className="w-20">阶段</TableHead>
+          <TableHead className="w-24">状态</TableHead>
+          <TableHead className="w-36">时间</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {runs.map((run) => (
-          <TableRow
-            key={run.id}
-            className="cursor-pointer"
-            title={`更新时间: ${formatDate(run.updatedAt)}`}
-            onClick={() => loadRun(run.id)}
-          >
-            <TableCell>
-              <div className="font-mono text-xs">{run.issueIdentifier}</div>
-              <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
-              {run.status === "failed" && runFailureSummary(run) && (
-                <div className="mt-1 max-w-[320px] truncate text-xs text-destructive">
-                  {runFailureSummary(run)}
+        {runs.map((run) => {
+          const failureSummary = run.status === "failed" ? runFailureSummary(run) : ""
+
+          return (
+            <TableRow
+              key={run.id}
+              className="cursor-pointer"
+              title={`更新时间: ${formatDate(run.updatedAt)}`}
+              onClick={() => loadRun(run.id)}
+            >
+              <TableCell className="align-top whitespace-normal">
+                <div className="font-mono text-xs break-all">{run.issueIdentifier}</div>
+                <div className="mt-1 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                  {run.issueTitle}
                 </div>
-              )}
-            </TableCell>
-            <TableCell>{stageLabel(run.stage)}</TableCell>
-            <TableCell>
-              <StatusBadge status={run.status} />
-            </TableCell>
-            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-              {formatDate(run.updatedAt)}
-            </TableCell>
-          </TableRow>
-        ))}
+                {failureSummary && (
+                  <div className="mt-1 text-xs leading-5 text-destructive [overflow-wrap:anywhere]">
+                    {failureSummary}
+                  </div>
+                )}
+              </TableCell>
+              <TableCell className="align-top whitespace-nowrap">{stageLabel(run.stage)}</TableCell>
+              <TableCell className="align-top whitespace-nowrap">
+                <StatusBadge status={run.status} />
+              </TableCell>
+              <TableCell className="align-top whitespace-nowrap text-xs text-muted-foreground">
+                {formatDate(run.updatedAt)}
+              </TableCell>
+            </TableRow>
+          )
+        })}
         {runs.length === 0 && (
           <TableRow>
             <TableCell colSpan={4} className="text-muted-foreground">
