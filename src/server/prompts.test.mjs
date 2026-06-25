@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import path from "node:path"
 
 import {
   buildIssueReviewPromptContext,
@@ -7,6 +8,7 @@ import {
   buildRunPromptContext,
   findLatestCommentByMarker,
   formatPromptComments,
+  readPrompt,
 } from "./prompts.mjs"
 
 test("buildRunPromptContext exposes absolute and relative part3 paths", () => {
@@ -128,4 +130,12 @@ test("formatPromptComments keeps recent comment blocks readable", () => {
 
   assert.match(text, /2026-06-25T07:00:00.000Z jack/)
   assert.match(text, /Second/)
+})
+
+test("part3 prompt requires inline review artifact content in Linear comments", async () => {
+  const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part3")
+
+  assert.match(prompt, /不能只给路径/u)
+  assert.match(prompt, /Review 摘要:/u)
+  assert.match(prompt, /关键产物内容:/u)
 })

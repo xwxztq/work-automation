@@ -24,7 +24,10 @@
 - Linear 是 issue 状态、讨论和用户决策的唯一来源。
 - 如果当前 issue 已不在 `{{STATUS_TESTING}}`，不要重复评论，只在最终回复说明跳过。
 - 如果实现结果缺少必要上下文、测试记录或仓库状态无法判断，移动到 `{{STATUS_BLOCKED}}` 或退回 `{{STATUS_SCHEDULE}}`，并写清楚原因。
-- 如果已经生成 review 摘要、对比文件或基线说明，在评论里优先用相对于 Work Automation 根目录的路径引用，例如 `{{CURRENT_REVIEW_DIR_RELATIVE}}/summary.md`；如果没有，明确写 `无`。
+- 写 Linear 评论前，先重新读取已经生成的 `review/summary.md`、关键 `.notes.md` / `.diff.md` / 对比文件，把核心结论直接整理进评论；仓库相对路径只作为溯源补充，不能只给路径。
+- `Review 摘要` 必须直接展示 `review/summary.md` 的核心结论、检查项和验证结果；如果原文较长，提炼成简洁要点，但不要只写“见 summary.md”。
+- `关键产物内容` 必须直接展示关键产物里的结论或缺失说明；如果某类产物不适用，明确写原因。
+- `Review 产物` 仍要附上相对于 Work Automation 根目录的路径，例如 `{{CURRENT_REVIEW_DIR_RELATIVE}}/summary.md`，方便后续追溯；如果没有，明确写 `无`。
 - 所有面向人的 Linear 评论使用简体中文；固定 marker 行保持英文。
 
 项目规则:
@@ -85,6 +88,12 @@ Codex Auto Review Complete
 检查项:
 - <本轮确认的要点>
 
+Review 摘要:
+- <直接整理 `summary.md` 的核心结论、检查项和验证结果，不要只写路径>
+
+关键产物内容:
+- <直接整理关键 `.notes.md` / `.diff.md` / 对比文件里的结论；不适用时写原因>
+
 Review 产物:
 - <review/summary.md 或关键对比文件路径；没有则写“无”>
 
@@ -101,6 +110,12 @@ Codex Auto Review Rework
 原因:
 - <需要返工的问题>
 
+Review 摘要:
+- <直接整理 `summary.md` 的返工结论、验证结果和关键证据，不要只写路径>
+
+关键产物内容:
+- <直接整理关键 `.notes.md` / `.diff.md` / 对比文件里的问题；不适用时写原因>
+
 Review 产物:
 - <review/summary.md 或关键对比文件路径；没有则写“无”>
 
@@ -113,6 +128,12 @@ Codex Auto Review Blocked
 
 原因:
 - <阻塞原因>
+
+Review 摘要:
+- <直接整理 `summary.md` 里导致阻塞的事实和已完成检查，不要只写路径>
+
+关键产物内容:
+- <直接整理关键 `.notes.md` / `.diff.md` / 对比文件里的阻塞证据；不适用时写原因>
 
 Review 产物:
 - <review/summary.md 或关键对比文件路径；没有则写“无”>
