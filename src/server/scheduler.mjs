@@ -5,6 +5,7 @@ import {
   diagnoseCodexLinearAuthFailure,
   isCodexLinearAuthFailureRun,
 } from "./linear-auth-diagnostics.mjs"
+import { diagnoseLinearWriteVerification } from "./linear-write-verification.mjs"
 import { buildPromptContext, readPrompt, renderPrompt } from "./prompts.mjs"
 
 export function createScheduler({ rootDir, configProvider, store }) {
@@ -42,12 +43,13 @@ export function createScheduler({ rootDir, configProvider, store }) {
       data: {
         enabledProjectCount: projects.length,
         issueId: options.issueId,
+        force: Boolean(options.force),
       },
     })
 
     summary.projects = await Promise.all(
       projects.map((project) =>
-        runProjectCycle({ config, project, linear, stage, issueId: options.issueId }).catch(async (error) => {
+        runProjectCycle({ config, project, linear, stage, issueId: options.issueId, force: Boolean(options.force) }).catch(async (error) => {
           const message = error instanceof Error ? error.message : String(error)
           await logEvent({
             type: "project-error",
@@ -80,7 +82,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     return summary
   }
 
-  async function runProjectCycle({ config, project, linear, stage, issueId }) {
+  async function runProjectCycle({ config, project, linear, stage, issueId, force = false }) {
     const projectSummary = {
       key: project.key,
       part1: [],
@@ -102,11 +104,11 @@ export function createScheduler({ rootDir, configProvider, store }) {
         stage,
         projectKey: project.key,
         message: "项目扫描开始",
-        data: { issueId },
+        data: { issueId, force },
       })
       const effectiveStage =
         issueId && stage === "both"
-          ? await resolveManualIssueStage({ config, project, linear, projectSummary, issueId })
+          ? await resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force })
           : stage
       if (!effectiveStage) {
         return projectSummary
@@ -124,6 +126,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
                 linear,
                 projectSummary,
                 issueId,
+                force,
                 signal: controller.signal,
               }),
           }),
@@ -138,6 +141,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
                 linear,
                 projectSummary,
                 issueId,
+                force,
                 signal: controller.signal,
               }),
           }),
@@ -149,6 +153,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           linear,
           projectSummary,
           issueId,
+          force,
           signal: controller.signal,
         })
       } else if (!controller.signal.aborted && effectiveStage === "part2") {
@@ -158,6 +163,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           linear,
           projectSummary,
           issueId,
+          force,
           signal: controller.signal,
         })
       }
@@ -204,7 +210,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     }
   }
 
-  async function resolveManualIssueStage({ config, project, linear, projectSummary, issueId }) {
+  async function resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force = false }) {
     let issue
     try {
       issue = await linear.getIssue(issueId)
@@ -218,6 +224,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message: `未找到手动指定 issue: ${issueId}`,
         data: {
           issueId,
+          force,
           error: error instanceof Error ? error.message : String(error),
         },
       })
@@ -239,6 +246,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         data: {
           issueId,
           configuredProjectId: project.linearProjectId,
+          force,
           error: error instanceof Error ? error.message : String(error),
         },
       })
@@ -258,6 +266,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           issueProjectId: issue.project?.id || null,
           configuredProjectId: project.linearProjectId,
           projectId: linearProject.id,
+          force,
         },
       })
       return null
@@ -283,6 +292,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           issueId,
           state: stateName,
           effectiveStage,
+          force,
         },
       })
       return effectiveStage
@@ -295,17 +305,18 @@ export function createScheduler({ rootDir, configProvider, store }) {
       projectKey: project.key,
       issueIdentifier: issue.identifier,
       message: `${issue.identifier} 当前状态 ${stateName || "未知"} 不属于手动执行可路由阶段，跳过`,
-      data: {
-        issueId,
-        state: stateName,
-        part1Statuses: [...eligiblePart1Statuses],
-        part2Status: config.statuses.schedule,
-      },
-    })
-    return null
+        data: {
+          issueId,
+          state: stateName,
+          part1Statuses: [...eligiblePart1Statuses],
+          part2Status: config.statuses.schedule,
+          force,
+        },
+      })
+      return null
   }
 
-  async function runProjectPart1({ config, project, linear, projectSummary, issueId, signal }) {
+  async function runProjectPart1({ config, project, linear, projectSummary, issueId, force = false, signal }) {
     const { issues } = await linear.listProjectIssues(project.linearProjectId)
     const eligibleStatuses = part1EligibleStatuses(config)
     const candidates = issueId
@@ -322,6 +333,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         candidateCount: candidates.length,
         eligibleStatuses: [...eligibleStatuses],
         issueId,
+        force,
       },
     })
 
@@ -334,6 +346,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           projectSummary,
           eligibleStatuses,
           issueId,
+          force,
           issueRef,
           signal,
         }),
@@ -349,6 +362,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     projectSummary,
     eligibleStatuses,
     issueId,
+    force,
     issueRef,
     signal,
   }) {
@@ -367,7 +381,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
 
     try {
       const issue = await linear.getIssue(issueIdentifier)
-      if (!eligibleStatuses.has(issue.state?.name)) {
+      if (!force && !eligibleStatuses.has(issue.state?.name)) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是阶段一队列状态`)
         await logEvent({
           type: "part1-skip-state-changed",
@@ -379,7 +393,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         })
         return null
       }
-      if (!issueId && (await skipUnchangedIssue({ project, issue, stage: "part1", projectSummary }))) {
+      if (!force && !issueId && (await skipUnchangedIssue({ project, issue, stage: "part1", projectSummary }))) {
         return null
       }
       if (signal.aborted) {
@@ -403,8 +417,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
         data: { state: issue.state?.name },
       })
       const result = await executeCodexStage({ config, project, issue, stage: "part1", signal })
-      await recordProcessedIssue({ linear, project, issue, stage: "part1", run: result })
-      return { issue: issue.identifier, result: result.status }
+      const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "part1", run: result })
+      return { issue: issue.identifier, result: finalizedRun.status }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await logEvent({
@@ -419,7 +433,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     }
   }
 
-  async function runProjectPart2({ config, project, linear, projectSummary, issueId, signal }) {
+  async function runProjectPart2({ config, project, linear, projectSummary, issueId, force = false, signal }) {
     const { issues } = await linear.listProjectIssues(project.linearProjectId)
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
@@ -439,6 +453,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         localActivePart2Count: activeStats.localActivePart2Count,
         maxActivePart2: project.maxActivePart2,
         issueId,
+        force,
       },
     })
 
@@ -455,7 +470,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       }
 
       const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
-      if (issue.state?.name !== config.statuses.schedule) {
+      if (!force && issue.state?.name !== config.statuses.schedule) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.schedule}`)
         await logEvent({
           type: "part2-skip-state-changed",
@@ -485,7 +500,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         })
         break
       }
-      if (!issueId && (await skipUnchangedIssue({ project, issue, stage: "part2", projectSummary }))) {
+      if (!force && !issueId && (await skipUnchangedIssue({ project, issue, stage: "part2", projectSummary }))) {
         continue
       }
 
@@ -505,8 +520,8 @@ export function createScheduler({ rootDir, configProvider, store }) {
         signal,
         enforceLocalPart2Limit: true,
       })
-      await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
-      projectSummary.part2.push({ issue: issue.identifier, result: result.status })
+      const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
+      projectSummary.part2.push({ issue: issue.identifier, result: finalizedRun.status })
     }
   }
 
@@ -667,7 +682,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
 
   async function recordProcessedIssue({ linear, project, issue, stage, run }) {
     if (!run?.id || run.status === "already-running" || run.status === "canceled") {
-      return
+      return run
     }
     if (isCodexStartupFailureRun(run)) {
       await logEvent({
@@ -684,7 +699,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           startupError: run.startupError || run.error || null,
         },
       })
-      return
+      return run
     }
     if (isCodexLinearAuthFailureRun(run)) {
       await logEvent({
@@ -703,12 +718,14 @@ export function createScheduler({ rootDir, configProvider, store }) {
           action: run.failureAction || null,
         },
       })
-      return
+      return run
     }
     let latestIssue = issue
+    let refreshErrorMessage = null
     try {
       latestIssue = await linear.getIssue(issue.identifier || issue.id)
     } catch (error) {
+      refreshErrorMessage = error instanceof Error ? error.message : String(error)
       await logEvent({
         type: "processed-refresh-failed",
         level: "warn",
@@ -716,8 +733,39 @@ export function createScheduler({ rootDir, configProvider, store }) {
         projectKey: project.key,
         issueIdentifier: issue.identifier,
         runId: run.id,
-        message: error instanceof Error ? error.message : String(error),
+        message: refreshErrorMessage,
       })
+    }
+    if (run.status === "succeeded") {
+      const verification = diagnoseLinearWriteVerification({
+        beforeStateName: issue.state?.name,
+        afterStateName: latestIssue.state?.name,
+        refreshErrorMessage,
+      })
+      if (verification) {
+        run = await store.updateRun(run, {
+          status: "failed",
+          error: verification.message,
+          failureKind: verification.kind,
+          failureSummary: verification.summary,
+          failureAction: verification.action,
+          retryableFailure: verification.retryable,
+        })
+        await logEvent({
+          type: "run-linear-manual-required",
+          level: "error",
+          stage,
+          projectKey: project.key,
+          issueIdentifier: issue.identifier,
+          runId: run.id,
+          message: verification.summary,
+          data: {
+            beforeState: issue.state?.name || null,
+            afterState: latestIssue.state?.name || null,
+            refreshError: refreshErrorMessage,
+          },
+        })
+      }
     }
     const fingerprint = issueFingerprint(latestIssue)
     const entry = await store.setProcessedIssue({
@@ -743,6 +791,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         state: entry.stateName,
       },
     })
+    return run
   }
 
   async function getProcessedStartupFailureRun(processed) {
@@ -908,7 +957,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
       }
 
       const succeeded = codexResult.exitCode === 0
-      const startupError = codexResult.started ? null : codexResult.startError
+      const startupError = codexResult.started
+        ? null
+        : codexResult.startError || `Codex 子进程未成功启动（退出码 ${codexResult.exitCode}）`
       const fallbackError = startupError || `Codex 退出码为 ${codexResult.exitCode}`
       const authDiagnostic = succeeded
         ? null
@@ -943,7 +994,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           ? `${issue.identifier} ${stageLabel(stage)} 成功`
           : authDiagnostic
             ? `${issue.identifier} ${stageLabel(stage)}失败: ${authDiagnostic.summary}`
-            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? "启动失败" : "失败"}`,
+            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? `启动失败: ${startupError}` : `失败: ${fallbackError}`}`,
         data: {
           exitCode: codexResult.exitCode,
           runDir: run.dir,

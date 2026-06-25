@@ -1,5 +1,13 @@
 export type Stage = "part1" | "part2" | "both"
 
+export type LinearProjectOption = {
+  id: string
+  name: string
+  displayName: string
+  url: string | null
+  teamNames: string[]
+}
+
 export type ProjectConfig = {
   key: string
   enabled: boolean
@@ -95,7 +103,12 @@ export type RunRequestAccepted = {
   stage: Stage
   projectKey?: string | null
   issueId?: string | null
+  force?: boolean | null
   submittedAt: string
+}
+
+export type LinearProjectListResponse = {
+  projects: LinearProjectOption[]
 }
 
 export type RunDetail = RunSummary & {

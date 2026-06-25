@@ -13,7 +13,7 @@
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现；候选按 Linear 优先级语义排序：`Urgent`、`High`、`Medium`、`Low`、无优先级，同优先级按 issue 编号数字升序执行。
 - 服务端只负责扫描队列、启动独立 Codex supervisor、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
 - 多个项目并行执行；同一项目内阶段一、阶段二互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
-- 使用 `codex exec --json --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
+- 使用 `codex exec --json --skip-git-repo-check --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
 - 支持停止单个运行或当前项目的运行；后端热重启后会从 `.linear-automation/runs` 恢复仍在运行的任务。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
 - 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响，但仍会遵守阶段状态边界。
@@ -59,6 +59,8 @@
    [mcp_servers.linear.tools.save_comment]
    approval_mode = "approve"
    ```
+
+   服务端会默认附加 `--skip-git-repo-check`，避免目标仓库未被 Codex 标记为 trusted 时直接失败。
 
 5. 在 Linear 工作流中创建或确认这些状态名，并让 `config.local.json` 的 `statuses` 与 Linear 中的名称完全一致:
 
@@ -193,6 +195,12 @@ pnpm validate
 pnpm once -- --stage part1
 pnpm once -- --stage part2
 node src/server/index.mjs once --config config.local.json --stage both --issue LIV-123
+node src/server/index.mjs once --config config.local.json --stage part1 --issue LIV-123 --force
 ```
 
-手动指定 `--issue` 不会绕过状态边界：`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一或阶段二，不会对同一个 issue 同时启动两个阶段。
+手动指定 `--issue` 默认不会绕过状态边界：`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一或阶段二，不会对同一个 issue 同时启动两个阶段。
+
+如果需要人工强制重跑：
+
+- `--force` 会绕过“已处理快照”跳过。
+- `--force` 配合 `--issue` 且显式选择 `--stage part1` 或 `--stage part2` 时，会按所选阶段强制执行，不再检查当前 issue 是否仍在默认队列状态。

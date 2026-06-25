@@ -3,6 +3,7 @@ import type {
   CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
+  LinearProjectListResponse,
   PromptBundle,
   RunDetail,
   RunListResponse,
@@ -66,14 +67,18 @@ export const api = {
   getDaemonStatus: () => request<DaemonStatus>("/api/daemon/status"),
   startDaemon: () => request<DaemonStatus>("/api/daemon/start", { method: "POST" }),
   stopDaemon: () => request<DaemonStatus>("/api/daemon/stop", { method: "POST" }),
-  runOnce: (stage: Stage, projectKey?: string) =>
-    request<RunRequestAccepted>("/api/runs/once", { method: "POST", body: JSON.stringify({ stage, projectKey }) }),
-  runIssue: (stage: Stage, issueId: string, projectKey?: string) =>
+  runOnce: (stage: Stage, projectKey?: string, force = false) =>
+    request<RunRequestAccepted>("/api/runs/once", {
+      method: "POST",
+      body: JSON.stringify({ stage, projectKey, force }),
+    }),
+  runIssue: (stage: Stage, issueId: string, projectKey?: string, force = false) =>
     request<RunRequestAccepted>("/api/runs/issue", {
       method: "POST",
-      body: JSON.stringify({ stage, issueId, projectKey }),
+      body: JSON.stringify({ stage, issueId, projectKey, force }),
     }),
   cancelRun: (id: string) => request<unknown>(`/api/runs/${id}/cancel`, { method: "POST" }),
   cancelProject: (key: string) => request<unknown>(`/api/projects/${key}/cancel`, { method: "POST" }),
+  listLinearProjects: () => request<LinearProjectListResponse>("/api/linear/projects"),
   previewProject: (key: string) => request<unknown>(`/api/projects/${key}/linear-preview`),
 }

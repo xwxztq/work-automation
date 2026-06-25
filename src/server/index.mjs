@@ -25,7 +25,10 @@ if (command === "validate-config") {
 }
 
 if (command === "once") {
-  const summary = await scheduler.runOnce(args.stage || "both", { issueId: args.issue })
+  const summary = await scheduler.runOnce(args.stage || "both", {
+    issueId: args.issue,
+    force: Boolean(args.force),
+  })
   console.log(JSON.stringify(summary, null, 2))
   process.exit(0)
 }

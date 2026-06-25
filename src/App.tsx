@@ -78,6 +78,7 @@ import type {
   CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
+  LinearProjectOption,
   ProjectConfig,
   PromptBundle,
   RunDetail,
@@ -218,6 +219,7 @@ function App() {
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null)
   const [manualStage, setManualStage] = useState<Stage>("part1")
   const [manualIssue, setManualIssue] = useState("")
+  const [manualForce, setManualForce] = useState(false)
   const [busy, setBusy] = useState(false)
   const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
   const autoStartTried = useRef(false)
@@ -502,22 +504,34 @@ function App() {
     }
   }
 
-  async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string) {
+  async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string, force = false) {
     setManualRunSubmitting(true)
     try {
       if (issueId) {
-        await api.runIssue(stage, issueId, projectKey)
+        await api.runIssue(stage, issueId, projectKey, force)
       } else {
-        await api.runOnce(stage, projectKey)
+        await api.runOnce(stage, projectKey, force)
       }
       toast.success("执行已提交")
-      setManualRunSubmitting(false)
-      void refreshRuns()
+      if (view === "activity") {
+        void refreshGlobalActivity(true)
+      } else {
+        void refreshRuns(true, projectKey || selectedProjectKey)
+      }
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
       setManualRunSubmitting(false)
     }
+  }
+
+  function retryRun(run: RunDetail | RunSummary) {
+    const issueId = run.issueIdentifier?.trim()
+    if (!issueId) {
+      toast.error("当前运行记录缺少 issue 标识，无法重试")
+      return
+    }
+    void triggerOnce(run.stage as Stage, issueId, run.projectKey, true)
   }
 
   async function refreshRuns(silent = false, projectKey = selectedProjectKey) {
@@ -691,13 +705,16 @@ function App() {
                 selectedRun={selectedRun}
                 manualStage={manualStage}
                 manualIssue={manualIssue}
+                manualForce={manualForce}
                 busy={busy}
                 manualRunSubmitting={manualRunSubmitting}
                 setManualStage={setManualStage}
                 setManualIssue={setManualIssue}
+                setManualForce={setManualForce}
                 refreshRuns={() => void refreshRuns()}
                 loadRun={loadRun}
-                triggerOnce={(stage, issueId, projectKey) => void triggerOnce(stage, issueId, projectKey)}
+                triggerOnce={(stage, issueId, projectKey, force) => void triggerOnce(stage, issueId, projectKey, force)}
+                retryRun={retryRun}
                 cancelRun={(id) => void cancelRun(id)}
                 cancelProject={(key) => void cancelProject(key)}
                 editProject={(project) => openEditProject(project)}
@@ -714,8 +731,10 @@ function App() {
                 agents={globalCodexActivity.agents}
                 generatedAt={globalCodexActivity.generatedAt}
                 busy={busy}
+                manualRunSubmitting={manualRunSubmitting}
                 refreshActivity={() => void refreshGlobalActivity()}
                 loadRun={(id) => void loadRun(id)}
+                retryRun={retryRun}
                 cancelRun={(id) => void cancelRun(id)}
                 selectedRun={selectedRun}
               />
@@ -949,13 +968,16 @@ function ProjectView({
   selectedRun,
   manualStage,
   manualIssue,
+  manualForce,
   busy,
   manualRunSubmitting,
   setManualStage,
   setManualIssue,
+  setManualForce,
   refreshRuns,
   loadRun,
   triggerOnce,
+  retryRun,
   cancelRun,
   cancelProject,
   editProject,
@@ -969,13 +991,16 @@ function ProjectView({
   selectedRun: RunDetail | null
   manualStage: Stage
   manualIssue: string
+  manualForce: boolean
   busy: boolean
   manualRunSubmitting: boolean
   setManualStage: (stage: Stage) => void
   setManualIssue: (issue: string) => void
+  setManualForce: (force: boolean) => void
   refreshRuns: () => void
   loadRun: (id: string) => Promise<boolean>
-  triggerOnce: (stage: Stage, issueId?: string, projectKey?: string) => void
+  triggerOnce: (stage: Stage, issueId?: string, projectKey?: string, force?: boolean) => void
+  retryRun: (run: RunDetail | RunSummary) => void
   cancelRun: (id: string) => void
   cancelProject: (key: string) => void
   editProject: (project: ProjectConfig) => void
@@ -1083,12 +1108,21 @@ function ProjectView({
               />
               <Button
                 className="w-full sm:w-auto"
-                onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key)}
+                onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key, manualForce)}
                 disabled={busy || manualRunSubmitting}
               >
                 <Play className="size-4" />
                 {manualRunSubmitting ? "提交中" : "执行"}
               </Button>
+              <div className="col-span-full flex items-start justify-between gap-3 rounded-lg border px-3 py-2">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">强制执行</div>
+                  <div className="text-xs leading-5 text-muted-foreground">
+                    不填 issue ID 时会绕过“已处理快照”跳过；填写 issue ID 且选择 `阶段一` 或 `阶段二` 时，会按所选阶段强制重跑。
+                  </div>
+                </div>
+                <Switch checked={manualForce} onCheckedChange={setManualForce} />
+              </div>
             </CardContent>
           </Card>
 
@@ -1103,7 +1137,11 @@ function ProjectView({
         />
 
         <div className="hidden min-h-0 2xl:block">
-          <RunDetailPanel selectedRun={selectedRun} />
+          <RunDetailPanel
+            selectedRun={selectedRun}
+            manualRunSubmitting={manualRunSubmitting}
+            onRetry={retryRun}
+          />
         </div>
       </div>
 
@@ -1111,6 +1149,8 @@ function ProjectView({
         open={runDialogOpen}
         onOpenChange={setRunDialogOpen}
         selectedRun={selectedRun}
+        manualRunSubmitting={manualRunSubmitting}
+        onRetry={retryRun}
       />
     </div>
   )
@@ -1124,8 +1164,10 @@ function GlobalActivityView({
   agents,
   generatedAt,
   busy,
+  manualRunSubmitting,
   refreshActivity,
   loadRun,
+  retryRun,
   cancelRun,
   selectedRun,
 }: {
@@ -1136,8 +1178,10 @@ function GlobalActivityView({
   agents: CodexActivityAgent[]
   generatedAt: string
   busy: boolean
+  manualRunSubmitting: boolean
   refreshActivity: () => void
   loadRun: (id: string) => void
+  retryRun: (run: RunDetail | RunSummary) => void
   cancelRun: (id: string) => void
   selectedRun: RunDetail | null
 }) {
@@ -1190,7 +1234,11 @@ function GlobalActivityView({
 
       {selectedRun && (
         <div className="h-[360px] min-h-0">
-          <RunDetailPanel selectedRun={selectedRun} />
+          <RunDetailPanel
+            selectedRun={selectedRun}
+            manualRunSubmitting={manualRunSubmitting}
+            onRetry={retryRun}
+          />
         </div>
       )}
     </div>
@@ -1219,6 +1267,40 @@ function InfoItem({ label, value, wide = false }: { label: string; value: string
       <div className="mt-1 break-words font-mono text-xs">{value}</div>
     </div>
   )
+}
+
+function runFailureSummary(run: Partial<RunSummary> & { stdout?: string; stderr?: string; final?: string }) {
+  if (run.status !== "failed") {
+    return ""
+  }
+  if (run.failureSummary?.trim()) return run.failureSummary.trim()
+  const genericExitError =
+    run.codexStarted === false && /^Codex 退出码为 \d+$/u.test(run.error?.trim() || "")
+  if (!genericExitError && run.error?.trim()) return run.error.trim()
+  if (run.startupError?.trim()) return run.startupError.trim()
+  if (genericExitError || run.exitCode != null) {
+    const exitCode =
+      run.exitCode ??
+      Number.parseInt((run.error || "").replace("Codex 退出码为", "").trim(), 10)
+    return run.codexStarted === false
+      ? `Codex 子进程未成功启动（退出码 ${Number.isFinite(exitCode) ? exitCode : 1}）`
+      : `Codex 退出码为 ${Number.isFinite(exitCode) ? exitCode : 1}`
+  }
+  return "运行失败"
+}
+
+function runFailureHint(run: Partial<RunDetail>) {
+  if (run.status !== "failed") {
+    return ""
+  }
+  if (run.failureAction?.trim()) {
+    return run.failureAction.trim()
+  }
+  const hasArtifacts = Boolean(run.stdout?.trim() || run.stderr?.trim() || run.final?.trim())
+  if (run.codexStarted === false && !hasArtifacts) {
+    return "当前记录没有 stdout、stderr 或 final 输出。常见原因是服务进程 PATH 中没有 `codex`，或 Codex CLI 无法在当前非交互环境启动。"
+  }
+  return ""
 }
 
 function RunHistoryCard({
@@ -1276,6 +1358,11 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
             <TableCell>
               <div className="font-mono text-xs">{run.issueIdentifier}</div>
               <div className="max-w-[260px] truncate text-xs text-muted-foreground">{run.issueTitle}</div>
+              {run.status === "failed" && runFailureSummary(run) && (
+                <div className="mt-1 max-w-[320px] truncate text-xs text-destructive">
+                  {runFailureSummary(run)}
+                </div>
+              )}
             </TableCell>
             <TableCell>{stageLabel(run.stage)}</TableCell>
             <TableCell>
@@ -1302,10 +1389,14 @@ function RunDetailDialog({
   open,
   onOpenChange,
   selectedRun,
+  manualRunSubmitting,
+  onRetry,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   selectedRun: RunDetail | null
+  manualRunSubmitting: boolean
+  onRetry: (run: RunDetail | RunSummary) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1315,33 +1406,80 @@ function RunDetailDialog({
           查看选中历史运行的最终结果、标准输出、错误输出和提示词。
         </DialogDescription>
         <div className="min-h-0 min-w-0">
-          <RunDetailPanel selectedRun={selectedRun} />
+          <RunDetailPanel
+            selectedRun={selectedRun}
+            manualRunSubmitting={manualRunSubmitting}
+            onRetry={onRetry}
+          />
         </div>
       </DialogContent>
     </Dialog>
   )
 }
 
-function RunDetailPanel({ selectedRun }: { selectedRun: RunDetail | null }) {
+function RunDetailPanel({
+  selectedRun,
+  manualRunSubmitting,
+  onRetry,
+}: {
+  selectedRun: RunDetail | null
+  manualRunSubmitting: boolean
+  onRetry: (run: RunDetail | RunSummary) => void
+}) {
+  const failureSummary = selectedRun ? runFailureSummary(selectedRun) : ""
+  const failureHint = selectedRun ? runFailureHint(selectedRun) : ""
+  const canRetry = Boolean(selectedRun?.status === "failed" && selectedRun.issueIdentifier && selectedRun.projectKey)
   return (
     <Card className="h-full min-h-0 min-w-0 overflow-hidden">
       <CardHeader className="shrink-0">
-        <CardTitle>运行详情</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>运行详情</CardTitle>
+          {selectedRun && canRetry && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onRetry(selectedRun)}
+              disabled={manualRunSubmitting}
+            >
+              <RefreshCcw className="size-4" />
+              {manualRunSubmitting ? "提交中" : "重试此事项"}
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedRun ? (
-          <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
-            <TabsList className="max-w-full shrink-0 overflow-x-auto">
-              <TabsTrigger value="final">最终结果</TabsTrigger>
-              <TabsTrigger value="stdout">标准输出</TabsTrigger>
-              <TabsTrigger value="stderr">错误输出</TabsTrigger>
-              <TabsTrigger value="prompt">提示词</TabsTrigger>
-            </TabsList>
-            <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
-            <RunStdoutLog text={selectedRun.stdout} />
-            <RunLog value="stderr" text={selectedRun.stderr} />
-            <RunLog value="prompt" text={selectedRun.prompt} />
-          </Tabs>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/20 p-3 text-xs">
+              <InfoItem label="事项" value={selectedRun.issueIdentifier || "-"} />
+              <InfoItem label="状态" value={runStatusLabel(selectedRun.status)} />
+              <InfoItem label="阶段" value={stageLabel(selectedRun.stage)} />
+              <InfoItem label="退出码" value={selectedRun.exitCode == null ? "-" : String(selectedRun.exitCode)} />
+              <InfoItem label="Codex PID" value={selectedRun.codexPid == null ? "-" : String(selectedRun.codexPid)} />
+              <InfoItem label="更新时间" value={formatDate(selectedRun.updatedAt)} />
+            </div>
+            {failureSummary && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                <div className="font-medium">失败摘要</div>
+                <div className="mt-1 whitespace-pre-wrap break-words">{failureSummary}</div>
+                {failureHint && (
+                  <div className="mt-2 text-xs leading-5 text-destructive/90">{failureHint}</div>
+                )}
+              </div>
+            )}
+            <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
+              <TabsList className="max-w-full shrink-0 overflow-x-auto">
+                <TabsTrigger value="final">最终结果</TabsTrigger>
+                <TabsTrigger value="stdout">标准输出</TabsTrigger>
+                <TabsTrigger value="stderr">错误输出</TabsTrigger>
+                <TabsTrigger value="prompt">提示词</TabsTrigger>
+              </TabsList>
+              <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
+              <RunStdoutLog text={selectedRun.stdout} />
+              <RunLog value="stderr" text={selectedRun.stderr} />
+              <RunLog value="prompt" text={selectedRun.prompt} />
+            </Tabs>
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
             <CircleDot className="mr-2 size-4" />
@@ -1563,6 +1701,52 @@ function ProjectEditor({
   validationMessage?: string | null
   onRemove?: () => void
 }) {
+  const [linearProjectPickerOpen, setLinearProjectPickerOpen] = useState(false)
+  const [linearProjectFilter, setLinearProjectFilter] = useState("")
+  const [linearProjectOptions, setLinearProjectOptions] = useState<LinearProjectOption[]>([])
+  const [linearProjectLoading, setLinearProjectLoading] = useState(false)
+  const [linearProjectError, setLinearProjectError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setLinearProjectPickerOpen(false)
+      setLinearProjectFilter("")
+      setLinearProjectError(null)
+      setLinearProjectLoading(false)
+      return
+    }
+  }, [open])
+
+  const filteredLinearProjects = useMemo(() => {
+    const query = linearProjectFilter.trim().toLowerCase()
+    if (!query) return linearProjectOptions
+    return linearProjectOptions.filter((item) =>
+      [item.displayName, item.name, item.id, item.teamNames.join(" ")]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [linearProjectFilter, linearProjectOptions])
+
+  async function openLinearProjectPicker() {
+    setLinearProjectPickerOpen(true)
+    setLinearProjectLoading(true)
+    setLinearProjectError(null)
+    try {
+      const response = await api.listLinearProjects()
+      setLinearProjectOptions(response.projects)
+    } catch (error) {
+      setLinearProjectError(errorMessage(error))
+    } finally {
+      setLinearProjectLoading(false)
+    }
+  }
+
+  function selectLinearProject(item: LinearProjectOption) {
+    onUpdate({ linearProjectId: item.id })
+    setLinearProjectPickerOpen(false)
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-[720px] overflow-y-auto sm:max-w-[720px]">
@@ -1574,10 +1758,17 @@ function ProjectEditor({
             <Input value={project.repoName} onChange={(event) => onUpdate({ repoName: event.target.value })} />
           </Field>
           <Field label="Linear 项目 ID" description={projectFieldDescriptions.linearProjectId}>
-            <Input
-              value={project.linearProjectId}
-              onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
-            />
+            <div className="flex gap-2">
+              <Input
+                className="font-mono"
+                value={project.linearProjectId}
+                onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
+              />
+              <Button type="button" variant="outline" onClick={() => void openLinearProjectPicker()} disabled={busy || linearProjectLoading}>
+                <RefreshCcw className={cn("size-4", linearProjectLoading && "animate-spin")} />
+                选择
+              </Button>
+            </div>
           </Field>
           <Field label="分支 / 提交范围前缀" description={projectFieldDescriptions.branchOrScopePrefix}>
             <Input
@@ -1656,6 +1847,87 @@ function ProjectEditor({
           </Button>
         </SheetFooter>
       </SheetContent>
+
+      <Dialog open={linearProjectPickerOpen} onOpenChange={setLinearProjectPickerOpen}>
+        <DialogContent className="max-h-[min(82svh,720px)] max-w-[min(900px,calc(100vw-2rem))] grid-rows-[auto_1fr] overflow-hidden p-0">
+          <div className="flex flex-col gap-4 p-4 pb-0">
+            <div className="space-y-1">
+              <DialogTitle>选择 Linear 项目</DialogTitle>
+              <DialogDescription>
+                点击按钮会实时拉取当前 Linear workspace 的项目列表，选择后自动回填项目 UUID。
+              </DialogDescription>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="按 display name、team 或 UUID 过滤"
+                value={linearProjectFilter}
+                onChange={(event) => setLinearProjectFilter(event.target.value)}
+              />
+              <Button type="button" variant="outline" onClick={() => void openLinearProjectPicker()} disabled={linearProjectLoading}>
+                <RefreshCcw className={cn("size-4", linearProjectLoading && "animate-spin")} />
+                刷新
+              </Button>
+            </div>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>共 {linearProjectOptions.length} 个项目</span>
+              <span>当前值: {project.linearProjectId || "未填写"}</span>
+            </div>
+          </div>
+          <ScrollArea className="min-h-0 px-4 pb-4">
+            <div className="space-y-2">
+              {linearProjectError && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                  {linearProjectError}
+                </div>
+              )}
+              {!linearProjectError && linearProjectLoading && linearProjectOptions.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                  正在从 Linear 拉取项目列表...
+                </div>
+              )}
+              {!linearProjectError && !linearProjectLoading && linearProjectOptions.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                  未拉取到任何 Linear 项目。
+                </div>
+              )}
+              {!linearProjectError && !linearProjectLoading && linearProjectOptions.length > 0 && filteredLinearProjects.length === 0 && (
+                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                  没有匹配当前过滤条件的项目。
+                </div>
+              )}
+              {filteredLinearProjects.map((item) => {
+                const selected = item.id === project.linearProjectId
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={cn(
+                      "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
+                      selected && "border-primary bg-primary/5",
+                    )}
+                    onClick={() => selectLinearProject(item)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{item.displayName}</div>
+                        <div className="mt-1 font-mono text-xs text-muted-foreground">{item.id}</div>
+                        {item.teamNames.length > 0 && (
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            Teams: {item.teamNames.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                      <Badge variant={selected ? "default" : "outline"}>
+                        {selected ? "当前已选" : "选择"}
+                      </Badge>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   )
 }
