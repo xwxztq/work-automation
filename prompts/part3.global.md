@@ -19,6 +19,7 @@
 - Linear 是 issue 状态、讨论和用户决策的唯一来源。
 - 如果当前 issue 已不在 `{{STATUS_TESTING}}`，不要重复评论，只在最终回复说明跳过。
 - 如果实现结果缺少必要上下文、测试记录或仓库状态无法判断，移动到 `{{STATUS_BLOCKED}}` 或退回 `{{STATUS_SCHEDULE}}`，并写清楚原因。
+- 如果已经生成 review 摘要、对比文件或基线说明，在评论里用仓库相对路径引用；如果没有，明确写 `无`。
 - 所有面向人的 Linear 评论使用简体中文；固定 marker 行保持英文。
 
 项目规则:
@@ -43,6 +44,9 @@ Codex Auto Review Complete
 检查项:
 - <本轮确认的要点>
 
+Review 产物:
+- <review/summary.md 或关键对比文件路径；没有则写“无”>
+
 备注:
 - <风险或“暂无额外备注”>
 
@@ -56,6 +60,9 @@ Codex Auto Review Rework
 原因:
 - <需要返工的问题>
 
+Review 产物:
+- <review/summary.md 或关键对比文件路径；没有则写“无”>
+
 建议:
 - <下一步建议>
 
@@ -65,6 +72,9 @@ Codex Auto Review Blocked
 
 原因:
 - <阻塞原因>
+
+Review 产物:
+- <review/summary.md 或关键对比文件路径；没有则写“无”>
 
 需要补充:
 - <缺少的上下文、产物或权限>

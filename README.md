@@ -21,6 +21,12 @@
 - 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Blocked` 进入阶段一，`On Schedule` 进入阶段二，`Testing` 进入阶段三，其他状态直接跳过。
 - 不自动移动 issue 到 `Done`。
 
+## Auto Review 协议
+
+- 阶段三输入、成功 / 失败判定、基线来源和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。
+- 当前仓库固定提供的运行基础文件来自 `.linear-automation/runs/<run-id>/`，阶段三后续新增的 review 产物也统一落在当前 `part3` run 目录下。
+- 阶段二和阶段三的 Linear 评论模板以 `prompts/part2.global.md` 与 `prompts/part3.global.md` 为准。
+
 ## 首次使用
 
 先按顺序完成配置，再启动服务，避免 Codex agent 因缺少 Linear 权限或状态配置而中途失败。
@@ -184,6 +190,7 @@ pnpm start -- --host 192.168.1.23
 - Linear 工作流状态名
 - 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
 - 全局和项目级阶段一 / 阶段二 / 阶段三提示词
+- 阶段三 review 产物协议和基线来源约定，见 `docs/auto-review-protocol.md`
 
 左侧侧边栏按项目展示。侧边栏底部有全局日志入口和设置入口；跳过、失败、扫描等执行事件在全局日志页查看，提示词在设置中维护。
 
