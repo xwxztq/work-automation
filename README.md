@@ -187,7 +187,7 @@ pnpm start -- --host 192.168.1.23
 - 服务 ID、监听地址、端口、轮询间隔
 - Linear API 密钥环境变量名
 - Codex 命令和默认参数
-- Codex 默认只附加 `--json`；阶段一默认 sandbox 为 `read-only`，阶段二默认 sandbox 为 `danger-full-access`，阶段三默认 sandbox 为 `read-only`。
+- Codex 默认只附加 `--json`；阶段一默认 sandbox 为 `read-only`，阶段二默认 sandbox 为 `danger-full-access`，阶段三默认 sandbox 为 `danger-full-access`。
 - Linear 工作流状态名
 - 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
 - 全局和项目级阶段一 / 阶段二 / 阶段三提示词
