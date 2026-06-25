@@ -15,14 +15,15 @@
 ## 当前仓库已存在的能力
 
 - 阶段状态名已在 `README.md` 和 `src/server/defaults.mjs` 中定义，包含 `Testing` 和 `Ready for Review`。
-- 提示词已包含阶段三骨架，见 `prompts/part3.global.md`。
+- 提示词与调度器已为阶段三提供专用上下文，见 `prompts/part3.global.md` 与 `src/server/scheduler.mjs`。
 - 每次运行都会在 `.linear-automation/runs/<run-id>/` 下落基础文件，当前固定包含:
   - `prompt.md`
   - `stdout.jsonl`
   - `stderr.log`
   - `final.txt`
   - `run.json`
-- 当前代码尚未自动采集 GUI 截图、动图或 API 对比产物。因此本文把这些定义为阶段三输出协议，而不是“当前已经自动落盘”的事实。
+- 阶段三执行器会把当前 `part3` run 目录、review 目录、最新实现交接评论和实现后用户评论显式传给 Codex agent，便于按协议生成 review 产物。
+- 默认 `part3Sandbox` 使用 `danger-full-access`，因为 review 产物需要写入 Work Automation 仓库中的当前 run 目录，而阶段三的 `codex -C` 可能指向其他业务仓库。提示词必须继续约束 agent 只写当前 run 目录，不改业务代码。
 
 ## 阶段三输入协议
 

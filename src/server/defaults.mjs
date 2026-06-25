@@ -11,7 +11,7 @@ export const DEFAULT_CONFIG = {
     defaultArgs: ["--json", "--skip-git-repo-check"],
     part1Sandbox: "read-only",
     part2Sandbox: "danger-full-access",
-    part3Sandbox: "read-only",
+    part3Sandbox: "danger-full-access",
   },
   statuses: {
     todo: "Todo",

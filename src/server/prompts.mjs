@@ -3,6 +3,7 @@ import path from "node:path"
 import { ensureDir, fileExists } from "./config.mjs"
 
 const STAGES = new Set(["part1", "part2", "part3"])
+const IMPLEMENTATION_COMPLETE_MARKER = "Codex Implementation Complete"
 
 export function promptPath(rootDir, scope, stage) {
   if (!STAGES.has(stage)) {
@@ -59,7 +60,7 @@ export function renderPrompt(template, context) {
   })
 }
 
-export function buildPromptContext(config, project) {
+export function buildPromptContext(config, project, extraContext = {}) {
   const statuses = config.statuses
   return {
     SERVER_ID: config.serverId,
@@ -78,7 +79,75 @@ export function buildPromptContext(config, project) {
     STATUS_IN_PROGRESS: statuses.inProgress,
     STATUS_TESTING: statuses.testing,
     STATUS_READY_FOR_REVIEW: statuses.readyForReview,
+    ...extraContext,
   }
+}
+
+export function buildRunPromptContext(rootDir, run) {
+  if (!run?.dir) {
+    return {}
+  }
+  const reviewDir = path.join(run.dir, "review")
+  return {
+    AUTOMATION_ROOT_DIR: rootDir,
+    CURRENT_RUN_ID: run.id,
+    CURRENT_RUN_DIR: run.dir,
+    CURRENT_RUN_DIR_RELATIVE: toPortableRelativePath(rootDir, run.dir),
+    CURRENT_REVIEW_DIR: reviewDir,
+    CURRENT_REVIEW_DIR_RELATIVE: toPortableRelativePath(rootDir, reviewDir),
+    CURRENT_RUN_JSON_PATH: run.metadataPath || path.join(run.dir, "run.json"),
+    CURRENT_PROMPT_PATH: run.promptPath || path.join(run.dir, "prompt.md"),
+    CURRENT_STDOUT_PATH: run.stdoutPath || path.join(run.dir, "stdout.jsonl"),
+    CURRENT_STDERR_PATH: run.stderrPath || path.join(run.dir, "stderr.log"),
+    CURRENT_FINAL_PATH: run.finalPath || path.join(run.dir, "final.txt"),
+  }
+}
+
+export function buildIssueReviewPromptContext(issue) {
+  const comments = Array.isArray(issue?.comments) ? issue.comments : []
+  const latestImplementationComment = findLatestCommentByMarker(
+    comments,
+    IMPLEMENTATION_COMPLETE_MARKER,
+  )
+  const latestImplementationIndex = latestImplementationComment
+    ? comments.findIndex((comment) => comment.id === latestImplementationComment.id)
+    : -1
+  const userCommentsAfterImplementation =
+    latestImplementationIndex >= 0
+      ? comments
+          .slice(latestImplementationIndex + 1)
+          .filter((comment) => !matchesAutomationComment(comment))
+      : []
+
+  return {
+    LATEST_IMPLEMENTATION_COMMENT: latestImplementationComment
+      ? formatPromptComment(latestImplementationComment)
+      : "（无）",
+    POST_IMPLEMENTATION_USER_COMMENTS: userCommentsAfterImplementation.length
+      ? userCommentsAfterImplementation.map((comment) => formatPromptComment(comment)).join("\n")
+      : "（无）",
+  }
+}
+
+export function formatPromptComments(comments = [], limit = 20) {
+  return comments
+    .slice(-Math.max(1, Number(limit || 20)))
+    .map((comment) => formatPromptComment(comment))
+    .join("\n")
+}
+
+export function findLatestCommentByMarker(comments = [], marker) {
+  const normalizedMarker = String(marker || "").trim()
+  for (let index = comments.length - 1; index >= 0; index -= 1) {
+    if (matchesCommentMarker(comments[index], normalizedMarker)) {
+      return comments[index]
+    }
+  }
+  return null
+}
+
+export function formatPromptComment(comment) {
+  return `---\n${comment?.createdAt || "未知时间"} ${comment?.user?.name || "未知用户"}:\n${comment?.body || ""}`
 }
 
 export function extractJson(text) {
@@ -108,4 +177,25 @@ export function extractJson(text) {
     }
     return null
   }
+}
+
+function matchesCommentMarker(comment, marker) {
+  return firstNonEmptyLine(comment?.body) === marker
+}
+
+function matchesAutomationComment(comment) {
+  const firstLine = firstNonEmptyLine(comment?.body)
+  return firstLine.startsWith("AI Triage:") || firstLine.startsWith("Codex ")
+}
+
+function firstNonEmptyLine(text) {
+  return String(text || "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean) || ""
+}
+
+function toPortableRelativePath(fromDir, targetPath) {
+  const relative = path.relative(fromDir, targetPath)
+  return relative ? relative.split(path.sep).join("/") : "."
 }

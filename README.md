@@ -11,7 +11,7 @@
 - 读取当前机器配置的 Linear 项目。
 - 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现；候选按 Linear 优先级语义排序：`Urgent`、`High`、`Medium`、`Low`、无优先级，同优先级按 issue 编号数字升序执行。
-- 阶段三检测 `Testing` 并启动 Codex 做 Auto Review，最小支持流转到 `Ready for Review` 或回到 `On Schedule`。
+- 阶段三检测 `Testing` 并启动 Codex 做 Auto Review，按协议生成 review 产物并流转到 `Ready for Review`、`On Schedule` 或 `Blocked`。
 - 服务端只负责扫描队列、启动独立 Codex supervisor、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
 - 多个项目并行执行；同一项目内阶段一、阶段二、阶段三互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
 - 使用 `codex exec --json --skip-git-repo-check --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
@@ -25,6 +25,7 @@
 
 - 阶段三输入、成功 / 失败判定、基线来源和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。
 - 当前仓库固定提供的运行基础文件来自 `.linear-automation/runs/<run-id>/`，阶段三后续新增的 review 产物也统一落在当前 `part3` run 目录下。
+- 为了让跨仓库的阶段三可以把 review 产物写回当前 Work Automation 的 run 目录，默认 `part3Sandbox` 使用 `danger-full-access`；提示词会约束 agent 只写当前 run 目录，不回写业务仓库。
 - 阶段二和阶段三的 Linear 评论模板以 `prompts/part2.global.md` 与 `prompts/part3.global.md` 为准。
 
 ## 首次使用
@@ -111,7 +112,7 @@
    - 新 issue 放在 `Todo`，阶段一只分析和评论，不写代码。
    - 用户确认范围后，把 issue 移到 `On Schedule`。
    - 阶段二只认领 `On Schedule`，先移到 `In Progress`，由当前 Codex agent 实现、测试、提交，再移到 `Testing`。
-   - 阶段三只认领 `Testing`，完成 Auto Review 后移动到 `Ready for Review` 或回到 `On Schedule`。
+   - 阶段三只认领 `Testing`，完成 Auto Review 后按协议移动到 `Ready for Review`、`On Schedule` 或 `Blocked`。
 
 也可以手动触发一次扫描:
 

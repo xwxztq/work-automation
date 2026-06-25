@@ -6,7 +6,14 @@ import {
   isCodexLinearAuthFailureRun,
 } from "./linear-auth-diagnostics.mjs"
 import { diagnoseLinearWriteVerification } from "./linear-write-verification.mjs"
-import { buildPromptContext, readPrompt, renderPrompt } from "./prompts.mjs"
+import {
+  buildIssueReviewPromptContext,
+  buildPromptContext,
+  buildRunPromptContext,
+  formatPromptComments,
+  readPrompt,
+  renderPrompt,
+} from "./prompts.mjs"
 
 export function createScheduler({ rootDir, configProvider, store }) {
   let timer = null
@@ -1016,7 +1023,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
         return await markRunCanceled(run, runController.signal)
       }
 
-      const prompt = await buildStagePrompt({ config, project, issue, stage })
+      const prompt = await buildStagePrompt({ config, project, issue, stage, run })
       const codexResult = await runCodex({
         config,
         project,
@@ -1173,7 +1180,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
     })
   }
 
-  async function buildStagePrompt({ config, project, issue, stage }) {
+  async function buildStagePrompt({ config, project, issue, stage, run }) {
     const promptMode =
       stage === "part1"
         ? project.part1PromptMode
@@ -1182,7 +1189,14 @@ export function createScheduler({ rootDir, configProvider, store }) {
           : project.part3PromptMode
     const scope = promptMode === "override" ? project.key : "global"
     const template = await readPrompt(rootDir, scope, stage)
-    const context = buildPromptContext(config, project)
+    const extraContext =
+      stage === "part3"
+        ? {
+            ...buildRunPromptContext(rootDir, run),
+            ...buildIssueReviewPromptContext(issue),
+          }
+        : {}
+    const context = buildPromptContext(config, project, extraContext)
     return `${renderPrompt(template, context)}
 
 当前 Linear 事项:
@@ -1205,10 +1219,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
 ${issue.description || "（空）"}
 
 最近评论:
-${(issue.comments || [])
-  .slice(-20)
-  .map((comment) => `---\n${comment.createdAt} ${comment.user?.name || "未知用户"}:\n${comment.body}`)
-  .join("\n")}
+${formatPromptComments(issue.comments || [], 20)}
 `
   }
 
