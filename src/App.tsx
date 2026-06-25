@@ -89,6 +89,7 @@ import type {
 } from "@/shared/types"
 
 type View = "project" | "activity" | "logs" | "settings"
+type PersistedView = Extract<View, "project" | "activity">
 
 const emptyProject: ProjectConfig = {
   key: "",
@@ -111,6 +112,7 @@ const APP_BRAND_NAME = "Work Automation"
 const APP_TITLE_PREFIX = "WA"
 const DEFAULT_SERVER_ID = "本机"
 const SELECTED_PROJECT_KEY_STORAGE_KEY = "linearAutomation.selectedProjectKey"
+const MAIN_VIEW_STORAGE_KEY = "linearAutomation.mainView"
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
   key: "本机配置用的稳定标识，日志和提示词会引用它。",
@@ -157,6 +159,29 @@ function persistSelectedProjectKey(key: string) {
   }
 }
 
+function isPersistedView(value: string | null): value is PersistedView {
+  return value === "project" || value === "activity"
+}
+
+function readPersistedView(): PersistedView {
+  if (typeof window === "undefined") return "project"
+  try {
+    const value = window.localStorage.getItem(MAIN_VIEW_STORAGE_KEY)
+    return isPersistedView(value) ? value : "project"
+  } catch {
+    return "project"
+  }
+}
+
+function persistView(view: PersistedView) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(MAIN_VIEW_STORAGE_KEY, view)
+  } catch {
+    // Browser storage may be unavailable; keep the in-memory view working.
+  }
+}
+
 function resolveSelectedProjectKey(projects: ProjectConfig[], preferredKeys: string[]) {
   const availableKeys = new Set(projects.map((project) => project.key).filter(Boolean))
   for (const key of preferredKeys) {
@@ -196,7 +221,7 @@ function useMediaQuery(query: string) {
 }
 
 function App() {
-  const [view, setView] = useState<View>("project")
+  const [view, setView] = useState<View>(readPersistedView)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [prompts, setPrompts] = useState<PromptBundle | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
@@ -333,8 +358,17 @@ function App() {
     setRunTotalCount(0)
   }
 
+  function openProjectView(key?: string) {
+    if (key !== undefined) {
+      selectProject(key)
+    }
+    setView("project")
+    persistView("project")
+  }
+
   function openGlobalActivity() {
     setView("activity")
+    persistView("activity")
     setSelectedRun(null)
     void refreshGlobalActivity(true)
   }
@@ -449,9 +483,8 @@ function App() {
       : [...config.projects, nextProject]
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
-    selectProject(key)
+    openProjectView(key)
     void refreshRuns(true, key)
-    setView("project")
     setProjectEditorOpen(false)
   }
 
@@ -660,8 +693,7 @@ function App() {
           view={view}
           busy={busy}
           onSelectProject={(key) => {
-            selectProject(key)
-            setView("project")
+            openProjectView(key)
             void refreshRuns(true, key)
           }}
           onNewProject={openNewProject}
