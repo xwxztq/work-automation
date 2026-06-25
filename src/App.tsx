@@ -1143,6 +1143,7 @@ function ProjectView({
 
         <div className="hidden min-h-0 2xl:block">
           <RunDetailPanel
+            runs={runs}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={retryRun}
@@ -1154,6 +1155,7 @@ function ProjectView({
       <RunDetailDialog
         open={runDialogOpen}
         onOpenChange={setRunDialogOpen}
+        runs={runs}
         selectedRun={selectedRun}
         manualRunSubmitting={manualRunSubmitting}
         onRetry={retryRun}
@@ -1249,6 +1251,7 @@ function GlobalActivityView({
         <>
           <div className="h-[360px] min-h-0">
             <RunDetailPanel
+              runs={runs}
               selectedRun={selectedRun}
               manualRunSubmitting={manualRunSubmitting}
               onRetry={retryRun}
@@ -1259,6 +1262,7 @@ function GlobalActivityView({
           <RunDetailDialog
             open={runDialogOpen}
             onOpenChange={setRunDialogOpen}
+            runs={runs}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={retryRun}
@@ -1325,6 +1329,32 @@ function runFailureHint(run: Partial<RunDetail>) {
     return "当前记录没有 stdout、stderr 或 final 输出。常见原因是服务进程 PATH 中没有 `codex`，或 Codex CLI 无法在当前非交互环境启动。"
   }
   return ""
+}
+
+function hasLaterSucceededStageRun(
+  run: Pick<RunSummary, "id" | "createdAt" | "issueIdentifier" | "projectKey" | "stage">,
+  runs: RunSummary[],
+) {
+  const issueIdentifier = run.issueIdentifier?.trim()
+  if (!issueIdentifier) {
+    return false
+  }
+
+  const createdAt = Date.parse(run.createdAt)
+
+  return runs.some((candidate) => {
+    if (candidate.id === run.id) return false
+    if (candidate.status !== "succeeded") return false
+    if (candidate.projectKey !== run.projectKey) return false
+    if (candidate.stage !== run.stage) return false
+    if (candidate.issueIdentifier?.trim() !== issueIdentifier) return false
+
+    const candidateCreatedAt = Date.parse(candidate.createdAt)
+    if (Number.isNaN(createdAt) || Number.isNaN(candidateCreatedAt)) {
+      return candidate.createdAt > run.createdAt
+    }
+    return candidateCreatedAt > createdAt
+  })
 }
 
 function RunHistoryCard({
@@ -1418,12 +1448,14 @@ function RunTable({ runs, loadRun }: { runs: RunSummary[]; loadRun: (id: string)
 function RunDetailDialog({
   open,
   onOpenChange,
+  runs,
   selectedRun,
   manualRunSubmitting,
   onRetry,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  runs: RunSummary[]
   selectedRun: RunDetail | null
   manualRunSubmitting: boolean
   onRetry: (run: RunDetail | RunSummary) => void
@@ -1437,6 +1469,7 @@ function RunDetailDialog({
         </DialogDescription>
         <div className="min-h-0 min-w-0">
           <RunDetailPanel
+            runs={runs}
             selectedRun={selectedRun}
             manualRunSubmitting={manualRunSubmitting}
             onRetry={onRetry}
@@ -1448,11 +1481,13 @@ function RunDetailDialog({
 }
 
 function RunDetailPanel({
+  runs,
   selectedRun,
   manualRunSubmitting,
   onRetry,
   onExpand,
 }: {
+  runs: RunSummary[]
   selectedRun: RunDetail | null
   manualRunSubmitting: boolean
   onRetry: (run: RunDetail | RunSummary) => void
@@ -1460,7 +1495,13 @@ function RunDetailPanel({
 }) {
   const failureSummary = selectedRun ? runFailureSummary(selectedRun) : ""
   const failureHint = selectedRun ? runFailureHint(selectedRun) : ""
-  const canRetry = Boolean(selectedRun?.status === "failed" && selectedRun.issueIdentifier && selectedRun.projectKey)
+  const hasLaterSuccess = selectedRun ? hasLaterSucceededStageRun(selectedRun, runs) : false
+  const canRetry = Boolean(
+    selectedRun?.status === "failed" &&
+      selectedRun.issueIdentifier?.trim() &&
+      selectedRun.projectKey &&
+      !hasLaterSuccess,
+  )
   const canExpand = Boolean(selectedRun && onExpand)
   return (
     <Card className="h-full min-h-0 min-w-0 overflow-hidden">
