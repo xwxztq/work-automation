@@ -11,7 +11,7 @@
 - 读取当前机器配置的 Linear 项目。
 - 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现；候选按 Linear 优先级语义排序：`Urgent`、`High`、`Medium`、`Low`、无优先级，同优先级按 issue 编号数字升序执行。
-- 阶段三检测 `Testing` 并启动 Codex 做 Auto Review，按协议生成 review 产物并流转到 `Ready for Review`、`On Schedule` 或 `Blocked`。
+- 阶段三检测 `Testing` 并启动 Codex 做 Auto Review，按协议生成 review 产物、上传关键附件到 Linear，并流转到 `Ready for Review`、`On Schedule` 或 `Blocked`。
 - 服务端只负责扫描队列、启动独立 Codex supervisor、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
 - 多个项目并行执行；同一项目内阶段一、阶段二、阶段三互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
 - 使用 `codex exec --json --skip-git-repo-check --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
@@ -24,6 +24,7 @@
 ## Auto Review 协议
 
 - 阶段三输入、成功 / 失败判定、基线来源和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。
+- 阶段三评论在保留 `Review 摘要` / `关键产物内容` 内联结论的同时，需要把适合直接审阅的关键截图或对比产物上传到 Linear，并在评论中引用这些附件。
 - 当前仓库固定提供的运行基础文件来自 `.linear-automation/runs/<run-id>/`，阶段三后续新增的 review 产物也统一落在当前 `part3` run 目录下。
 - 为了让跨仓库的阶段三可以把 review 产物写回当前 Work Automation 的 run 目录，默认 `part3Sandbox` 使用 `danger-full-access`；提示词会约束 agent 只写当前 run 目录，不回写业务仓库。
 - 阶段二和阶段三的 Linear 评论模板以 `prompts/part2.global.md` 与 `prompts/part3.global.md` 为准。
@@ -63,9 +64,16 @@
 
    [mcp_servers.linear.tools.save_comment]
    approval_mode = "approve"
+
+   [mcp_servers.linear.tools.prepare_attachment_upload]
+   approval_mode = "approve"
+
+   [mcp_servers.linear.tools.create_attachment_from_upload]
+   approval_mode = "approve"
    ```
 
    服务端会默认附加 `--skip-git-repo-check`，避免目标仓库未被 Codex 标记为 trusted 时直接失败。
+   阶段三如果缺少附件上传权限，会回退为只写内联结论并在评论中说明失败原因，但无法把截图等产物直接附加到 Linear。
 
 5. 在 Linear 工作流中创建或确认这些状态名，并让 `config.local.json` 的 `statuses` 与 Linear 中的名称完全一致:
 
@@ -191,7 +199,7 @@ pnpm start -- --host 192.168.1.23
 - Linear 工作流状态名
 - 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
 - 全局和项目级阶段一 / 阶段二 / 阶段三提示词
-- 阶段三 review 产物协议和基线来源约定，见 `docs/auto-review-protocol.md`
+- 阶段三 review 产物协议、附件上传约定和基线来源约定，见 `docs/auto-review-protocol.md`
 
 左侧侧边栏按项目展示。侧边栏底部有全局日志入口和设置入口；跳过、失败、扫描等执行事件在全局日志页查看，提示词在设置中维护。
 

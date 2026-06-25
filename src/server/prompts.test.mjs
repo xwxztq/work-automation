@@ -132,10 +132,13 @@ test("formatPromptComments keeps recent comment blocks readable", () => {
   assert.match(text, /Second/)
 })
 
-test("part3 prompt requires inline review artifact content in Linear comments", async () => {
+test("part3 prompt requires inline review artifact content and Linear attachments", async () => {
   const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part3")
 
   assert.match(prompt, /不能只给路径/u)
   assert.match(prompt, /Review 摘要:/u)
   assert.match(prompt, /关键产物内容:/u)
+  assert.match(prompt, /Review 附件:/u)
+  assert.match(prompt, /上传到 Linear/u)
+  assert.match(prompt, /上传失败/u)
 })
