@@ -14,6 +14,11 @@ import {
   readPrompt,
   renderPrompt,
 } from "./prompts.mjs"
+import {
+  checkLinearProjectStatusHealth,
+  formatProjectStatusHealthBlock,
+  projectStatusHealthIsBlocking,
+} from "./status-health.mjs"
 
 export function createScheduler({ rootDir, configProvider, store }) {
   let timer = null
@@ -115,6 +120,9 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message: "项目扫描开始",
         data: { issueId, force },
       })
+      if (!(await ensureProjectStatusHealth({ config, project, linear, stage, projectSummary }))) {
+        return projectSummary
+      }
       const effectiveStage =
         issueId && stage === "both"
           ? await resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force })
@@ -243,6 +251,24 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message,
       })
     }
+  }
+
+  async function ensureProjectStatusHealth({ config, project, linear, stage, projectSummary }) {
+    const health = await checkLinearProjectStatusHealth(config, project, linear)
+    if (!projectStatusHealthIsBlocking(health)) {
+      return true
+    }
+    const message = formatProjectStatusHealthBlock(health)
+    projectSummary.skipped.push(message)
+    await logEvent({
+      type: "linear-status-health-blocked",
+      level: "error",
+      stage,
+      projectKey: project.key,
+      message,
+      data: { health },
+    })
+    return false
   }
 
   async function resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force = false }) {

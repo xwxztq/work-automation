@@ -54,6 +54,48 @@ export type AppConfig = {
   projects: ProjectConfig[]
 }
 
+export type LinearConfiguredStatus = {
+  key: keyof AppConfig["statuses"]
+  label: string
+  name: string
+}
+
+export type LinearStatusTeamHealth = {
+  teamId: string
+  teamKey: string
+  teamName: string
+  existingStatuses: string[]
+  missingStatuses: LinearConfiguredStatus[]
+  ok: boolean
+}
+
+export type LinearStatusProjectHealth = {
+  projectKey: string
+  repoName: string
+  linearProjectId: string
+  linearProjectName: string
+  linearProjectUrl: string | null
+  ok: boolean
+  teams: LinearStatusTeamHealth[]
+  errors: string[]
+}
+
+export type LinearStatusHealthResult = {
+  ok: boolean
+  unavailable: boolean
+  checkedAt: string
+  requiredStatuses: LinearConfiguredStatus[]
+  errors: string[]
+  projects: LinearStatusProjectHealth[]
+}
+
+export type ConfigValidationResult = {
+  ok: boolean
+  errors: string[]
+  warnings: string[]
+  linearStatusHealth?: LinearStatusHealthResult
+}
+
 export type PromptBundle = {
   global: {
     part1: string

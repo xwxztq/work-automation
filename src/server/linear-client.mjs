@@ -137,6 +137,56 @@ export function createLinearClient(apiKey) {
     }
   }
 
+  async function listProjectWorkflowStates(projectId) {
+    const query = `
+      query ProjectWorkflowStateTeams($projectId: String!) {
+        project(id: $projectId) {
+          id
+          name
+          url
+          teams {
+            nodes {
+              id
+              key
+              name
+            }
+          }
+        }
+      }
+    `
+    const data = await graphql(query, { projectId })
+    if (!data.project) {
+      throw new Error(`未找到 Linear 项目: ${projectId}`)
+    }
+    const teams = []
+    for (const team of data.project.teams?.nodes || []) {
+      teams.push({
+        ...team,
+        workflowStates: await listTeamWorkflowStates(team.id),
+      })
+    }
+    return {
+      project: {
+        id: data.project.id,
+        name: data.project.name,
+        url: data.project.url || null,
+      },
+      teams,
+    }
+  }
+
+  async function listTeamWorkflowStates(teamId) {
+    const query = `
+      query TeamWorkflowStates($teamId: ID!) {
+        workflowStates(first: 100, filter: { team: { id: { eq: $teamId } } }) {
+          nodes { id name type }
+        }
+      }
+    `
+    const data = await graphql(query, { teamId })
+    return data.workflowStates?.nodes || []
+  }
+
   async function getIssue(issueId) {
     const query = `
       query Issue($id: String!) {
@@ -175,15 +225,8 @@ export function createLinearClient(apiKey) {
   }
 
   async function getWorkflowStateId(teamId, name) {
-    const query = `
-      query WorkflowStates($teamId: ID!) {
-        workflowStates(first: 100, filter: { team: { id: { eq: $teamId } } }) {
-          nodes { id name type }
-        }
-      }
-    `
-    const data = await graphql(query, { teamId })
-    const match = data.workflowStates.nodes.find((state) => state.name === name)
+    const states = await listTeamWorkflowStates(teamId)
+    const match = states.find((state) => state.name === name)
     if (!match) {
       throw new Error(`未找到团队 ${teamId} 的工作流状态: ${name}`)
     }
@@ -227,6 +270,8 @@ export function createLinearClient(apiKey) {
     graphql,
     listProjects,
     listProjectIssues,
+    listProjectWorkflowStates,
+    listTeamWorkflowStates,
     getIssue,
     updateIssueState,
     createComment,

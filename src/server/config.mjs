@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG } from "./defaults.mjs"
 import { resolveExecutable } from "./executable.mjs"
 import { isLoopbackHost, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
+import { checkLinearStatusHealth } from "./status-health.mjs"
 
 export function resolveFromRoot(rootDir, filePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath)
@@ -195,10 +196,35 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
     }
   }
 
+  let linearStatusHealth = null
+  if (options.includeLinearStatusHealth !== false) {
+    linearStatusHealth = await checkLinearStatusHealth(config, {
+      apiKeyEnv,
+      linear: options.linear,
+      apiKey: options.apiKey,
+    })
+    if (linearStatusHealth.unavailable) {
+      warnings.push(...linearStatusHealth.errors)
+    } else if (!linearStatusHealth.ok) {
+      const missingSummaries = linearStatusHealth.projects.flatMap((project) =>
+        project.teams.flatMap((team) =>
+          team.missingStatuses.length
+            ? `${project.repoName} / ${team.teamName}: 缺少 ${team.missingStatuses.map((status) => status.name).join(", ")}`
+            : [],
+        ),
+      )
+      errors.push(
+        ...linearStatusHealth.errors,
+        ...missingSummaries.map((summary) => `Linear 工作流状态不完整: ${summary}`),
+      )
+    }
+  }
+
   return {
     ok: errors.length === 0,
     errors,
     warnings,
+    ...(linearStatusHealth ? { linearStatusHealth } : {}),
   }
 }
 

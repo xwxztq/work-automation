@@ -6,6 +6,7 @@ import {
   CircleDot,
   FileJson,
   FolderGit2,
+  ShieldAlert,
   Maximize2,
   Pencil,
   Play,
@@ -80,6 +81,8 @@ import type {
   DaemonStatus,
   ExecutionEvent,
   LinearProjectOption,
+  LinearStatusHealthResult,
+  LinearStatusProjectHealth,
   PromptStage,
   ProjectConfig,
   PromptBundle,
@@ -251,6 +254,8 @@ function App() {
   const [manualForce, setManualForce] = useState(false)
   const [busy, setBusy] = useState(false)
   const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
+  const [linearStatusHealth, setLinearStatusHealth] = useState<LinearStatusHealthResult | null>(null)
+  const [linearStatusChecking, setLinearStatusChecking] = useState(false)
   const autoStartTried = useRef(false)
 
   useEffect(() => {
@@ -394,9 +399,10 @@ function App() {
         selectedProjectKey,
         readPersistedSelectedProjectKey(),
       ])
-      const [nextRuns, nextCodexActivity] = await Promise.all([
+      const [nextRuns, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
         api.getRuns(nextProjectKey || undefined),
         loadCodexActivity(nextProjectKey || undefined),
+        api.getLinearStatusHealth(),
       ])
       setConfig(nextConfig)
       setPrompts(nextPrompts)
@@ -405,6 +411,7 @@ function App() {
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setCodexActivity(nextCodexActivity)
+      setLinearStatusHealth(nextLinearStatusHealth)
       setSelectedProjectKey(nextProjectKey)
       persistSelectedProjectKey(nextProjectKey)
     } catch (error) {
@@ -526,6 +533,9 @@ function App() {
     setBusy(true)
     try {
       const result = await api.validateConfig()
+      if (result.linearStatusHealth) {
+        setLinearStatusHealth(result.linearStatusHealth)
+      }
       if (result.ok) {
         toast.success("配置校验通过")
       } else {
@@ -544,6 +554,11 @@ function App() {
   async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string, force = false) {
     setManualRunSubmitting(true)
     try {
+      const nextLinearStatusHealth = await refreshLinearStatusHealth(true)
+      if (linearStatusHealthBlocks(nextLinearStatusHealth)) {
+        toast.error("Linear 工作流状态不完整，已阻止执行")
+        return
+      }
       if (issueId) {
         await api.runIssue(stage, issueId, projectKey, force)
       } else {
@@ -573,17 +588,19 @@ function App() {
 
   async function refreshRuns(silent = false, projectKey = selectedProjectKey) {
     try {
-      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
+      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
         api.getRuns(projectKey || undefined),
         api.getDaemonStatus(),
         api.getEvents(),
         loadCodexActivity(projectKey || undefined),
+        api.getLinearStatusHealth(),
       ])
       setRuns(nextRuns.runs)
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setCodexActivity(nextCodexActivity)
+      setLinearStatusHealth(nextLinearStatusHealth)
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
@@ -593,17 +610,19 @@ function App() {
 
   async function refreshGlobalActivity(silent = false) {
     try {
-      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
+      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
         api.getRuns(),
         api.getDaemonStatus(),
         api.getEvents(),
         loadCodexActivity(),
+        api.getLinearStatusHealth(),
       ])
       setGlobalRuns(nextRuns.runs)
       setGlobalRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setGlobalCodexActivity(nextCodexActivity)
+      setLinearStatusHealth(nextLinearStatusHealth)
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
@@ -634,6 +653,22 @@ function App() {
       }
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function refreshLinearStatusHealth(silent = false) {
+    setLinearStatusChecking(true)
+    try {
+      const next = await api.getLinearStatusHealth()
+      setLinearStatusHealth(next)
+      return next
+    } catch (error) {
+      if (!silent) {
+        toast.error(errorMessage(error))
+      }
+      return null
+    } finally {
+      setLinearStatusChecking(false)
     }
   }
 
@@ -810,9 +845,148 @@ function App() {
         validationMessage={projectKeyError}
         onRemove={editingProjectKey ? () => void removeProject(editingProjectKey) : undefined}
       />
+      <LinearStatusHealthDialog
+        health={linearStatusHealth}
+        checking={linearStatusChecking}
+        onRefresh={() => void refreshLinearStatusHealth()}
+      />
       <Toaster />
     </main>
   )
+}
+
+function LinearStatusHealthDialog({
+  health,
+  checking,
+  onRefresh,
+}: {
+  health: LinearStatusHealthResult | null
+  checking: boolean
+  onRefresh: () => void
+}) {
+  const open = linearStatusHealthBlocks(health)
+  const blockingProjects = health?.projects.filter((project) => !project.ok) || []
+
+  return (
+    <Dialog open={open}>
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[min(88svh,760px)] max-w-[min(860px,calc(100vw-1rem))] grid-rows-[auto_1fr_auto] overflow-hidden p-0"
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+      >
+        <div className="border-b px-4 py-4">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <ShieldAlert className="size-5 text-destructive" />
+            Linear 工作流状态不完整
+          </DialogTitle>
+          <DialogDescription className="mt-2 leading-6">
+            状态补齐或配置修正前，阶段一、阶段二和阶段三不会启动新的 Codex run。
+          </DialogDescription>
+        </div>
+
+        <ScrollArea className="min-h-0 px-4">
+          <div className="space-y-3 py-4">
+            {health?.errors.map((error) => (
+              <div
+                key={error}
+                className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+              >
+                {error}
+              </div>
+            ))}
+
+            {blockingProjects.map((project) => (
+              <LinearStatusProjectBlock key={project.projectKey} project={project} />
+            ))}
+
+            {health && (
+              <div className="rounded-lg border bg-muted/20 px-3 py-2">
+                <div className="text-xs font-medium text-muted-foreground">配置要求状态</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {health.requiredStatuses.map((status) => (
+                    <Badge key={status.key} variant="outline">
+                      {status.name}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+
+        <div className="flex flex-col gap-2 border-t bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-muted-foreground">
+            最近检测: {health?.checkedAt ? formatDate(health.checkedAt) : "-"}
+          </div>
+          <Button variant="outline" onClick={onRefresh} disabled={checking}>
+            <RefreshCcw className={cn("size-4", checking && "animate-spin")} />
+            重新检测
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function LinearStatusProjectBlock({ project }: { project: LinearStatusProjectHealth }) {
+  return (
+    <div className="rounded-lg border bg-background px-3 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">{project.repoName || project.projectKey}</div>
+          <div className="mt-1 break-all font-mono text-xs text-muted-foreground">
+            {project.linearProjectName || project.linearProjectId}
+          </div>
+        </div>
+        <Badge variant="destructive">阻断执行</Badge>
+      </div>
+
+      {project.errors.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {project.errors.map((error) => (
+            <div key={error} className="text-sm text-destructive">
+              {error}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 space-y-2">
+        {project.teams.map((team) => (
+          <div key={team.teamId} className="rounded-md border bg-muted/20 px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{team.teamName}</div>
+                <div className="font-mono text-xs text-muted-foreground">{team.teamKey || team.teamId}</div>
+              </div>
+              {team.missingStatuses.length > 0 ? (
+                <Badge variant="destructive">缺少 {team.missingStatuses.length} 个</Badge>
+              ) : (
+                <Badge variant="secondary">完整</Badge>
+              )}
+            </div>
+            {team.missingStatuses.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {team.missingStatuses.map((status) => (
+                  <Badge key={status.key} variant="outline" className="border-destructive/40 text-destructive">
+                    {status.name}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function linearStatusHealthBlocks(health: LinearStatusHealthResult | null) {
+  if (!health || health.ok) {
+    return false
+  }
+  return health.errors.length > 0 || health.projects.some((project) => !project.ok)
 }
 
 function Sidebar({

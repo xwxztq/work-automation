@@ -11,6 +11,7 @@ import {
 } from "./config.mjs"
 import { createCodexActivityPayload } from "./codex-activity.mjs"
 import { readAllPrompts, readPrompt, writePrompt } from "./prompts.mjs"
+import { checkLinearStatusHealth } from "./status-health.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, "../..")
@@ -65,6 +66,12 @@ async function handleApi(req, res, url, context) {
   if (method === "POST" && url.pathname === "/api/config/validate") {
     const config = await loadConfig(configPath, ROOT_DIR)
     sendJson(res, 200, await validateConfig(config, ROOT_DIR))
+    return
+  }
+
+  if (method === "GET" && url.pathname === "/api/linear/status-health") {
+    const config = await loadConfig(configPath, ROOT_DIR)
+    sendJson(res, 200, await checkLinearStatusHealth(config))
     return
   }
 

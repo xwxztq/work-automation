@@ -1,9 +1,11 @@
 import type {
   AppConfig,
   CodexActivityPayload,
+  ConfigValidationResult,
   DaemonStatus,
   ExecutionEvent,
   LinearProjectListResponse,
+  LinearStatusHealthResult,
   PromptStage,
   PromptBundle,
   RunDetail,
@@ -32,9 +34,10 @@ export const api = {
   saveConfig: (config: AppConfig) =>
     request<AppConfig>("/api/config", { method: "PUT", body: JSON.stringify(config) }),
   validateConfig: () =>
-    request<{ ok: boolean; errors: string[]; warnings: string[] }>("/api/config/validate", {
+    request<ConfigValidationResult>("/api/config/validate", {
       method: "POST",
     }),
+  getLinearStatusHealth: () => request<LinearStatusHealthResult>("/api/linear/status-health"),
   getPrompts: () => request<PromptBundle>("/api/prompts"),
   savePrompt: (scope: string, stage: PromptStage, content: string) =>
     request<{ filePath: string }>(`/api/prompts/${scope}/${stage}`, {
