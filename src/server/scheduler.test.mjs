@@ -1,13 +1,26 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-import { issueCountsTowardPart2ActiveLimit } from "./scheduler.mjs"
+import { issueCountsTowardPart2ActiveLimit, part1EligibleStatuses } from "./scheduler.mjs"
 
 const config = {
   statuses: {
     inProgress: "In Progress",
   },
 }
+
+test("part1 eligible statuses include too large for retriage", () => {
+  const statuses = part1EligibleStatuses({
+    statuses: {
+      todo: "Todo",
+      needsClarification: "Needs Clarification",
+      tooLarge: "Too Large",
+      blocked: "Blocked",
+    },
+  })
+
+  assert.deepEqual([...statuses], ["Todo", "Needs Clarification", "Too Large", "Blocked"])
+})
 
 test("part2 active limit counts handoff-driven implementation issues", () => {
   const issue = {

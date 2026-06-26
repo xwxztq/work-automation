@@ -85,6 +85,7 @@ test("buildPromptContext merges extra stage context", () => {
       statuses: {
         todo: "Todo",
         needsClarification: "Needs Clarification",
+        tooLarge: "Too Large",
         needsSplitting: "Needs Splitting",
         blocked: "Blocked",
         ready: "Ready for Codex",
@@ -110,6 +111,7 @@ test("buildPromptContext merges extra stage context", () => {
   )
 
   assert.equal(context.CURRENT_RUN_DIR, "/repo/work-automation/.linear-automation/runs/run-123")
+  assert.equal(context.STATUS_TOO_LARGE, "Too Large")
   assert.equal(context.STATUS_NEEDS_SPLITTING, "Needs Splitting")
   assert.deepEqual(context.DEFAULT_TEST_COMMANDS, ["- pnpm test"])
 })
@@ -152,4 +154,11 @@ test("split prompt documents coverage checklist handoff", async () => {
   assert.match(prompt, /覆盖清单/u)
   assert.match(prompt, /parent\/sub-issue/u)
   assert.match(prompt, /已移动到/u)
+})
+
+test("part1 prompt documents too large status before manual split", async () => {
+  const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part1")
+
+  assert.match(prompt, /\{\{STATUS_TOO_LARGE\}\}/u)
+  assert.match(prompt, /不要自动把 issue 继续移到/u)
 })

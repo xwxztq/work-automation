@@ -46,6 +46,7 @@ export type AppConfig = {
   statuses: {
     todo: string
     needsClarification: string
+    tooLarge: string
     needsSplitting: string
     blocked: string
     ready: string

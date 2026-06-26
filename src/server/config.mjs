@@ -184,6 +184,7 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   for (const statusKey of [
     "todo",
     "needsClarification",
+    "tooLarge",
     "needsSplitting",
     "blocked",
     "ready",

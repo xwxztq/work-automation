@@ -130,6 +130,7 @@ const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
 const statusConfigDescriptions: Record<keyof AppConfig["statuses"], string> = {
   todo: "阶段一会扫描的新需求入口。",
   needsClarification: "阶段一会复查等待用户补充的问题。",
+  tooLarge: "阶段一对范围过大的事项会回写到这里，等待人工审核后再转 Needs Splitting。",
   needsSplitting: "拆分阶段会扫描的待拆分队列入口。",
   blocked: "阶段一会复查阻塞是否解除。",
   ready: "阶段一判断可实现后的等待池，不会自动进入已排期。",
@@ -2200,9 +2201,9 @@ function SettingsPage({
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；拆分阶段只扫描
-            Needs Splitting；阶段二只扫描已排期状态；阶段三只扫描 Testing。`TOO LARGE` 不会自动移动到
-            Needs Splitting，仍需用户人工审核后变更状态。
+            状态名称必须和 Linear 工作流中的名称完全一致。阶段一会扫描待处理、需要澄清、范围过大和阻塞状态；当结论为
+            `TOO LARGE` 时，阶段一会把 issue 移到 Too Large。拆分阶段只扫描 Needs Splitting；阶段二只扫描已排期状态；
+            阶段三只扫描 Testing。Too Large 不会被服务自动继续移动到 Needs Splitting，仍需用户人工审核后变更状态。
           </p>
           <div className="grid grid-cols-3 gap-3 xl:grid-cols-5">
             {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
@@ -2470,6 +2471,7 @@ function statusConfigLabel(key: keyof AppConfig["statuses"]) {
   const labels: Record<keyof AppConfig["statuses"], string> = {
     todo: "待处理",
     needsClarification: "需要澄清",
+    tooLarge: "范围过大",
     needsSplitting: "待拆分",
     blocked: "阻塞",
     ready: "可交给 Codex",

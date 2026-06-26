@@ -9,7 +9,7 @@
 ## 功能
 
 - 读取当前机器配置的 Linear 项目。
-- 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
+- 阶段一检测 `Todo / Needs Clarification / Too Large / Blocked` 并启动 Codex 做分析。
 - 拆分阶段检测 `Needs Splitting` 并启动 Codex 创建 parent/sub-issue 子事项、回写覆盖清单，并把父 issue 移到 `In Progress`。
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现；候选按 Linear 优先级语义排序：`Urgent`、`High`、`Medium`、`Low`、无优先级，同优先级按 issue 编号数字升序执行。
 - 阶段三检测 `Testing` 并启动 Codex 做 Auto Review，按协议生成 review 产物、上传关键附件到 Linear，并流转到 `Ready for Review`、`On Schedule` 或 `Blocked`。
@@ -19,7 +19,7 @@
 - 支持停止单个运行或当前项目的运行；后端热重启后会从 `.linear-automation/runs` 恢复仍在运行的任务。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
 - 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响，但仍会遵守阶段状态边界。
-- 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Blocked` 进入阶段一，`Needs Splitting` 进入拆分阶段，`On Schedule` 进入阶段二，`Testing` 进入阶段三，其他状态直接跳过。
+- 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Too Large / Blocked` 进入阶段一，`Needs Splitting` 进入拆分阶段，`On Schedule` 进入阶段二，`Testing` 进入阶段三，其他状态直接跳过。
 - 不自动移动 issue 到 `Done`。
 
 ## Auto Review 协议
@@ -83,6 +83,7 @@
 
    - `Todo`: 阶段一会扫描的新需求入口。
    - `Needs Clarification`: 阶段一会复查等待用户补充的问题。
+   - `Too Large`: 阶段一判定范围过大后回写到这里，等待人工审核后再转拆分。
    - `Needs Splitting`: 拆分阶段会扫描的待拆分队列入口。
    - `Blocked`: 阶段一会复查阻塞是否解除。
    - `Ready for Codex`: 阶段一判断可实现后的等待池。
@@ -91,7 +92,7 @@
    - `Testing`: 阶段二完成后的 Auto Review 队列入口。
    - `Ready for Review`: 阶段三完成后等待人工验证。
 
-   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。`TOO LARGE` 也不会被服务自动移动到 `Needs Splitting`；这两个转换都必须由用户在 Linear 中人工完成。
+   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。阶段一如果判断为 `TOO LARGE`，会先把 issue 移到 `Too Large`；但不会自动继续移动到 `Needs Splitting`。从 `Too Large` 到 `Needs Splitting` 仍必须由用户在 Linear 中人工完成。
 
 6. 在界面或 `config.local.json` 中添加项目。界面新建项目时会自动生成 `key`，用户不需要手动填写。必填字段建议按下面填写:
 
@@ -123,7 +124,7 @@
 9. 首次跑通时建议按这个顺序验证:
 
    - 新 issue 放在 `Todo`，阶段一只分析和评论，不写代码。
-   - 如果阶段一判断 `TOO LARGE`，用户审核后手动把父 issue 移到 `Needs Splitting`，由拆分阶段创建子 issue 并输出覆盖清单。
+   - 如果阶段一判断 `TOO LARGE`，issue 会先进入 `Too Large`；用户审核后手动把父 issue 移到 `Needs Splitting`，由拆分阶段创建子 issue 并输出覆盖清单。
    - 用户确认可实现范围后，把目标 issue 移到 `On Schedule`。
    - 阶段二只认领 `On Schedule`，先移到 `In Progress`，由当前 Codex agent 实现、测试、提交，再移到 `Testing`。
    - 阶段三只认领 `Testing`，完成 Auto Review 后按协议移动到 `Ready for Review`、`On Schedule` 或 `Blocked`。
@@ -224,7 +225,7 @@ node src/server/index.mjs once --config config.local.json --stage both --issue L
 node src/server/index.mjs once --config config.local.json --stage part1 --issue LIV-123 --force
 ```
 
-手动指定 `--issue` 默认不会绕过状态边界：`--stage split --issue <issue>` 只有在该 issue 当前是 `Needs Splitting` 时才会启动拆分阶段；`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage part3 --issue <issue>` 只有在该 issue 当前是 `Testing` 时才会启动阶段三；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一、拆分阶段、阶段二或阶段三，不会对同一个 issue 同时启动多个阶段。
+手动指定 `--issue` 默认不会绕过状态边界：`--stage split --issue <issue>` 只有在该 issue 当前是 `Needs Splitting` 时才会启动拆分阶段；`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage part3 --issue <issue>` 只有在该 issue 当前是 `Testing` 时才会启动阶段三；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一、拆分阶段、阶段二或阶段三，其中 `Too Large` 仍会回到阶段一而不是直接触发拆分，不会对同一个 issue 同时启动多个阶段。
 
 如果需要人工强制重跑：
 

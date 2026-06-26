@@ -17,6 +17,7 @@ export const DEFAULT_CONFIG = {
   statuses: {
     todo: "Todo",
     needsClarification: "Needs Clarification",
+    tooLarge: "Too Large",
     needsSplitting: "Needs Splitting",
     blocked: "Blocked",
     ready: "Ready for Codex",

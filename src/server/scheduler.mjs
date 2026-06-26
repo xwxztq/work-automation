@@ -1741,10 +1741,11 @@ export function issueCountsTowardPart2ActiveLimit(issue, config) {
   ) >= 0
 }
 
-function part1EligibleStatuses(config) {
+export function part1EligibleStatuses(config) {
   return new Set([
     config.statuses.todo,
     config.statuses.needsClarification,
+    config.statuses.tooLarge,
     config.statuses.blocked,
   ])
 }

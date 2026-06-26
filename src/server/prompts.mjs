@@ -76,6 +76,7 @@ export function buildPromptContext(config, project, extraContext = {}) {
     EXTRA_RULES: project.extraRules || "No extra project-specific rules.",
     STATUS_TODO: statuses.todo,
     STATUS_NEEDS_CLARIFICATION: statuses.needsClarification,
+    STATUS_TOO_LARGE: statuses.tooLarge,
     STATUS_NEEDS_SPLITTING: statuses.needsSplitting,
     STATUS_BLOCKED: statuses.blocked,
     STATUS_READY: statuses.ready,
