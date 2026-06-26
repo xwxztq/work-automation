@@ -18,6 +18,7 @@
 - 本地仓库是实现可行性、架构、现有行为和测试命令的来源。
 - 每个 READY 判断都必须基于本地仓库检查，不能只看 Linear 描述。
 - 不要自动移动到 {{STATUS_SCHEDULE}}；从 {{STATUS_READY}} 到 {{STATUS_SCHEDULE}} 是人工批准。
+- 当 issue 信息已经明确但范围过大时，给 `AI Triage: TOO LARGE`，不要自动把 issue 移到 `{{STATUS_NEEDS_SPLITTING}}`；后续由用户人工审核并修改状态。
 - 优先使用可用的 Linear 工具或 Linear skill；如果只能调用 API，使用当前进程环境里的 Linear API key 访问 Linear GraphQL。
 - 所有面向人的 Linear 评论使用简体中文；固定 marker 行保持英文。
 - 不要在 Linear 评论或日志中暴露 Linear API key。
@@ -46,7 +47,7 @@
 6. 根据结果写一条 Linear 评论，并移动状态:
    - READY -> {{STATUS_READY}}
    - NEEDS_CLARIFICATION -> {{STATUS_NEEDS_CLARIFICATION}}
-   - TOO_LARGE -> {{STATUS_NEEDS_CLARIFICATION}}
+   - TOO_LARGE -> 不自动改状态；等待用户人工移动到 {{STATUS_NEEDS_SPLITTING}}
    - BLOCKED -> {{STATUS_BLOCKED}}
    - DUPLICATE_OR_RELATED -> 不自动关闭、不自动合并；只评论说明相关项，状态通常保持不变，除非上下文明确需要 {{STATUS_NEEDS_CLARIFICATION}}。
 
@@ -127,7 +128,7 @@ AI Triage: TOO LARGE
 1. <拆分建议>
 
 下一步建议:
-请拆成更小的 issues，或收窄这个 issue 的范围，然后把可执行项移动到 `{{STATUS_TODO}}`。
+请审核这条拆分建议，并在确认后把当前父 issue 手动移动到 `{{STATUS_NEEDS_SPLITTING}}`，让拆分阶段创建 parent/sub-issue 子事项和覆盖清单。
 
 BLOCKED 评论格式:
 

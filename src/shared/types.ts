@@ -1,4 +1,4 @@
-export type PromptStage = "part1" | "part2" | "part3"
+export type PromptStage = "part1" | "split" | "part2" | "part3"
 export type Stage = PromptStage | "both"
 
 export type LinearProjectOption = {
@@ -20,6 +20,7 @@ export type ProjectConfig = {
   maxActivePart2: number
   defaultTests: string[]
   part1PromptMode: "global" | "override"
+  splitPromptMode: "global" | "override"
   part2PromptMode: "global" | "override"
   part3PromptMode: "global" | "override"
   extraRules: string
@@ -38,12 +39,14 @@ export type AppConfig = {
     bin: string
     defaultArgs: string[]
     part1Sandbox: string
+    splitSandbox: string
     part2Sandbox: string
     part3Sandbox: string
   }
   statuses: {
     todo: string
     needsClarification: string
+    needsSplitting: string
     blocked: string
     ready: string
     schedule: string
@@ -57,6 +60,7 @@ export type AppConfig = {
 export type PromptBundle = {
   global: {
     part1: string
+    split: string
     part2: string
     part3: string
   }
@@ -64,9 +68,11 @@ export type PromptBundle = {
     string,
     {
       part1: string
+      split: string
       part2: string
       part3: string
       part1IsOverride: boolean
+      splitIsOverride: boolean
       part2IsOverride: boolean
       part3IsOverride: boolean
     }

@@ -87,6 +87,7 @@ export function normalizeConfig(raw) {
       maxActivePart2: 1,
       defaultTests: [],
       part1PromptMode: "global",
+      splitPromptMode: "global",
       part2PromptMode: "global",
       part3PromptMode: "global",
       extraRules: "无额外项目规则。",
@@ -183,6 +184,7 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   for (const statusKey of [
     "todo",
     "needsClarification",
+    "needsSplitting",
     "blocked",
     "ready",
     "schedule",

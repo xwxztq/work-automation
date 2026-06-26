@@ -102,6 +102,7 @@ const emptyProject: ProjectConfig = {
   maxActivePart2: 1,
   defaultTests: [],
   part1PromptMode: "global",
+  splitPromptMode: "global",
   part2PromptMode: "global",
   part3PromptMode: "global",
   extraRules: "无额外项目规则。",
@@ -129,10 +130,11 @@ const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
 const statusConfigDescriptions: Record<keyof AppConfig["statuses"], string> = {
   todo: "阶段一会扫描的新需求入口。",
   needsClarification: "阶段一会复查等待用户补充的问题。",
+  needsSplitting: "拆分阶段会扫描的待拆分队列入口。",
   blocked: "阶段一会复查阻塞是否解除。",
   ready: "阶段一判断可实现后的等待池，不会自动进入已排期。",
   schedule: "用户人工批准后，阶段二才会认领实现。",
-  inProgress: "当前 Codex agent 已认领并正在实现。",
+  inProgress: "阶段二认领后的实现中状态；拆分阶段完成后父 issue 也会进入这里，但不占阶段二并发名额。",
   testing: "阶段二完成后进入阶段三 Auto Review 队列。",
   readyForReview: "阶段三自动复查完成后等待人工验证。",
 }
@@ -1134,6 +1136,7 @@ function ProjectView({
                 <SelectContent>
                   <SelectItem value="both">全部</SelectItem>
                   <SelectItem value="part1">阶段一</SelectItem>
+                  <SelectItem value="split">拆分阶段</SelectItem>
                   <SelectItem value="part2">阶段二</SelectItem>
                   <SelectItem value="part3">阶段三 / Auto Review</SelectItem>
                 </SelectContent>
@@ -1920,6 +1923,9 @@ function ProjectEditor({
           <Field label="阶段一提示词模式">
             <ModeSelect value={project.part1PromptMode} onValueChange={(value) => onUpdate({ part1PromptMode: value })} />
           </Field>
+          <Field label="拆分阶段提示词模式">
+            <ModeSelect value={project.splitPromptMode} onValueChange={(value) => onUpdate({ splitPromptMode: value })} />
+          </Field>
           <Field label="阶段二提示词模式">
             <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
           </Field>
@@ -2150,12 +2156,20 @@ function SettingsPage({
                 }
               />
             </Field>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <Field label="阶段一沙箱">
                 <Input
                   value={config.codex.part1Sandbox}
                   onChange={(event) =>
                     setConfig({ ...config, codex: { ...config.codex, part1Sandbox: event.target.value } })
+                  }
+                />
+              </Field>
+              <Field label="拆分阶段沙箱">
+                <Input
+                  value={config.codex.splitSandbox}
+                  onChange={(event) =>
+                    setConfig({ ...config, codex: { ...config.codex, splitSandbox: event.target.value } })
                   }
                 />
               </Field>
@@ -2186,9 +2200,11 @@ function SettingsPage({
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；阶段二只扫描已排期状态；阶段三只扫描 Testing。Ready for Codex 到 On Schedule 需要用户人工批准，阶段三完成后最小支持流转到 Ready for Review 或回到 On Schedule。
+            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；拆分阶段只扫描
+            Needs Splitting；阶段二只扫描已排期状态；阶段三只扫描 Testing。`TOO LARGE` 不会自动移动到
+            Needs Splitting，仍需用户人工审核后变更状态。
           </p>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 gap-3 xl:grid-cols-5">
             {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
               <Field key={key} label={statusConfigLabel(key)} description={statusConfigDescriptions[key]}>
                 <Input
@@ -2221,6 +2237,7 @@ function SettingsPage({
             <Tabs value={promptStage} onValueChange={(value) => setPromptStage(value as PromptStage)}>
               <TabsList>
                 <TabsTrigger value="part1">阶段一</TabsTrigger>
+                <TabsTrigger value="split">拆分阶段</TabsTrigger>
                 <TabsTrigger value="part2">阶段二</TabsTrigger>
                 <TabsTrigger value="part3">阶段三</TabsTrigger>
               </TabsList>
@@ -2234,6 +2251,7 @@ function SettingsPage({
                 {projectKeys.map((key) => (
                   <SelectItem key={key} value={key}>
                     {prompts.projects[key]?.part1IsOverride ||
+                    prompts.projects[key]?.splitIsOverride ||
                     prompts.projects[key]?.part2IsOverride ||
                     prompts.projects[key]?.part3IsOverride
                       ? `${key}`
@@ -2411,6 +2429,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function stageLabel(stage: string) {
   if (stage === "part1") return "阶段一"
+  if (stage === "split") return "拆分阶段"
   if (stage === "part2") return "阶段二"
   if (stage === "part3") return "阶段三"
   if (stage === "both") return "全部"
@@ -2451,6 +2470,7 @@ function statusConfigLabel(key: keyof AppConfig["statuses"]) {
   const labels: Record<keyof AppConfig["statuses"], string> = {
     todo: "待处理",
     needsClarification: "需要澄清",
+    needsSplitting: "待拆分",
     blocked: "阻塞",
     ready: "可交给 Codex",
     schedule: "已排期",
