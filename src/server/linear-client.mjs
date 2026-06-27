@@ -3,6 +3,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 
 const API_URL = new URL("https://api.linear.app/graphql")
+const STATUS_HEALTH_PROJECT_PAGE_SIZE = 100
 const require = createRequire(import.meta.url)
 const { HttpsProxyAgent } = require(
   fileURLToPath(
@@ -138,12 +139,121 @@ export function createLinearClient(apiKey) {
   }
 
   async function listProjectWorkflowStates(projectId) {
+    const results = await listProjectsWorkflowStates([projectId])
+    const result = results[0]
+    if (!result || result.error) {
+      throw new Error(result?.error || `未找到 Linear 项目: ${projectId}`)
+    }
+    return result
+  }
+
+  async function listProjectsWorkflowStates(projectIds) {
+    const uniqueProjectIds = [...new Set(projectIds.map((id) => String(id || "").trim()).filter(Boolean))]
+    if (!uniqueProjectIds.length) {
+      return []
+    }
+
+    const projects = await listProjectsForStatusHealth(uniqueProjectIds)
+    const teamsById = new Map()
+    for (const project of projects.values()) {
+      for (const team of project.teams?.nodes || []) {
+        teamsById.set(team.id, team)
+      }
+    }
+    const workflowStatesByTeamId = await listWorkflowStatesByTeamIds([...teamsById.keys()])
+
+    return uniqueProjectIds.map((projectId) => {
+      const project = projects.get(projectId)
+      if (!project) {
+        return {
+          requestedProjectId: projectId,
+          project: {
+            id: projectId,
+            name: "",
+            url: null,
+          },
+          teams: [],
+          error: `未找到 Linear 项目: ${projectId}`,
+        }
+      }
+      return {
+        requestedProjectId: projectId,
+        project: {
+          id: project.id,
+          name: project.name,
+          url: project.url || null,
+        },
+        teams: (project.teams?.nodes || []).map((team) => ({
+          ...team,
+          workflowStates: workflowStatesByTeamId.get(team.id) || [],
+        })),
+      }
+    })
+  }
+
+  async function listProjectsForStatusHealth(projectIds) {
+    const summaries = await listProjectSummariesForStatusHealth(projectIds)
+    const projectsWithTeamsById = await listProjectTeamsForStatusHealth([...summaries.values()])
+    const projects = new Map()
+    for (const [requestedProjectId, summary] of summaries.entries()) {
+      projects.set(requestedProjectId, {
+        ...summary,
+        teams: projectsWithTeamsById.get(summary.id)?.teams || { nodes: [] },
+      })
+    }
+    return projects
+  }
+
+  async function listProjectSummariesForStatusHealth(projectIds) {
     const query = `
-      query ProjectWorkflowStateTeams($projectId: String!) {
-        project(id: $projectId) {
+      query ProjectsForStatusHealth($first: Int!, $after: String) {
+        projects(first: $first, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            name
+            url
+          }
+        }
+      }
+    `
+    const requestedProjectIds = new Set(projectIds)
+    const projects = new Map()
+    let after = null
+
+    do {
+      const data = await graphql(query, { first: STATUS_HEALTH_PROJECT_PAGE_SIZE, after })
+      for (const project of data.projects?.nodes || []) {
+        for (const lookupKey of projectLookupKeys(project)) {
+          if (requestedProjectIds.has(lookupKey) && !projects.has(lookupKey)) {
+            projects.set(lookupKey, project)
+          }
+        }
+      }
+      after = data.projects?.pageInfo?.hasNextPage && projects.size < requestedProjectIds.size
+        ? data.projects.pageInfo.endCursor
+        : null
+    } while (after)
+
+    return projects
+  }
+
+  async function listProjectTeamsForStatusHealth(projects) {
+    const uniqueProjects = [...new Map(projects.map((project) => [project.id, project])).values()]
+    if (!uniqueProjects.length) {
+      return new Map()
+    }
+
+    const variables = Object.fromEntries(uniqueProjects.map((project, index) => [`project${index}`, project.id]))
+    const variableDefinitions = uniqueProjects.map((_, index) => `$project${index}: String!`).join(", ")
+    const projectSelections = uniqueProjects
+      .map(
+        (_, index) => `
+        project${index}: project(id: $project${index}) {
           id
-          name
-          url
           teams {
             nodes {
               id
@@ -152,27 +262,92 @@ export function createLinearClient(apiKey) {
             }
           }
         }
+      `,
+      )
+      .join("\n")
+    const query = `
+      query ProjectTeamsForStatusHealth(${variableDefinitions}) {
+        ${projectSelections}
       }
     `
-    const data = await graphql(query, { projectId })
-    if (!data.project) {
-      throw new Error(`未找到 Linear 项目: ${projectId}`)
+    const data = await graphql(query, variables)
+    const projectsById = new Map()
+    uniqueProjects.forEach((project, index) => {
+      const projectWithTeams = data[`project${index}`]
+      if (projectWithTeams) {
+        projectsById.set(project.id, projectWithTeams)
+      }
+    })
+    return projectsById
+  }
+
+  function projectLookupKeys(project) {
+    const keys = new Set([project.id, project.name, project.url].filter(Boolean))
+    if (!project.url) {
+      return keys
     }
-    const teams = []
-    for (const team of data.project.teams?.nodes || []) {
-      teams.push({
-        ...team,
-        workflowStates: await listTeamWorkflowStates(team.id),
-      })
+
+    try {
+      const url = new URL(project.url)
+      const segments = url.pathname
+        .split("/")
+        .map((segment) => decodeURIComponent(segment.trim()))
+        .filter(Boolean)
+      for (const segment of segments) {
+        keys.add(segment)
+      }
+      const projectSegmentIndex = segments.indexOf("project")
+      if (projectSegmentIndex !== -1) {
+        for (const segment of segments.slice(projectSegmentIndex + 1)) {
+          keys.add(segment)
+        }
+      }
+    } catch {
+      const fallbackSegments = project.url
+        .split("/")
+        .map((segment) => decodeURIComponent(segment.trim()))
+        .filter(Boolean)
+      for (const segment of fallbackSegments) {
+        keys.add(segment)
+      }
     }
-    return {
-      project: {
-        id: data.project.id,
-        name: data.project.name,
-        url: data.project.url || null,
-      },
-      teams,
+
+    return keys
+  }
+
+  async function listWorkflowStatesByTeamIds(teamIds) {
+    const uniqueTeamIds = [...new Set(teamIds.map((id) => String(id || "").trim()).filter(Boolean))]
+    const statesByTeamId = new Map(uniqueTeamIds.map((teamId) => [teamId, []]))
+    if (!uniqueTeamIds.length) {
+      return statesByTeamId
     }
+
+    const variables = Object.fromEntries(uniqueTeamIds.map((teamId, index) => [`team${index}`, teamId]))
+    const variableDefinitions = uniqueTeamIds.map((_, index) => `$team${index}: ID!`).join(", ")
+    const stateSelections = uniqueTeamIds
+      .map(
+        (_, index) => `
+        team${index}: workflowStates(first: 100, filter: { team: { id: { eq: $team${index} } } }) {
+          nodes {
+            id
+            name
+            type
+          }
+        }
+      `,
+      )
+      .join("\n")
+    const query = `
+      query WorkflowStatesForTeams(${variableDefinitions}) {
+        ${stateSelections}
+      }
+    `
+    const data = await graphql(query, variables)
+    uniqueTeamIds.forEach((teamId, index) => {
+      statesByTeamId.set(teamId, data[`team${index}`]?.nodes || [])
+    })
+
+    return statesByTeamId
   }
 
   async function listTeamWorkflowStates(teamId) {
@@ -271,6 +446,7 @@ export function createLinearClient(apiKey) {
     listProjects,
     listProjectIssues,
     listProjectWorkflowStates,
+    listProjectsWorkflowStates,
     listTeamWorkflowStates,
     getIssue,
     updateIssueState,

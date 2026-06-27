@@ -5,6 +5,7 @@ import { loadLocalEnv } from "./env.mjs"
 import { createRunStore } from "./run-store.mjs"
 import { createScheduler } from "./scheduler.mjs"
 import { applyHostOverride, RUNTIME_HOST_ENV, normalizeHost, validateHost } from "./host.mjs"
+import { createLinearStatusHealthChecker } from "./status-health.mjs"
 
 const ROOT_DIR = process.cwd()
 const args = parseArgs(process.argv.slice(2))
@@ -15,7 +16,8 @@ const hostOverride = resolveHostOverride(args)
 
 const store = createRunStore(ROOT_DIR)
 const configProvider = async () => applyHostOverride(await loadConfig(configPath, ROOT_DIR), hostOverride)
-const scheduler = createScheduler({ rootDir: ROOT_DIR, configProvider, store })
+const linearStatusHealthChecker = createLinearStatusHealthChecker()
+const scheduler = createScheduler({ rootDir: ROOT_DIR, configProvider, store, linearStatusHealthChecker })
 
 if (command === "validate-config") {
   const config = await configProvider()
@@ -44,6 +46,7 @@ const server = createHttpApi({
   configPath,
   scheduler,
   store,
+  linearStatusHealthChecker,
   dev: Boolean(args.dev),
 })
 

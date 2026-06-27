@@ -37,7 +37,8 @@ export const api = {
     request<ConfigValidationResult>("/api/config/validate", {
       method: "POST",
     }),
-  getLinearStatusHealth: () => request<LinearStatusHealthResult>("/api/linear/status-health"),
+  getLinearStatusHealth: (refresh = false) =>
+    request<LinearStatusHealthResult>(`/api/linear/status-health${refresh ? "?refresh=1" : ""}`),
   getPrompts: () => request<PromptBundle>("/api/prompts"),
   savePrompt: (scope: string, stage: PromptStage, content: string) =>
     request<{ filePath: string }>(`/api/prompts/${scope}/${stage}`, {

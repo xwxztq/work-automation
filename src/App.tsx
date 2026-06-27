@@ -256,6 +256,7 @@ function App() {
   const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
   const [linearStatusHealth, setLinearStatusHealth] = useState<LinearStatusHealthResult | null>(null)
   const [linearStatusChecking, setLinearStatusChecking] = useState(false)
+  const [linearStatusDialogDismissedAt, setLinearStatusDialogDismissedAt] = useState<string | null>(null)
   const autoStartTried = useRef(false)
 
   useEffect(() => {
@@ -331,6 +332,12 @@ function App() {
     () => runs.filter((run) => run.projectKey === selectedProjectKey),
     [runs, selectedProjectKey],
   )
+  const linearStatusDialogOpen = useMemo(() => {
+    if (!linearStatusHealthBlocks(linearStatusHealth)) {
+      return false
+    }
+    return linearStatusDialogDismissedAt !== linearStatusHealth?.checkedAt
+  }, [linearStatusDialogDismissedAt, linearStatusHealth])
   const activeProjectRuns = useMemo(
     () => daemon?.activeRuns.filter((run) => run.projectKey === selectedProjectKey) || [],
     [daemon, selectedProjectKey],
@@ -554,7 +561,7 @@ function App() {
   async function triggerOnce(stage: Stage, issueId?: string, projectKey?: string, force = false) {
     setManualRunSubmitting(true)
     try {
-      const nextLinearStatusHealth = await refreshLinearStatusHealth(true)
+      const nextLinearStatusHealth = await refreshLinearStatusHealth(true, true)
       if (linearStatusHealthBlocks(nextLinearStatusHealth)) {
         toast.error("Linear 工作流状态不完整，已阻止执行")
         return
@@ -656,11 +663,14 @@ function App() {
     }
   }
 
-  async function refreshLinearStatusHealth(silent = false) {
+  async function refreshLinearStatusHealth(silent = false, refresh = false) {
     setLinearStatusChecking(true)
     try {
-      const next = await api.getLinearStatusHealth()
+      const next = await api.getLinearStatusHealth(refresh)
       setLinearStatusHealth(next)
+      if (next.ok) {
+        setLinearStatusDialogDismissedAt(null)
+      }
       return next
     } catch (error) {
       if (!silent) {
@@ -670,6 +680,16 @@ function App() {
     } finally {
       setLinearStatusChecking(false)
     }
+  }
+
+  function dismissLinearStatusDialog() {
+    setLinearStatusDialogDismissedAt(linearStatusHealth?.checkedAt || "dismissed")
+  }
+
+  function openSettingsFromLinearStatusDialog() {
+    dismissLinearStatusDialog()
+    setSelectedRun(null)
+    setView("settings")
   }
 
   async function cancelRun(id: string) {
@@ -846,9 +866,12 @@ function App() {
         onRemove={editingProjectKey ? () => void removeProject(editingProjectKey) : undefined}
       />
       <LinearStatusHealthDialog
+        open={linearStatusDialogOpen}
         health={linearStatusHealth}
         checking={linearStatusChecking}
-        onRefresh={() => void refreshLinearStatusHealth()}
+        onRefresh={() => void refreshLinearStatusHealth(false, true)}
+        onDismiss={dismissLinearStatusDialog}
+        onOpenSettings={openSettingsFromLinearStatusDialog}
       />
       <Toaster />
     </main>
@@ -856,15 +879,20 @@ function App() {
 }
 
 function LinearStatusHealthDialog({
+  open,
   health,
   checking,
   onRefresh,
+  onDismiss,
+  onOpenSettings,
 }: {
+  open: boolean
   health: LinearStatusHealthResult | null
   checking: boolean
   onRefresh: () => void
+  onDismiss: () => void
+  onOpenSettings: () => void
 }) {
-  const open = linearStatusHealthBlocks(health)
   const blockingProjects = health?.projects.filter((project) => !project.ok) || []
 
   return (
@@ -881,7 +909,7 @@ function LinearStatusHealthDialog({
             Linear 工作流状态不完整
           </DialogTitle>
           <DialogDescription className="mt-2 leading-6">
-            状态补齐或配置修正前，阶段一、阶段二和阶段三不会启动新的 Codex run。
+            状态补齐或配置修正前，阶段一、阶段二和阶段三不会启动新的 Codex run。项目 ID 或 slug 写错时，可以先进入配置修正。
           </DialogDescription>
         </div>
 
@@ -915,14 +943,23 @@ function LinearStatusHealthDialog({
           </div>
         </ScrollArea>
 
-        <div className="flex flex-col gap-2 border-t bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 border-t bg-muted/30 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="text-xs text-muted-foreground">
             最近检测: {health?.checkedAt ? formatDate(health.checkedAt) : "-"}
           </div>
-          <Button variant="outline" onClick={onRefresh} disabled={checking}>
-            <RefreshCcw className={cn("size-4", checking && "animate-spin")} />
-            重新检测
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button variant="outline" onClick={onOpenSettings}>
+              <Settings className="size-4" />
+              修改配置
+            </Button>
+            <Button variant="ghost" onClick={onDismiss}>
+              暂时收起
+            </Button>
+            <Button variant="outline" onClick={onRefresh} disabled={checking}>
+              <RefreshCcw className={cn("size-4", checking && "animate-spin")} />
+              重新检测
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

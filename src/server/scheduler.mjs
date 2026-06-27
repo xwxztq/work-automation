@@ -15,12 +15,18 @@ import {
   renderPrompt,
 } from "./prompts.mjs"
 import {
-  checkLinearProjectStatusHealth,
+  createLinearStatusHealthChecker,
+  formatLinearStatusHealthBlock,
   formatProjectStatusHealthBlock,
-  projectStatusHealthIsBlocking,
+  linearStatusHealthIsBlocking,
 } from "./status-health.mjs"
 
-export function createScheduler({ rootDir, configProvider, store }) {
+export function createScheduler({
+  rootDir,
+  configProvider,
+  store,
+  linearStatusHealthChecker = createLinearStatusHealthChecker(),
+}) {
   let timer = null
   let enabled = false
   let running = false
@@ -59,6 +65,27 @@ export function createScheduler({ rootDir, configProvider, store }) {
       },
     })
 
+    const linearStatusHealth = await linearStatusHealthChecker.check(config, { linear })
+    if (linearStatusHealthIsBlocking(linearStatusHealth)) {
+      summary.projects = await blockProjectsForLinearStatusHealth({
+        projects,
+        stage,
+        statusHealth: linearStatusHealth,
+      })
+      summary.finishedAt = new Date().toISOString()
+      await logEvent({
+        type: "scan-finish",
+        stage,
+        projectKey: options.projectKey,
+        message: "扫描结束",
+        data: {
+          projectCount: summary.projects.length,
+          finishedAt: summary.finishedAt,
+        },
+      })
+      return summary
+    }
+
     summary.projects = await Promise.all(
       projects.map((project) =>
         runProjectCycle({ config, project, linear, stage, issueId: options.issueId, force: Boolean(options.force) }).catch(async (error) => {
@@ -95,6 +122,34 @@ export function createScheduler({ rootDir, configProvider, store }) {
     return summary
   }
 
+  async function blockProjectsForLinearStatusHealth({ projects, stage, statusHealth }) {
+    const globalMessage = formatLinearStatusHealthBlock(statusHealth)
+    const healthByProjectKey = new Map(statusHealth.projects.map((project) => [project.projectKey, project]))
+    await logEvent({
+      type: "linear-status-health-blocked",
+      level: "error",
+      stage,
+      projectKey: null,
+      message: globalMessage,
+      data: { health: statusHealth },
+    })
+
+    return projects.map((project) => {
+      const projectHealth = healthByProjectKey.get(project.key)
+      return {
+        key: project.key,
+        part1: [],
+        part2: [],
+        part3: [],
+        skipped: [
+          projectHealth && !projectHealth.ok
+            ? formatProjectStatusHealthBlock(projectHealth)
+            : globalMessage,
+        ],
+      }
+    })
+  }
+
   async function runProjectCycle({ config, project, linear, stage, issueId, force = false }) {
     const projectSummary = {
       key: project.key,
@@ -120,9 +175,6 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message: "项目扫描开始",
         data: { issueId, force },
       })
-      if (!(await ensureProjectStatusHealth({ config, project, linear, stage, projectSummary }))) {
-        return projectSummary
-      }
       const effectiveStage =
         issueId && stage === "both"
           ? await resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force })
@@ -251,24 +303,6 @@ export function createScheduler({ rootDir, configProvider, store }) {
         message,
       })
     }
-  }
-
-  async function ensureProjectStatusHealth({ config, project, linear, stage, projectSummary }) {
-    const health = await checkLinearProjectStatusHealth(config, project, linear)
-    if (!projectStatusHealthIsBlocking(health)) {
-      return true
-    }
-    const message = formatProjectStatusHealthBlock(health)
-    projectSummary.skipped.push(message)
-    await logEvent({
-      type: "linear-status-health-blocked",
-      level: "error",
-      stage,
-      projectKey: project.key,
-      message,
-      data: { health },
-    })
-    return false
   }
 
   async function resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force = false }) {
@@ -1569,7 +1603,7 @@ function getLinear(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   const apiKey = process.env[apiKeyEnv]
   if (!apiKey) {
-    throw new Error(`未设置 ${apiKeyEnv}。`)
+    return null
   }
   return createLinearClient(apiKey)
 }

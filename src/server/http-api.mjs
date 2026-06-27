@@ -11,17 +11,23 @@ import {
 } from "./config.mjs"
 import { createCodexActivityPayload } from "./codex-activity.mjs"
 import { readAllPrompts, readPrompt, writePrompt } from "./prompts.mjs"
-import { checkLinearStatusHealth } from "./status-health.mjs"
+import { createLinearStatusHealthChecker } from "./status-health.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, "../..")
 
-export function createHttpApi({ configPath, scheduler, store, dev = false }) {
+export function createHttpApi({
+  configPath,
+  scheduler,
+  store,
+  dev = false,
+  linearStatusHealthChecker = createLinearStatusHealthChecker(),
+}) {
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost")
       if (url.pathname.startsWith("/api/")) {
-        await handleApi(req, res, url, { configPath, scheduler, store })
+        await handleApi(req, res, url, { configPath, scheduler, store, linearStatusHealthChecker })
         return
       }
       if (dev) {
@@ -40,7 +46,7 @@ export function createHttpApi({ configPath, scheduler, store, dev = false }) {
 }
 
 async function handleApi(req, res, url, context) {
-  const { configPath, scheduler, store } = context
+  const { configPath, scheduler, store, linearStatusHealthChecker } = context
   const method = req.method || "GET"
   const parts = url.pathname.split("/").filter(Boolean)
 
@@ -71,7 +77,13 @@ async function handleApi(req, res, url, context) {
 
   if (method === "GET" && url.pathname === "/api/linear/status-health") {
     const config = await loadConfig(configPath, ROOT_DIR)
-    sendJson(res, 200, await checkLinearStatusHealth(config))
+    sendJson(
+      res,
+      200,
+      await linearStatusHealthChecker.check(config, {
+        force: url.searchParams.get("refresh") === "1",
+      }),
+    )
     return
   }
 
