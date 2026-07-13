@@ -4,21 +4,22 @@
 
 # Linear Codex 自动执行
 
-本地服务，用于在每台服务器上执行 Linear 到 Codex 的三阶段流程。
+本地服务，用于在每台服务器上执行 Linear 到 Codex 的四阶段流程（阶段一、拆分阶段、阶段二、阶段三）。
 
 ## 功能
 
 - 读取当前机器配置的 Linear 项目。
-- 阶段一检测 `Todo / Needs Clarification / Blocked` 并启动 Codex 做分析。
+- 阶段一检测 `Todo / Needs Clarification / Too Large / Blocked` 并启动 Codex 做分析。
+- 拆分阶段检测 `Needs Splitting` 并启动 Codex 创建 parent/sub-issue 子事项、回写覆盖清单，并把父 issue 移到 `In Progress`。
 - 阶段二检测 `On Schedule` 并启动 Codex 做实现；候选按 Linear 优先级语义排序：`Urgent`、`High`、`Medium`、`Low`、无优先级，同优先级按 issue 编号数字升序执行。
 - 阶段三检测 `Testing` 并启动 Codex 做 Auto Review，按协议生成 review 产物、上传关键附件到 Linear，并流转到 `Ready for Review`、`On Schedule` 或 `Blocked`。
 - 服务端只负责扫描队列、启动独立 Codex supervisor、记录日志和停止子进程；Linear 评论和状态移动由 Codex agent 直接完成。
-- 多个项目并行执行；同一项目内阶段一、阶段二、阶段三互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
+- 多个项目并行执行；同一项目内阶段一、拆分阶段、阶段二、阶段三互不等待，阶段一不同 issue 可并行执行，阶段二仍受并发上限控制。
 - 使用 `codex exec --json --skip-git-repo-check --sandbox <stage sandbox> -C <project.codexCwd> -` 启动 Codex。
 - 支持停止单个运行或当前项目的运行；后端热重启后会从 `.linear-automation/runs` 恢复仍在运行的任务。
 - 单次运行日志写入 `.linear-automation/runs`，全局执行日志写入 `.linear-automation/events.jsonl`。
 - 已处理 issue 的快照 MD5 写入 `.linear-automation/processed-issues.json`。自动扫描时，如果当前 Linear issue 自上次处理后没有变化，会跳过，避免 Blocked 等状态被重复评论；手动指定 issue 执行不受这个跳过规则影响，但仍会遵守阶段状态边界。
-- 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Blocked` 进入阶段一，`On Schedule` 进入阶段二，`Testing` 进入阶段三，其他状态直接跳过。
+- 手动指定 issue 且选择 `全部` 时，服务端会按 issue 当前状态只路由到一个合法阶段：`Todo / Needs Clarification / Too Large / Blocked` 进入阶段一，`Needs Splitting` 进入拆分阶段，`On Schedule` 进入阶段二，`Testing` 进入阶段三，其他状态直接跳过。
 - 不自动移动 issue 到 `Done`。
 
 ## Auto Review 协议
@@ -27,7 +28,7 @@
 - 阶段三评论在保留 `Review 摘要` / `关键产物内容` 内联结论的同时，需要把适合直接审阅的关键截图或对比产物上传到 Linear，并在评论中引用这些附件。
 - 当前仓库固定提供的运行基础文件来自 `.linear-automation/runs/<run-id>/`，阶段三后续新增的 review 产物也统一落在当前 `part3` run 目录下。
 - 为了让跨仓库的阶段三可以把 review 产物写回当前 Work Automation 的 run 目录，默认 `part3Sandbox` 使用 `danger-full-access`；提示词会约束 agent 只写当前 run 目录，不回写业务仓库。
-- 阶段二和阶段三的 Linear 评论模板以 `prompts/part2.global.md` 与 `prompts/part3.global.md` 为准。
+- 阶段一、拆分阶段、阶段二和阶段三的提示词模板分别位于 `prompts/part1.global.md`、`prompts/split.global.md`、`prompts/part2.global.md` 与 `prompts/part3.global.md`。
 
 ## 首次使用
 
@@ -82,14 +83,16 @@
 
    - `Todo`: 阶段一会扫描的新需求入口。
    - `Needs Clarification`: 阶段一会复查等待用户补充的问题。
+   - `Too Large`: 阶段一判定范围过大后回写到这里，等待人工审核后再转拆分。
+   - `Needs Splitting`: 拆分阶段会扫描的待拆分队列入口。
    - `Blocked`: 阶段一会复查阻塞是否解除。
    - `Ready for Codex`: 阶段一判断可实现后的等待池。
    - `On Schedule`: 用户人工批准后，阶段二才会认领实现。
-   - `In Progress`: 当前 Codex agent 已认领并正在实现。
+   - `In Progress`: 阶段二认领后的实现中状态；拆分阶段完成后父 issue 也会进入这里，但不会占用阶段二并发名额。
    - `Testing`: 阶段二完成后的 Auto Review 队列入口。
    - `Ready for Review`: 阶段三完成后等待人工验证。
 
-   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。这个转换必须由用户在 Linear 中人工完成。
+   `Ready for Codex` 不会被服务自动移动到 `On Schedule`。阶段一如果判断为 `TOO LARGE`，会先把 issue 移到 `Too Large`；但不会自动继续移动到 `Needs Splitting`。从 `Too Large` 到 `Needs Splitting` 仍必须由用户在 Linear 中人工完成。
 
 6. 在界面或 `config.local.json` 中添加项目。界面新建项目时会自动生成 `key`，用户不需要手动填写。必填字段建议按下面填写:
 
@@ -121,7 +124,8 @@
 9. 首次跑通时建议按这个顺序验证:
 
    - 新 issue 放在 `Todo`，阶段一只分析和评论，不写代码。
-   - 用户确认范围后，把 issue 移到 `On Schedule`。
+   - 如果阶段一判断 `TOO LARGE`，issue 会先进入 `Too Large`；用户审核后手动把父 issue 移到 `Needs Splitting`，由拆分阶段创建子 issue 并输出覆盖清单。
+   - 用户确认可实现范围后，把目标 issue 移到 `On Schedule`。
    - 阶段二只认领 `On Schedule`，先移到 `In Progress`，由当前 Codex agent 实现、测试、提交，再移到 `Testing`。
    - 阶段三只认领 `Testing`，完成 Auto Review 后按协议移动到 `Ready for Review`、`On Schedule` 或 `Blocked`。
 
@@ -129,6 +133,7 @@
 
 ```bash
 pnpm once -- --stage part1
+pnpm once -- --stage split
 pnpm once -- --stage part2
 pnpm once -- --stage part3
 ```
@@ -196,15 +201,15 @@ pnpm start -- --host 192.168.1.23
 - 服务 ID、监听地址、端口、轮询间隔
 - Linear API 密钥环境变量名；真实密钥放在当前进程环境、`.env.local` 或 `.env` 中，不写入 `config.local.json`
 - Codex 命令和默认参数
-- Codex 默认只附加 `--json`；阶段一默认 sandbox 为 `read-only`，阶段二默认 sandbox 为 `danger-full-access`，阶段三默认 sandbox 为 `danger-full-access`。
+- Codex 默认只附加 `--json`；阶段一和拆分阶段默认 sandbox 为 `read-only`，阶段二默认 sandbox 为 `danger-full-access`，阶段三默认 sandbox 为 `danger-full-access`。
 - Linear 工作流状态名
 - 项目、仓库路径、Codex 执行路径。Codex 执行路径默认等于仓库路径，只有需要不同工作目录时再单独修改。
-- 全局和项目级阶段一 / 阶段二 / 阶段三提示词
+- 全局和项目级阶段一 / 拆分阶段 / 阶段二 / 阶段三提示词
 - 阶段三 review 产物协议、附件上传约定和基线来源约定，见 `docs/auto-review-protocol.md`
 
 左侧侧边栏按项目展示。侧边栏底部有全局日志入口和设置入口；跳过、失败、扫描等执行事件在全局日志页查看，提示词在设置中维护。
 
-提示词负责指导 Codex 直接操作 Linear。默认提示词参考上级目录的 `automation-prompt` 规则并扩展到三阶段，但当前版本不再创建子代理。
+提示词负责指导 Codex 直接操作 Linear。默认提示词参考上级目录的 `automation-prompt` 规则并扩展到四个阶段，但当前版本不再创建子代理。
 
 `config.local.json`、`.env.local` 和 `.env` 已加入 `.gitignore`。接口不会返回 Linear API 密钥明文。`.env.example` 是可追踪样例文件，只包含空占位。
 
@@ -213,15 +218,16 @@ pnpm start -- --host 192.168.1.23
 ```bash
 pnpm validate
 pnpm once -- --stage part1
+pnpm once -- --stage split
 pnpm once -- --stage part2
 pnpm once -- --stage part3
 node src/server/index.mjs once --config config.local.json --stage both --issue LIV-123
 node src/server/index.mjs once --config config.local.json --stage part1 --issue LIV-123 --force
 ```
 
-手动指定 `--issue` 默认不会绕过状态边界：`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage part3 --issue <issue>` 只有在该 issue 当前是 `Testing` 时才会启动阶段三；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一、阶段二或阶段三，不会对同一个 issue 同时启动多个阶段。
+手动指定 `--issue` 默认不会绕过状态边界：`--stage split --issue <issue>` 只有在该 issue 当前是 `Needs Splitting` 时才会启动拆分阶段；`--stage part2 --issue <issue>` 只有在该 issue 当前是 `On Schedule` 时才会启动阶段二；`--stage part3 --issue <issue>` 只有在该 issue 当前是 `Testing` 时才会启动阶段三；`--stage both --issue <issue>` 会根据当前状态自动选择阶段一、拆分阶段、阶段二或阶段三，其中 `Too Large` 仍会回到阶段一而不是直接触发拆分，不会对同一个 issue 同时启动多个阶段。
 
 如果需要人工强制重跑：
 
 - `--force` 会绕过“已处理快照”跳过。
-- `--force` 配合 `--issue` 且显式选择 `--stage part1`、`--stage part2` 或 `--stage part3` 时，会按所选阶段强制执行，不再检查当前 issue 是否仍在默认队列状态。
+- `--force` 配合 `--issue` 且显式选择 `--stage part1`、`--stage split`、`--stage part2` 或 `--stage part3` 时，会按所选阶段强制执行，不再检查当前 issue 是否仍在默认队列状态。

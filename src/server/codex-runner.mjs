@@ -14,7 +14,9 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
   const sandbox =
     stage === "part1"
       ? config.codex.part1Sandbox
-      : stage === "part2"
+      : stage === "split"
+        ? config.codex.splitSandbox
+        : stage === "part2"
         ? config.codex.part2Sandbox
         : config.codex.part3Sandbox
   const defaultArgs = normalizeCodexDefaultArgs(config.codex.defaultArgs)

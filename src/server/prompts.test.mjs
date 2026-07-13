@@ -85,6 +85,8 @@ test("buildPromptContext merges extra stage context", () => {
       statuses: {
         todo: "Todo",
         needsClarification: "Needs Clarification",
+        tooLarge: "Too Large",
+        needsSplitting: "Needs Splitting",
         blocked: "Blocked",
         ready: "Ready for Codex",
         schedule: "On Schedule",
@@ -109,6 +111,8 @@ test("buildPromptContext merges extra stage context", () => {
   )
 
   assert.equal(context.CURRENT_RUN_DIR, "/repo/work-automation/.linear-automation/runs/run-123")
+  assert.equal(context.STATUS_TOO_LARGE, "Too Large")
+  assert.equal(context.STATUS_NEEDS_SPLITTING, "Needs Splitting")
   assert.deepEqual(context.DEFAULT_TEST_COMMANDS, ["- pnpm test"])
 })
 
@@ -141,4 +145,20 @@ test("part3 prompt requires inline review artifact content and Linear attachment
   assert.match(prompt, /Review 附件:/u)
   assert.match(prompt, /上传到 Linear/u)
   assert.match(prompt, /上传失败/u)
+})
+
+test("split prompt documents coverage checklist handoff", async () => {
+  const prompt = await readPrompt(path.resolve(process.cwd()), "global", "split")
+
+  assert.match(prompt, /Codex Split Complete/u)
+  assert.match(prompt, /覆盖清单/u)
+  assert.match(prompt, /parent\/sub-issue/u)
+  assert.match(prompt, /已移动到/u)
+})
+
+test("part1 prompt documents too large status before manual split", async () => {
+  const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part1")
+
+  assert.match(prompt, /\{\{STATUS_TOO_LARGE\}\}/u)
+  assert.match(prompt, /不要自动把 issue 继续移到/u)
 })
