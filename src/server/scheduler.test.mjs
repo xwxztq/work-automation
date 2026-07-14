@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-import { issueCountsTowardPart2ActiveLimit, part1EligibleStatuses } from "./scheduler.mjs"
+import { issueCountsTowardPart2ActiveLimit, lostRunCompletionPatch, part1EligibleStatuses } from "./scheduler.mjs"
 
 const config = {
   statuses: {
@@ -70,4 +70,14 @@ test("part2 active limit ignores in-progress issues without implementation hando
   }
 
   assert.equal(issueCountsTowardPart2ActiveLimit(issue, config), false)
+})
+
+test("lost runs are marked as reconciled so browsers do not notify", () => {
+  assert.deepEqual(lostRunCompletionPatch(true), {
+    status: "succeeded",
+    completionSource: "reconciled",
+    error: undefined,
+  })
+  assert.equal(lostRunCompletionPatch(false).completionSource, "reconciled")
+  assert.equal(lostRunCompletionPatch(false).status, "failed")
 })

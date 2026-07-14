@@ -68,6 +68,12 @@ export function normalizeConfig(raw) {
     linear: { ...DEFAULT_CONFIG.linear, ...(raw?.linear || {}) },
     codex: { ...DEFAULT_CONFIG.codex, ...(raw?.codex || {}) },
     statuses: { ...DEFAULT_CONFIG.statuses, ...(raw?.statuses || {}) },
+    notifications: Object.fromEntries(
+      Object.entries(DEFAULT_CONFIG.notifications).map(([stage, defaults]) => [
+        stage,
+        { ...defaults, ...(raw?.notifications?.[stage] || {}) },
+      ]),
+    ),
     projects: Array.isArray(raw?.projects) ? raw.projects : [],
   }
 

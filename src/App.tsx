@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
+  Bell,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
@@ -114,6 +115,13 @@ const APP_TITLE_PREFIX = "WA"
 const DEFAULT_SERVER_ID = "本机"
 const SELECTED_PROJECT_KEY_STORAGE_KEY = "linearAutomation.selectedProjectKey"
 const MAIN_VIEW_STORAGE_KEY = "linearAutomation.mainView"
+
+const notificationStageLabels: Record<PromptStage, string> = {
+  part1: "阶段一",
+  split: "拆分阶段",
+  part2: "阶段二",
+  part3: "阶段三",
+}
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
   key: "本机配置用的稳定标识，日志和提示词会引用它。",
@@ -255,6 +263,12 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
   const autoStartTried = useRef(false)
+  const notificationBaselineReady = useRef(false)
+  const previousRunStatuses = useRef(new Map<string, RunSummary["status"]>())
+  const notifiedRunIds = useRef(new Set<string>())
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
+    () => typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  )
 
   useEffect(() => {
     void refreshAll()
@@ -397,13 +411,17 @@ function App() {
         selectedProjectKey,
         readPersistedSelectedProjectKey(),
       ])
-      const [nextRuns, nextCodexActivity] = await Promise.all([
+      const [nextRuns, nextGlobalRuns, nextCodexActivity] = await Promise.all([
         api.getRuns(nextProjectKey || undefined),
+        api.getRuns(),
         loadCodexActivity(nextProjectKey || undefined),
       ])
       setConfig(nextConfig)
       setPrompts(nextPrompts)
       setRuns(nextRuns.runs)
+      setGlobalRuns(nextGlobalRuns.runs)
+      setGlobalRunTotalCount(nextGlobalRuns.totalCount)
+      processRunNotifications(nextGlobalRuns.runs, nextConfig)
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
@@ -576,13 +594,17 @@ function App() {
 
   async function refreshRuns(silent = false, projectKey = selectedProjectKey) {
     try {
-      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
+      const [nextRuns, nextGlobalRuns, nextDaemon, nextEvents, nextCodexActivity] = await Promise.all([
         api.getRuns(projectKey || undefined),
+        api.getRuns(),
         api.getDaemonStatus(),
         api.getEvents(),
         loadCodexActivity(projectKey || undefined),
       ])
       setRuns(nextRuns.runs)
+      setGlobalRuns(nextGlobalRuns.runs)
+      setGlobalRunTotalCount(nextGlobalRuns.totalCount)
+      if (config) processRunNotifications(nextGlobalRuns.runs, config)
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
@@ -607,6 +629,7 @@ function App() {
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setGlobalCodexActivity(nextCodexActivity)
+      if (config) processRunNotifications(nextRuns.runs, config)
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
@@ -621,6 +644,65 @@ function App() {
     } catch (error) {
       toast.error(errorMessage(error))
       return false
+    }
+  }
+
+  function processRunNotifications(nextRuns: RunSummary[], currentConfig: AppConfig) {
+    const previous = previousRunStatuses.current
+    if (!notificationBaselineReady.current) {
+      for (const run of nextRuns) previous.set(run.id, run.status)
+      notificationBaselineReady.current = true
+      return
+    }
+
+    for (const run of nextRuns) {
+      const previousStatus = previous.get(run.id)
+      previous.set(run.id, run.status)
+      if (
+        previousStatus !== "running" ||
+        (run.status !== "succeeded" && run.status !== "failed") ||
+        run.completionSource !== "normal" ||
+        notifiedRunIds.current.has(run.id) ||
+        !currentConfig.notifications[run.stage][run.status]
+      ) continue
+
+      notifiedRunIds.current.add(run.id)
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") continue
+      const result = run.status === "succeeded" ? "成功" : "失败"
+      const notification = new Notification(`${run.issueIdentifier} ${result}`, {
+        body: `${run.issueTitle}\n${notificationStageLabels[run.stage]} · ${result}`,
+        tag: `work-automation-${run.id}`,
+      })
+      notification.onclick = () => {
+        window.focus()
+        openProjectView(run.projectKey)
+        void loadRun(run.id)
+        notification.close()
+      }
+    }
+  }
+
+  async function requestNotificationPermission() {
+    if (typeof Notification === "undefined") {
+      setNotificationPermission("unsupported")
+      return "unsupported" as const
+    }
+    const permission = await Notification.requestPermission()
+    setNotificationPermission(permission)
+    return permission
+  }
+
+  async function toggleNotification(stage: PromptStage, result: "succeeded" | "failed", enabled: boolean) {
+    if (!config) return
+    setConfig({
+      ...config,
+      notifications: {
+        ...config.notifications,
+        [stage]: { ...config.notifications[stage], [result]: enabled },
+      },
+    })
+    if (enabled && notificationPermission === "default") {
+      await requestNotificationPermission()
     }
   }
 
@@ -791,6 +873,9 @@ function App() {
                 promptText={promptText}
                 setConfig={setConfig}
                 saveConfig={() => void saveConfig(config)}
+                notificationPermission={notificationPermission}
+                requestNotificationPermission={() => void requestNotificationPermission()}
+                toggleNotification={(stage, result, enabled) => void toggleNotification(stage, result, enabled)}
                 setPromptScope={setPromptScope}
                 setPromptStage={setPromptStage}
                 setPromptText={setPromptText}
@@ -2065,6 +2150,9 @@ function SettingsPage({
   promptText,
   setConfig,
   saveConfig,
+  notificationPermission,
+  requestNotificationPermission,
+  toggleNotification,
   setPromptScope,
   setPromptStage,
   setPromptText,
@@ -2079,6 +2167,9 @@ function SettingsPage({
   promptText: string
   setConfig: (config: AppConfig) => void
   saveConfig: () => void
+  notificationPermission: NotificationPermission | "unsupported"
+  requestNotificationPermission: () => void
+  toggleNotification: (stage: PromptStage, result: "succeeded" | "failed", enabled: boolean) => void
   setPromptScope: (scope: string) => void
   setPromptStage: (stage: PromptStage) => void
   setPromptText: (text: string) => void
@@ -2194,6 +2285,47 @@ function SettingsPage({
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle>系统通知</CardTitle>
+              <p className="mt-2 text-sm text-muted-foreground">
+                仅通知本次页面打开后观察到的正常运行结果；取消和服务重启恢复的结果不会通知。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">权限：{notificationPermissionLabel(notificationPermission)}</Badge>
+              <Button variant="outline" onClick={requestNotificationPermission} disabled={notificationPermission === "unsupported"}>
+                <Bell className="size-4" />
+                请求权限
+              </Button>
+              <Button onClick={saveConfig} disabled={busy}>
+                <Save className="size-4" />
+                保存
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {(Object.keys(notificationStageLabels) as PromptStage[]).map((stage) => (
+            <div key={stage} className="rounded-lg border p-3">
+              <div className="mb-3 font-medium">{notificationStageLabels[stage]}</div>
+              {(["succeeded", "failed"] as const).map((result) => (
+                <div key={result} className="flex items-center justify-between py-2">
+                  <Label htmlFor={`notification-${stage}-${result}`}>{result === "succeeded" ? "成功" : "失败"}</Label>
+                  <Switch
+                    id={`notification-${stage}-${result}`}
+                    checked={config.notifications[stage][result]}
+                    onCheckedChange={(enabled) => toggleNotification(stage, result, enabled)}
+                  />
+                </div>
+              ))}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -2465,6 +2597,15 @@ function viewTitle(view: View, selectedProject: ProjectConfig | null) {
   if (view === "settings") return "设置"
   if (view === "logs") return "全局日志"
   return selectedProject?.repoName || selectedProject?.key || "项目"
+}
+
+function notificationPermissionLabel(permission: NotificationPermission | "unsupported") {
+  return {
+    default: "未询问",
+    granted: "已允许",
+    denied: "已拒绝",
+    unsupported: "浏览器不支持",
+  }[permission]
 }
 
 function statusConfigLabel(key: keyof AppConfig["statuses"]) {

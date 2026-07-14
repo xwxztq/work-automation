@@ -1180,6 +1180,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
         status: succeeded ? "succeeded" : "failed",
+        completionSource: "normal",
         exitCode: codexResult.exitCode,
         pid: active.pid,
         supervisorPid: active.supervisorPid,
@@ -1231,6 +1232,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       const authDiagnostic = await diagnoseRunFailure(run, { error: errorMessage })
       run = await store.updateRun(run, {
         status: "failed",
+        completionSource: "normal",
         pid: active.pid,
         supervisorPid: active.supervisorPid,
         codexPid: active.codexPid,
@@ -1557,12 +1559,7 @@ ${formatPromptComments(issue.comments || [], 20)}
   async function markRunLost(run) {
     const detail = await store.getRun(run.id)
     const hasFinalText = Boolean(detail?.final?.trim())
-    const next = await store.updateRun(run, {
-      status: hasFinalText ? "succeeded" : "failed",
-      error: hasFinalText
-        ? undefined
-        : "运行进程已不存在，已从持久化运行记录中标记为失败。",
-    })
+    const next = await store.updateRun(run, lostRunCompletionPatch(hasFinalText))
     await logEvent({
       type: "run-reconciled-missing-process",
       level: hasFinalText ? "info" : "warn",
@@ -1641,6 +1638,16 @@ ${formatPromptComments(issue.comments || [], 20)}
       data: { runDir: run.dir },
     })
     return next
+  }
+}
+
+export function lostRunCompletionPatch(hasFinalText) {
+  return {
+    status: hasFinalText ? "succeeded" : "failed",
+    completionSource: "reconciled",
+    error: hasFinalText
+      ? undefined
+      : "运行进程已不存在，已从持久化运行记录中标记为失败。",
   }
 }
 

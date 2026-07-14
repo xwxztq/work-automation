@@ -55,6 +55,7 @@ export type AppConfig = {
     testing: string
     readyForReview: string
   }
+  notifications: Record<PromptStage, { succeeded: boolean; failed: boolean }>
   projects: ProjectConfig[]
 }
 
@@ -105,6 +106,7 @@ export type RunSummary = {
   pid?: number | null
   canceledAt?: string
   cancelReason?: string
+  completionSource?: "normal" | "reconciled"
 }
 
 export type RunListResponse = {
