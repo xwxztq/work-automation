@@ -266,6 +266,7 @@ function App() {
   const notificationBaselineReady = useRef(false)
   const previousRunStatuses = useRef(new Map<string, RunSummary["status"]>())
   const notifiedRunIds = useRef(new Set<string>())
+  const notificationConfig = useRef<AppConfig | null>(null)
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
     () => typeof Notification === "undefined" ? "unsupported" : Notification.permission,
   )
@@ -275,6 +276,10 @@ function App() {
     // Initial load only. Subsequent updates use explicit refresh and polling.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    notificationConfig.current = config
+  }, [config])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -604,7 +609,9 @@ function App() {
       setRuns(nextRuns.runs)
       setGlobalRuns(nextGlobalRuns.runs)
       setGlobalRunTotalCount(nextGlobalRuns.totalCount)
-      if (config) processRunNotifications(nextGlobalRuns.runs, config)
+      if (notificationConfig.current) {
+        processRunNotifications(nextGlobalRuns.runs, notificationConfig.current)
+      }
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
@@ -629,7 +636,9 @@ function App() {
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
       setGlobalCodexActivity(nextCodexActivity)
-      if (config) processRunNotifications(nextRuns.runs, config)
+      if (notificationConfig.current) {
+        processRunNotifications(nextRuns.runs, notificationConfig.current)
+      }
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
