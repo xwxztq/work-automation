@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { normalizeConfig, saveConfig } from "./config.mjs"
+import { applyRuntimeConfigOverrides, normalizeConfig, saveConfig } from "./config.mjs"
 
 test("notification defaults match the four-stage policy", () => {
   const config = normalizeConfig({})
@@ -39,4 +39,28 @@ test("saving an enabled webhook rejects an invalid URL template", async () => {
     /未知变量/,
   )
   await fs.rm(rootDir, { recursive: true, force: true })
+})
+
+test("runtime sandbox overrides do not mutate the saved config", () => {
+  const config = normalizeConfig({})
+  const overridden = applyRuntimeConfigOverrides(config, {
+    LINEAR_AUTOMATION_PART1_SANDBOX: "danger-full-access",
+    LINEAR_AUTOMATION_SPLIT_SANDBOX: "danger-full-access",
+  })
+
+  assert.equal(config.codex.part1Sandbox, "read-only")
+  assert.equal(config.codex.splitSandbox, "read-only")
+  assert.equal(overridden.codex.part1Sandbox, "danger-full-access")
+  assert.equal(overridden.codex.splitSandbox, "danger-full-access")
+})
+
+test("runtime sandbox overrides reject unknown modes", () => {
+  const config = normalizeConfig({})
+  assert.throws(
+    () =>
+      applyRuntimeConfigOverrides(config, {
+        LINEAR_AUTOMATION_PART1_SANDBOX: "privileged",
+      }),
+    /LINEAR_AUTOMATION_PART1_SANDBOX/,
+  )
 })

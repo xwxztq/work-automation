@@ -3,9 +3,17 @@ import path from "node:path"
 import { accessSync, constants } from "node:fs"
 import { DEFAULT_CONFIG } from "./defaults.mjs"
 import { resolveExecutable } from "./executable.mjs"
-import { isLoopbackHost, validateHost } from "./host.mjs"
+import { isLoopbackHost, isWildcardHostAllowed, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
 import { validateWebhookUrlTemplate } from "./webhook-notifier.mjs"
+
+const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"])
+export const CODEX_SANDBOX_RUNTIME_ENV = {
+  part1Sandbox: "LINEAR_AUTOMATION_PART1_SANDBOX",
+  splitSandbox: "LINEAR_AUTOMATION_SPLIT_SANDBOX",
+  part2Sandbox: "LINEAR_AUTOMATION_PART2_SANDBOX",
+  part3Sandbox: "LINEAR_AUTOMATION_PART3_SANDBOX",
+}
 
 export function resolveFromRoot(rootDir, filePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath)
@@ -123,6 +131,23 @@ export function normalizeConfig(raw) {
   return config
 }
 
+export function applyRuntimeConfigOverrides(config, env = process.env) {
+  const codex = { ...config.codex }
+  for (const [configKey, envKey] of Object.entries(CODEX_SANDBOX_RUNTIME_ENV)) {
+    const value = String(env[envKey] || "").trim()
+    if (!value) {
+      continue
+    }
+    if (!CODEX_SANDBOX_MODES.has(value)) {
+      throw new Error(
+        `${envKey} 必须是 read-only、workspace-write 或 danger-full-access。`,
+      )
+    }
+    codex[configKey] = value
+  }
+  return { ...config, codex }
+}
+
 export function redactConfig(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   return {
@@ -142,7 +167,9 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   if (!config.serverId?.trim()) {
     errors.push("必须填写 serverId。")
   }
-  const hostError = validateHost(config.host)
+  const hostError = validateHost(config.host, {
+    allowWildcard: options.allowWildcardHost ?? isWildcardHostAllowed(),
+  })
   if (hostError) {
     errors.push(hostError)
   } else if (!isLoopbackHost(config.host)) {

@@ -1,0 +1,14 @@
+.git
+.gitignore
+.linear-automation
+.playwright-mcp
+.env
+.env.*
+!.env.example
+config.local.json
+dist
+node_modules
+npm-debug.log*
+pnpm-debug.log*
+Dockerfile*
+compose*.yaml

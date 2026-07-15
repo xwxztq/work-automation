@@ -11,15 +11,6 @@ const SUPERVISOR_PATH = path.join(__dirname, "codex-supervisor.mjs")
 export async function runCodex({ config, project, stage, run, prompt, store, signal, onChild }) {
   await fs.writeFile(run.promptPath, prompt)
 
-  const sandbox =
-    stage === "part1"
-      ? config.codex.part1Sandbox
-      : stage === "split"
-        ? config.codex.splitSandbox
-        : stage === "part2"
-        ? config.codex.part2Sandbox
-        : config.codex.part3Sandbox
-  const defaultArgs = normalizeCodexDefaultArgs(config.codex.defaultArgs)
   const configuredCodexBin = config.codex.bin || "codex"
   const resolvedCodexBin = await resolveExecutable(configuredCodexBin, {
     cwd: project.codexCwd || project.path,
@@ -29,17 +20,7 @@ export async function runCodex({ config, project, stage, run, prompt, store, sig
       `未找到 Codex 可执行文件: ${configuredCodexBin}。请在启动服务的进程 PATH 中加入 codex，或把 config.local.json 的 codex.bin 改成绝对路径。`,
     )
   }
-  const args = [
-    "exec",
-    ...defaultArgs,
-    "--sandbox",
-    sandbox,
-    "-C",
-    project.codexCwd || project.path,
-    "--output-last-message",
-    run.finalPath,
-    "-",
-  ]
+  const args = buildCodexArgs({ config, project, stage, run })
   const supervisorInputPath = path.join(run.dir, "supervisor-input.json")
   await fs.writeFile(
     supervisorInputPath,
@@ -143,6 +124,37 @@ function normalizeCodexDefaultArgs(defaultArgs = []) {
     return normalized
   }
   return [...normalized, "--skip-git-repo-check"]
+}
+
+export function buildCodexArgs({ config, project, stage, run }) {
+  const sandbox =
+    stage === "part1"
+      ? config.codex.part1Sandbox
+      : stage === "split"
+        ? config.codex.splitSandbox
+        : stage === "part2"
+          ? config.codex.part2Sandbox
+          : config.codex.part3Sandbox
+  const apiKeyEnv = String(config.linear?.apiKeyEnv || "LINEAR_API_KEY").trim()
+  const linearMcpAuthArgs = apiKeyEnv
+    ? [
+        "--config",
+        `mcp_servers.linear.bearer_token_env_var=${JSON.stringify(apiKeyEnv)}`,
+      ]
+    : []
+
+  return [
+    "exec",
+    ...normalizeCodexDefaultArgs(config.codex.defaultArgs),
+    ...linearMcpAuthArgs,
+    "--sandbox",
+    sandbox,
+    "-C",
+    project.codexCwd || project.path,
+    "--output-last-message",
+    run.finalPath,
+    "-",
+  ]
 }
 
 function abortReason(signal, fallback) {

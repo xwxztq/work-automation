@@ -194,6 +194,54 @@ pnpm start -- --host 192.168.1.23
 
 生产启动 `pnpm start` 保持普通 Node 进程，不启用 watch；如果生产环境需要自动拉起或重启，应交给外部进程管理器处理。
 
+### Docker 常驻运行
+
+仓库提供生产镜像和 Docker Compose 配置。Compose 使用 `restart: unless-stopped`，Docker Desktop 启动后会自动恢复服务；Web 端口默认只发布到宿主机回环地址，不暴露到局域网。
+
+1. 把 Linear API key 放进本地 env 文件（已有 `.env.local` 时无需重复创建）:
+
+   ```bash
+   cp .env.example .env.local
+   # 编辑 .env.local，填写 LINEAR_API_KEY
+   ```
+
+2. 构建并后台启动:
+
+   ```bash
+   ./docker.sh up
+   ```
+
+3. 打开 `http://127.0.0.1:4378`。常用管理命令:
+
+   ```bash
+   ./docker.sh status
+   ./docker.sh logs
+   ./docker.sh restart
+   ./docker.sh rebuild
+   ./docker.sh down
+   ```
+
+容器会复用当前仓库的 `config.local.json`、`prompts/` 和 `.linear-automation/`，并挂载 `~/.codex`、`~/.gitconfig` 以及 `${DEVELOPER_ROOT:-/Users/jack/Developer}`。因此现有项目绝对路径、Codex 登录态、运行历史和界面中保存的设置在容器重建后仍然保留。`~/.codex` 包含认证信息，只应挂载到本机可信容器，不要复制进镜像或提交到仓库。
+
+镜像内置 Node.js、pnpm、Python、Git、ripgrep 和 Codex CLI，适合当前项目的常见检查。项目若依赖 Xcode、macOS GUI、宿主机专用命令或其他语言工具链，需要在 `Dockerfile` 中补充 Linux 工具链，或继续在宿主机直接运行服务。Codex 配置里仅适用于 macOS 的可选 MCP 服务在容器中可能不可用。
+
+Docker 内部无法使用 Codex 的 Bubblewrap 沙箱，因此 Compose 只在容器内把四个阶段覆盖为 `danger-full-access`；宿主机 `config.local.json` 中的 sandbox 设置不会被改写。容器本身仍只挂载 Compose 中列出的目录。服务启动 Codex 时会把 `linear.apiKeyEnv` 指向的变量配置为 Linear MCP bearer token，避免依赖 macOS Keychain 中无法挂载到 Linux 的 OAuth 凭据；API key 只通过 `.env.local` / `.env` 和进程环境传递，不写入镜像或 Codex 命令行。
+
+可选覆盖项:
+
+```bash
+# 改宿主机访问端口
+WORK_AUTOMATION_PORT=14378 ./docker.sh up
+
+# 项目不全在默认目录时，挂载另一个共同父目录
+DEVELOPER_ROOT=/path/to/projects ./docker.sh up
+
+# 非默认 macOS 用户 UID/GID
+LOCAL_UID="$(id -u)" LOCAL_GID="$(id -g)" ./docker.sh rebuild
+```
+
+直接运行模式仍不允许 `0.0.0.0`。Compose 只在容器内部显式开启通配监听，并把宿主机发布地址限定为 `127.0.0.1`。
+
 ## 配置
 
 在界面中配置:

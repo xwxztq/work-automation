@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 import { createHttpApi } from "./http-api.mjs"
-import { loadConfig, validateConfig } from "./config.mjs"
+import { applyRuntimeConfigOverrides, loadConfig, validateConfig } from "./config.mjs"
 import { loadLocalEnv } from "./env.mjs"
 import { createRunStore } from "./run-store.mjs"
 import { createScheduler } from "./scheduler.mjs"
-import { applyHostOverride, RUNTIME_HOST_ENV, normalizeHost, validateHost } from "./host.mjs"
+import {
+  applyHostOverride,
+  isWildcardHostAllowed,
+  RUNTIME_HOST_ENV,
+  normalizeHost,
+  validateHost,
+} from "./host.mjs"
 
 const ROOT_DIR = process.cwd()
 const args = parseArgs(process.argv.slice(2))
@@ -14,7 +20,11 @@ await loadLocalEnv(ROOT_DIR)
 const hostOverride = resolveHostOverride(args)
 
 const store = createRunStore(ROOT_DIR)
-const configProvider = async () => applyHostOverride(await loadConfig(configPath, ROOT_DIR), hostOverride)
+const configProvider = async () =>
+  applyHostOverride(
+    applyRuntimeConfigOverrides(await loadConfig(configPath, ROOT_DIR)),
+    hostOverride,
+  )
 const scheduler = createScheduler({ rootDir: ROOT_DIR, configProvider, store })
 
 if (command === "validate-config") {
@@ -34,7 +44,9 @@ if (command === "once") {
 }
 
 const config = await configProvider()
-const hostError = validateHost(config.host)
+const hostError = validateHost(config.host, {
+  allowWildcard: isWildcardHostAllowed(),
+})
 if (hostError) {
   console.error(hostError)
   process.exit(1)
