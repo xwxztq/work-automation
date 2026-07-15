@@ -22,6 +22,12 @@ import {
 import { toast } from "sonner"
 
 import { api } from "@/app/api"
+import {
+  collectBrowserNotificationCandidates,
+  createBrowserNotificationTracker,
+  markBrowserNotificationDelivered,
+  type BrowserNotificationTracker,
+} from "@/app/run-notifications"
 import { CodexActivityPanel } from "@/components/codex-activity/CodexActivityPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -263,9 +269,8 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [manualRunSubmitting, setManualRunSubmitting] = useState(false)
   const autoStartTried = useRef(false)
-  const notificationBaselineReady = useRef(false)
-  const previousRunStatuses = useRef(new Map<string, RunSummary["status"]>())
-  const notifiedRunIds = useRef(new Set<string>())
+  const browserNotificationTracker = useRef<BrowserNotificationTracker | null>(null)
+  const browserNotificationDiagnostics = useRef(new Set<string>())
   const notificationConfig = useRef<AppConfig | null>(null)
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
     () => typeof Notification === "undefined" ? "unsupported" : Notification.permission,
@@ -657,37 +662,60 @@ function App() {
   }
 
   function processRunNotifications(nextRuns: RunSummary[], currentConfig: AppConfig) {
-    const previous = previousRunStatuses.current
-    if (!notificationBaselineReady.current) {
-      for (const run of nextRuns) previous.set(run.id, run.status)
-      notificationBaselineReady.current = true
+    if (!browserNotificationTracker.current) {
+      browserNotificationTracker.current = createBrowserNotificationTracker(nextRuns)
       return
     }
 
-    for (const run of nextRuns) {
-      const previousStatus = previous.get(run.id)
-      previous.set(run.id, run.status)
-      if (
-        previousStatus !== "running" ||
-        (run.status !== "succeeded" && run.status !== "failed") ||
-        run.completionSource !== "normal" ||
-        notifiedRunIds.current.has(run.id) ||
-        !currentConfig.notifications[run.stage][run.status]
-      ) continue
+    const tracker = browserNotificationTracker.current
+    const candidates = collectBrowserNotificationCandidates(
+      tracker,
+      nextRuns,
+      currentConfig.notifications,
+    )
+    const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission
+    setNotificationPermission(permission)
 
-      notifiedRunIds.current.add(run.id)
-      if (typeof Notification === "undefined" || Notification.permission !== "granted") continue
-      const result = run.status === "succeeded" ? "成功" : "失败"
-      const notification = new Notification(`${run.issueIdentifier} ${result}`, {
-        body: `${run.issueTitle}\n${notificationStageLabels[run.stage]} · ${result}`,
-        tag: `work-automation-${run.id}`,
-      })
-      notification.onclick = () => {
-        window.focus()
-        openProjectView(run.projectKey)
-        void loadRun(run.id)
-        notification.close()
+    for (const run of candidates) {
+      if (permission !== "granted") {
+        reportBrowserNotificationDiagnostic(
+          `${run.id}:permission:${permission}`,
+          `${run.issueIdentifier} 已完成，但浏览器通知权限为“${notificationPermissionLabel(permission)}”。`,
+        )
+        continue
       }
+
+      const result = run.status === "succeeded" ? "成功" : "失败"
+      try {
+        const notification = new Notification(`${run.issueIdentifier} ${result}`, {
+          body: `${run.issueTitle}\n${notificationStageLabels[run.stage]} · ${result}`,
+          tag: `work-automation-${run.id}`,
+        })
+        notification.onclick = () => {
+          window.focus()
+          openProjectView(run.projectKey)
+          void loadRun(run.id)
+          notification.close()
+        }
+        markBrowserNotificationDelivered(tracker, run.id)
+        browserNotificationDiagnostics.current.delete(`${run.id}:create`)
+      } catch (error) {
+        reportBrowserNotificationDiagnostic(
+          `${run.id}:create`,
+          `${run.issueIdentifier} 浏览器通知创建失败：${errorMessage(error)}`,
+          true,
+        )
+      }
+    }
+  }
+
+  function reportBrowserNotificationDiagnostic(key: string, message: string, isError = false) {
+    if (browserNotificationDiagnostics.current.has(key)) return
+    browserNotificationDiagnostics.current.add(key)
+    if (isError) {
+      toast.error(message)
+    } else {
+      toast.warning(message)
     }
   }
 
@@ -696,9 +724,40 @@ function App() {
       setNotificationPermission("unsupported")
       return "unsupported" as const
     }
-    const permission = await Notification.requestPermission()
-    setNotificationPermission(permission)
-    return permission
+    try {
+      const permission = await Notification.requestPermission()
+      setNotificationPermission(permission)
+      return permission
+    } catch (error) {
+      toast.error(`请求浏览器通知权限失败：${errorMessage(error)}`)
+      return Notification.permission
+    }
+  }
+
+  async function sendTestNotification() {
+    let permission: NotificationPermission | "unsupported" = typeof Notification === "undefined"
+      ? "unsupported"
+      : Notification.permission
+    if (permission === "default") {
+      permission = await requestNotificationPermission()
+    }
+    if (permission !== "granted" || typeof Notification === "undefined") {
+      toast.warning(`无法发送测试通知：当前权限为“${notificationPermissionLabel(permission)}”。`)
+      return
+    }
+    try {
+      const notification = new Notification("Work Automation 通知测试", {
+        body: "浏览器通知 API 工作正常。",
+        tag: "work-automation-notification-test",
+      })
+      notification.onclick = () => {
+        window.focus()
+        notification.close()
+      }
+      toast.success("测试通知已发送，请检查 macOS 通知中心。")
+    } catch (error) {
+      toast.error(`测试通知创建失败：${errorMessage(error)}`)
+    }
   }
 
   async function toggleNotification(stage: PromptStage, result: "succeeded" | "failed", enabled: boolean) {
@@ -884,6 +943,7 @@ function App() {
                 saveConfig={() => void saveConfig(config)}
                 notificationPermission={notificationPermission}
                 requestNotificationPermission={() => void requestNotificationPermission()}
+                sendTestNotification={() => void sendTestNotification()}
                 toggleNotification={(stage, result, enabled) => void toggleNotification(stage, result, enabled)}
                 setPromptScope={setPromptScope}
                 setPromptStage={setPromptStage}
@@ -2161,6 +2221,7 @@ function SettingsPage({
   saveConfig,
   notificationPermission,
   requestNotificationPermission,
+  sendTestNotification,
   toggleNotification,
   setPromptScope,
   setPromptStage,
@@ -2178,6 +2239,7 @@ function SettingsPage({
   saveConfig: () => void
   notificationPermission: NotificationPermission | "unsupported"
   requestNotificationPermission: () => void
+  sendTestNotification: () => void
   toggleNotification: (stage: PromptStage, result: "succeeded" | "failed", enabled: boolean) => void
   setPromptScope: (scope: string) => void
   setPromptStage: (stage: PromptStage) => void
@@ -2309,6 +2371,10 @@ function SettingsPage({
               <Button variant="outline" onClick={requestNotificationPermission} disabled={notificationPermission === "unsupported"}>
                 <Bell className="size-4" />
                 请求权限
+              </Button>
+              <Button variant="outline" onClick={sendTestNotification} disabled={notificationPermission === "unsupported"}>
+                <Bell className="size-4" />
+                发送测试通知
               </Button>
               <Button onClick={saveConfig} disabled={busy}>
                 <Save className="size-4" />

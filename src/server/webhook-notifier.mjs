@@ -1,3 +1,7 @@
+import http from "node:http"
+import https from "node:https"
+import { createProxyAgent, resolveProxyUrl } from "./proxy.mjs"
+
 const WEBHOOK_VARIABLES = ["IssueID", "IssueTitle", "stage", "status"]
 const WEBHOOK_VARIABLE_PATTERN = /\{([^{}]+)\}/g
 
@@ -55,7 +59,12 @@ export function shouldSendRunWebhook(config, run) {
   )
 }
 
-export async function sendRunWebhook({ config, run, fetchImpl = fetch }) {
+export async function sendRunWebhook({
+  config,
+  run,
+  env = process.env,
+  requestImpl = requestWebhook,
+}) {
   if (!shouldSendRunWebhook(config, run)) {
     return { sent: false }
   }
@@ -66,24 +75,59 @@ export async function sendRunWebhook({ config, run, fetchImpl = fetch }) {
     throw new Error(validationError)
   }
   const target = new URL(renderedUrl)
+  const transport = resolveProxyUrl(target, env) ? "proxy" : "direct"
 
   let response
   try {
-    response = await fetchImpl(target, {
+    response = await requestImpl(target, {
       method: "GET",
-      signal: AbortSignal.timeout(10_000),
+      timeoutMs: 10_000,
+      env,
       headers: {
         accept: "application/json, text/plain, */*",
         "user-agent": "work-automation-webhook/1.0",
       },
     })
-  } catch {
-    throw new Error(`Webhook 请求失败 (${target.origin})`)
+  } catch (error) {
+    const code = typeof error?.code === "string" ? `; ${error.code}` : ""
+    throw new Error(`Webhook 请求失败 (${target.origin}; ${transport}${code})`)
   }
 
   if (!response.ok) {
     throw new Error(`Webhook 返回 HTTP ${response.status} (${target.origin})`)
   }
 
-  return { sent: true, status: response.status, origin: target.origin }
+  return { sent: true, status: response.status, origin: target.origin, transport }
+}
+
+export function requestWebhook(target, options = {}) {
+  const url = target instanceof URL ? target : new URL(target)
+  const client = url.protocol === "https:" ? https : http
+  const timeoutMs = options.timeoutMs || 10_000
+  const agent = createProxyAgent(url, options.env)
+
+  return new Promise((resolve, reject) => {
+    const request = client.request(
+      url,
+      {
+        method: options.method || "GET",
+        headers: options.headers,
+        agent,
+      },
+      (response) => {
+        response.resume()
+        response.on("end", () => {
+          const status = response.statusCode || 0
+          resolve({ ok: status >= 200 && status < 300, status })
+        })
+      },
+    )
+    request.setTimeout(timeoutMs, () => {
+      const error = new Error("Webhook 请求超时")
+      error.code = "ETIMEDOUT"
+      request.destroy(error)
+    })
+    request.on("error", reject)
+    request.end()
+  })
 }

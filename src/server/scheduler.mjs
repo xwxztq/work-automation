@@ -46,7 +46,12 @@ export function createScheduler({ rootDir, configProvider, store }) {
         issueIdentifier: run.issueIdentifier,
         runId: run.id,
         message: `${run.issueIdentifier} ${stageLabel(run.stage)} Webhook 通知成功`,
-        data: { status: run.status, httpStatus: delivery.status, origin: delivery.origin },
+        data: {
+          status: run.status,
+          httpStatus: delivery.status,
+          origin: delivery.origin,
+          transport: delivery.transport,
+        },
       })
     } catch (error) {
       await logEvent({
