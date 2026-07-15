@@ -2299,9 +2299,9 @@ function SettingsPage({
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <CardTitle>系统通知</CardTitle>
+              <CardTitle>通知</CardTitle>
               <p className="mt-2 text-sm text-muted-foreground">
-                仅通知本次页面打开后观察到的正常运行结果；取消和服务重启恢复的结果不会通知。
+                阶段开关同时控制浏览器系统通知和 Webhook；取消和服务重启恢复的结果不会通知。
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -2317,22 +2317,52 @@ function SettingsPage({
             </div>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {(Object.keys(notificationStageLabels) as PromptStage[]).map((stage) => (
-            <div key={stage} className="rounded-lg border p-3">
-              <div className="mb-3 font-medium">{notificationStageLabels[stage]}</div>
-              {(["succeeded", "failed"] as const).map((result) => (
-                <div key={result} className="flex items-center justify-between py-2">
-                  <Label htmlFor={`notification-${stage}-${result}`}>{result === "succeeded" ? "成功" : "失败"}</Label>
-                  <Switch
-                    id={`notification-${stage}-${result}`}
-                    checked={config.notifications[stage][result]}
-                    onCheckedChange={(enabled) => toggleNotification(stage, result, enabled)}
-                  />
-                </div>
-              ))}
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {(Object.keys(notificationStageLabels) as PromptStage[]).map((stage) => (
+              <div key={stage} className="rounded-lg border p-3">
+                <div className="mb-3 font-medium">{notificationStageLabels[stage]}</div>
+                {(["succeeded", "failed"] as const).map((result) => (
+                  <div key={result} className="flex items-center justify-between py-2">
+                    <Label htmlFor={`notification-${stage}-${result}`}>{result === "succeeded" ? "成功" : "失败"}</Label>
+                    <Switch
+                      id={`notification-${stage}-${result}`}
+                      checked={config.notifications[stage][result]}
+                      onCheckedChange={(enabled) => toggleNotification(stage, result, enabled)}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label htmlFor="webhook-enabled">Webhook GET 推送</Label>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  服务端在符合上方策略的正常运行结束后请求 URL；推送失败只记录日志，不影响运行结果。
+                </p>
+              </div>
+              <Switch
+                id="webhook-enabled"
+                checked={config.webhook.enabled}
+                onCheckedChange={(enabled) => setConfig({ ...config, webhook: { ...config.webhook, enabled } })}
+              />
             </div>
-          ))}
+            <Field
+              label="URL 模板"
+              description="支持 {IssueID}、{IssueTitle}、{stage}、{status}；变量值会自动进行 URL 编码。"
+            >
+              <Input
+                className="font-mono text-xs"
+                placeholder="https://example.com/{IssueID}-{status}/{IssueTitle}?stage={stage}"
+                value={config.webhook.urlTemplate}
+                onChange={(event) =>
+                  setConfig({ ...config, webhook: { ...config.webhook, urlTemplate: event.target.value } })
+                }
+              />
+            </Field>
+          </div>
         </CardContent>
       </Card>
 

@@ -32,6 +32,10 @@ export const DEFAULT_CONFIG = {
     part2: { succeeded: false, failed: true },
     part3: { succeeded: true, failed: true },
   },
+  webhook: {
+    enabled: false,
+    urlTemplate: "",
+  },
   projects: [],
 }
 

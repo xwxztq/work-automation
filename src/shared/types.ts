@@ -56,6 +56,10 @@ export type AppConfig = {
     readyForReview: string
   }
   notifications: Record<PromptStage, { succeeded: boolean; failed: boolean }>
+  webhook: {
+    enabled: boolean
+    urlTemplate: string
+  }
   projects: ProjectConfig[]
 }
 

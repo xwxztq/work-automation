@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG } from "./defaults.mjs"
 import { resolveExecutable } from "./executable.mjs"
 import { isLoopbackHost, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
+import { validateWebhookUrlTemplate } from "./webhook-notifier.mjs"
 
 export function resolveFromRoot(rootDir, filePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath)
@@ -49,6 +50,12 @@ export async function loadConfig(configPath, rootDir = process.cwd()) {
 export async function saveConfig(configPath, config, rootDir = process.cwd()) {
   const resolved = resolveFromRoot(rootDir, configPath)
   const normalized = normalizeConfig(config)
+  if (normalized.webhook.enabled) {
+    const webhookError = validateWebhookUrlTemplate(normalized.webhook.urlTemplate)
+    if (webhookError) {
+      throw new Error(webhookError)
+    }
+  }
   const current = normalizeConfig(await readJsonFile(resolved, DEFAULT_CONFIG))
   const projectKeyValidation = validateProjectKeys(normalized.projects, {
     previousProjects: current.projects,
@@ -74,6 +81,7 @@ export function normalizeConfig(raw) {
         { ...defaults, ...(raw?.notifications?.[stage] || {}) },
       ]),
     ),
+    webhook: { ...DEFAULT_CONFIG.webhook, ...(raw?.webhook || {}) },
     projects: Array.isArray(raw?.projects) ? raw.projects : [],
   }
 
@@ -148,6 +156,12 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   }
   if (!process.env[apiKeyEnv]) {
     warnings.push(`当前进程环境未设置 ${apiKeyEnv}。`)
+  }
+  if (config.webhook?.enabled) {
+    const webhookError = validateWebhookUrlTemplate(config.webhook.urlTemplate)
+    if (webhookError) {
+      errors.push(webhookError)
+    }
   }
   const codexBin = config.codex?.bin || DEFAULT_CONFIG.codex.bin
   if (!(await resolveExecutable(codexBin, { cwd: rootDir }))) {
