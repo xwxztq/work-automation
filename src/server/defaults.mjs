@@ -26,6 +26,16 @@ export const DEFAULT_CONFIG = {
     testing: "Testing",
     readyForReview: "Ready for Review",
   },
+  notifications: {
+    part1: { succeeded: true, failed: true },
+    split: { succeeded: false, failed: true },
+    part2: { succeeded: false, failed: true },
+    part3: { succeeded: true, failed: true },
+  },
+  webhook: {
+    enabled: false,
+    urlTemplate: "",
+  },
   projects: [],
 }
 

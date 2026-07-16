@@ -1,0 +1,64 @@
+name: work-automation
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_UID: "${LOCAL_UID:-501}"
+        APP_GID: "${LOCAL_GID:-20}"
+        CODEX_VERSION: "${CODEX_VERSION:-0.144.4}"
+        HTTP_PROXY: "${DOCKER_HTTP_PROXY:-}"
+        HTTPS_PROXY: "${DOCKER_HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+        http_proxy: "${DOCKER_HTTP_PROXY:-}"
+        https_proxy: "${DOCKER_HTTPS_PROXY:-}"
+        no_proxy: "${no_proxy:-${NO_PROXY:-}}"
+    image: work-automation:local
+    container_name: work-automation
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${WORK_AUTOMATION_PORT:-4378}:4378"
+    environment:
+      HOME: /home/workautomation
+      CODEX_HOME: /home/workautomation/.codex
+      LINEAR_AUTOMATION_HOST: 0.0.0.0
+      LINEAR_AUTOMATION_ALLOW_WILDCARD_HOST: "1"
+      LINEAR_AUTOMATION_PART1_SANDBOX: danger-full-access
+      LINEAR_AUTOMATION_SPLIT_SANDBOX: danger-full-access
+      LINEAR_AUTOMATION_PART2_SANDBOX: danger-full-access
+      LINEAR_AUTOMATION_PART3_SANDBOX: danger-full-access
+      TZ: "${TZ:-Asia/Singapore}"
+      HTTP_PROXY: "${DOCKER_HTTP_PROXY:-}"
+      HTTPS_PROXY: "${DOCKER_HTTPS_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-}"
+      http_proxy: "${DOCKER_HTTP_PROXY:-}"
+      https_proxy: "${DOCKER_HTTPS_PROXY:-}"
+      no_proxy: "${no_proxy:-${NO_PROXY:-}}"
+    env_file:
+      - path: .env.local
+        required: false
+      - path: .env
+        required: false
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: ./prompts
+        target: /app/prompts
+      - type: bind
+        source: ./.linear-automation
+        target: /app/.linear-automation
+      - type: bind
+        source: "${DEVELOPER_ROOT:-/Users/jack/Developer}"
+        target: "${DEVELOPER_ROOT:-/Users/jack/Developer}"
+      - type: bind
+        source: "${HOME}/.codex"
+        target: /home/workautomation/.codex
+      - type: bind
+        source: "${HOME}/.gitconfig"
+        target: /home/workautomation/.gitconfig
+        read_only: true
+    stop_grace_period: 30s

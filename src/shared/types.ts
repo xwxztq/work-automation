@@ -55,6 +55,11 @@ export type AppConfig = {
     testing: string
     readyForReview: string
   }
+  notifications: Record<PromptStage, { succeeded: boolean; failed: boolean }>
+  webhook: {
+    enabled: boolean
+    urlTemplate: string
+  }
   projects: ProjectConfig[]
 }
 
@@ -105,6 +110,7 @@ export type RunSummary = {
   pid?: number | null
   canceledAt?: string
   cancelReason?: string
+  completionSource?: "normal" | "reconciled"
 }
 
 export type RunListResponse = {

@@ -6,6 +6,7 @@ import {
   isCodexLinearAuthFailureRun,
 } from "./linear-auth-diagnostics.mjs"
 import { diagnoseLinearWriteVerification } from "./linear-write-verification.mjs"
+import { sendRunWebhook } from "./webhook-notifier.mjs"
 import {
   buildIssueReviewPromptContext,
   buildPromptContext,
@@ -32,6 +33,38 @@ export function createScheduler({ rootDir, configProvider, store }) {
 
   async function logEvent(event) {
     await store.appendEvent(event).catch(() => {})
+  }
+
+  async function notifyRunWebhook(config, run) {
+    try {
+      const delivery = await sendRunWebhook({ config, run })
+      if (!delivery.sent) return
+      await logEvent({
+        type: "webhook-succeeded",
+        stage: run.stage,
+        projectKey: run.projectKey,
+        issueIdentifier: run.issueIdentifier,
+        runId: run.id,
+        message: `${run.issueIdentifier} ${stageLabel(run.stage)} Webhook 通知成功`,
+        data: {
+          status: run.status,
+          httpStatus: delivery.status,
+          origin: delivery.origin,
+          transport: delivery.transport,
+        },
+      })
+    } catch (error) {
+      await logEvent({
+        type: "webhook-failed",
+        level: "error",
+        stage: run.stage,
+        projectKey: run.projectKey,
+        issueIdentifier: run.issueIdentifier,
+        runId: run.id,
+        message: `${run.issueIdentifier} ${stageLabel(run.stage)} Webhook 通知失败: ${error instanceof Error ? error.message : String(error)}`,
+        data: { status: run.status },
+      })
+    }
   }
 
   async function runOnce(stage = "both", options = {}) {
@@ -1180,6 +1213,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
         status: succeeded ? "succeeded" : "failed",
+        completionSource: "normal",
         exitCode: codexResult.exitCode,
         pid: active.pid,
         supervisorPid: active.supervisorPid,
@@ -1214,6 +1248,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           action: authDiagnostic?.action,
         },
       })
+      await notifyRunWebhook(config, run)
       return run
     } catch (error) {
       if (!run) {
@@ -1231,6 +1266,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
       const authDiagnostic = await diagnoseRunFailure(run, { error: errorMessage })
       run = await store.updateRun(run, {
         status: "failed",
+        completionSource: "normal",
         pid: active.pid,
         supervisorPid: active.supervisorPid,
         codexPid: active.codexPid,
@@ -1257,6 +1293,7 @@ export function createScheduler({ rootDir, configProvider, store }) {
           action: authDiagnostic?.action,
         },
       })
+      await notifyRunWebhook(config, run)
       throw error
     } finally {
       signal.removeEventListener("abort", abortFromProject)
@@ -1557,12 +1594,7 @@ ${formatPromptComments(issue.comments || [], 20)}
   async function markRunLost(run) {
     const detail = await store.getRun(run.id)
     const hasFinalText = Boolean(detail?.final?.trim())
-    const next = await store.updateRun(run, {
-      status: hasFinalText ? "succeeded" : "failed",
-      error: hasFinalText
-        ? undefined
-        : "运行进程已不存在，已从持久化运行记录中标记为失败。",
-    })
+    const next = await store.updateRun(run, lostRunCompletionPatch(hasFinalText))
     await logEvent({
       type: "run-reconciled-missing-process",
       level: hasFinalText ? "info" : "warn",
@@ -1641,6 +1673,16 @@ ${formatPromptComments(issue.comments || [], 20)}
       data: { runDir: run.dir },
     })
     return next
+  }
+}
+
+export function lostRunCompletionPatch(hasFinalText) {
+  return {
+    status: hasFinalText ? "succeeded" : "failed",
+    completionSource: "reconciled",
+    error: hasFinalText
+      ? undefined
+      : "运行进程已不存在，已从持久化运行记录中标记为失败。",
   }
 }
 
