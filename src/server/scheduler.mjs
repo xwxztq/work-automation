@@ -6,10 +6,12 @@ import {
   isCodexLinearAuthFailureRun,
 } from "./linear-auth-diagnostics.mjs"
 import { diagnoseLinearWriteVerification } from "./linear-write-verification.mjs"
+import { sendRunWebhook } from "./webhook-notifier.mjs"
 import {
   buildIssueReviewPromptContext,
   buildPromptContext,
   buildRunPromptContext,
+  findLatestCommentByMarker,
   formatPromptComments,
   readPrompt,
   renderPrompt,
@@ -20,6 +22,9 @@ import {
   formatProjectStatusHealthBlock,
   linearStatusHealthIsBlocking,
 } from "./status-health.mjs"
+
+const CODEX_HANDOFF_MARKER = "Codex Handoff"
+const CODEX_SPLIT_COMPLETE_MARKER = "Codex Split Complete"
 
 export function createScheduler({
   rootDir,
@@ -39,6 +44,38 @@ export function createScheduler({
 
   async function logEvent(event) {
     await store.appendEvent(event).catch(() => {})
+  }
+
+  async function notifyRunWebhook(config, run) {
+    try {
+      const delivery = await sendRunWebhook({ config, run })
+      if (!delivery.sent) return
+      await logEvent({
+        type: "webhook-succeeded",
+        stage: run.stage,
+        projectKey: run.projectKey,
+        issueIdentifier: run.issueIdentifier,
+        runId: run.id,
+        message: `${run.issueIdentifier} ${stageLabel(run.stage)} Webhook 通知成功`,
+        data: {
+          status: run.status,
+          httpStatus: delivery.status,
+          origin: delivery.origin,
+          transport: delivery.transport,
+        },
+      })
+    } catch (error) {
+      await logEvent({
+        type: "webhook-failed",
+        level: "error",
+        stage: run.stage,
+        projectKey: run.projectKey,
+        issueIdentifier: run.issueIdentifier,
+        runId: run.id,
+        message: `${run.issueIdentifier} ${stageLabel(run.stage)} Webhook 通知失败: ${error instanceof Error ? error.message : String(error)}`,
+        data: { status: run.status },
+      })
+    }
   }
 
   async function runOnce(stage = "both", options = {}) {
@@ -100,6 +137,7 @@ export function createScheduler({
           return {
             key: project.key,
             part1: [],
+            split: [],
             part2: [],
             part3: [],
             skipped: [],
@@ -139,6 +177,7 @@ export function createScheduler({
       return {
         key: project.key,
         part1: [],
+        split: [],
         part2: [],
         part3: [],
         skipped: [
@@ -154,6 +193,7 @@ export function createScheduler({
     const projectSummary = {
       key: project.key,
       part1: [],
+      split: [],
       part2: [],
       part3: [],
       skipped: [],
@@ -190,6 +230,21 @@ export function createScheduler({
             projectSummary,
             run: () =>
               runProjectPart1({
+                config,
+                project,
+                linear,
+                projectSummary,
+                issueId,
+                force,
+                signal: controller.signal,
+              }),
+          }),
+          runProjectStageBranch({
+            project,
+            stage: "split",
+            projectSummary,
+            run: () =>
+              runProjectSplit({
                 config,
                 project,
                 linear,
@@ -240,6 +295,16 @@ export function createScheduler({
           force,
           signal: controller.signal,
         })
+      } else if (!controller.signal.aborted && effectiveStage === "split") {
+        await runProjectSplit({
+          config,
+          project,
+          linear,
+          projectSummary,
+          issueId,
+          force,
+          signal: controller.signal,
+        })
       } else if (!controller.signal.aborted && effectiveStage === "part2") {
         await runProjectPart2({
           config,
@@ -278,6 +343,7 @@ export function createScheduler({
         message: "项目扫描结束",
         data: {
           part1: projectSummary.part1.length,
+          split: projectSummary.split.length,
           part2: projectSummary.part2.length,
           part3: projectSummary.part3.length,
           skipped: projectSummary.skipped.length,
@@ -372,6 +438,8 @@ export function createScheduler({
     let effectiveStage = null
     if (eligiblePart1Statuses.has(stateName)) {
       effectiveStage = "part1"
+    } else if (stateName === config.statuses.needsSplitting) {
+      effectiveStage = "split"
     } else if (stateName === config.statuses.schedule) {
       effectiveStage = "part2"
     } else if (stateName === config.statuses.testing) {
@@ -406,6 +474,7 @@ export function createScheduler({
         issueId,
         state: stateName,
         part1Statuses: [...eligiblePart1Statuses],
+        splitStatus: config.statuses.needsSplitting,
         part2Status: config.statuses.schedule,
         part3Status: config.statuses.testing,
         force,
@@ -623,6 +692,74 @@ export function createScheduler({
     }
   }
 
+  async function runProjectSplit({ config, project, linear, projectSummary, issueId, force = false, signal }) {
+    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const candidates = issueId
+      ? issues.filter((issue) => issueMatchesId(issue, issueId))
+      : issues.filter((issue) => issue.state?.name === config.statuses.needsSplitting)
+
+    await logEvent({
+      type: "split-candidates",
+      stage: "split",
+      projectKey: project.key,
+      message: `拆分阶段候选 ${candidates.length} 个`,
+      data: {
+        issueCount: issues.length,
+        candidateCount: candidates.length,
+        issueId,
+        force,
+      },
+    })
+
+    for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
+      if (signal.aborted) {
+        await logEvent({
+          type: "split-aborted",
+          level: "warn",
+          stage: "split",
+          projectKey: project.key,
+          message: "拆分阶段项目信号已中止，停止处理后续候选",
+        })
+        break
+      }
+
+      const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
+      if (!force && issue.state?.name !== config.statuses.needsSplitting) {
+        projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.needsSplitting}`)
+        await logEvent({
+          type: "split-skip-state-changed",
+          stage: "split",
+          projectKey: project.key,
+          issueIdentifier: issue.identifier,
+          message: `${issue.identifier} 状态已不是 ${config.statuses.needsSplitting}，跳过`,
+          data: { state: issue.state?.name },
+        })
+        continue
+      }
+      if (!force && !issueId && (await skipUnchangedIssue({ project, issue, stage: "split", projectSummary }))) {
+        continue
+      }
+
+      await logEvent({
+        type: "run-queue",
+        stage: "split",
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        message: `${issue.identifier} 进入拆分阶段执行`,
+        data: { state: issue.state?.name },
+      })
+      const result = await executeCodexStage({
+        config,
+        project,
+        issue,
+        stage: "split",
+        signal,
+      })
+      const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "split", run: result })
+      projectSummary.split.push({ issue: issue.identifier, result: finalizedRun.status })
+    }
+  }
+
   async function runProjectPart3({ config, project, linear, projectSummary, issueId, force = false, signal }) {
     const { issues } = await linear.listProjectIssues(project.linearProjectId)
     const candidates = issueId
@@ -699,7 +836,7 @@ export function createScheduler({
   async function activePart2StatsFromIssues(issues, project, config) {
     const linearIssueKeys = new Set()
     for (const issue of issues) {
-      if (issue.state?.name !== config.statuses.inProgress) {
+      if (!issueCountsTowardPart2ActiveLimit(issue, config)) {
         continue
       }
       const key = issueActiveKey(issue)
@@ -1137,6 +1274,7 @@ export function createScheduler({
       active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
         status: succeeded ? "succeeded" : "failed",
+        completionSource: "normal",
         exitCode: codexResult.exitCode,
         pid: active.pid,
         supervisorPid: active.supervisorPid,
@@ -1171,6 +1309,7 @@ export function createScheduler({
           action: authDiagnostic?.action,
         },
       })
+      await notifyRunWebhook(config, run)
       return run
     } catch (error) {
       if (!run) {
@@ -1188,6 +1327,7 @@ export function createScheduler({
       const authDiagnostic = await diagnoseRunFailure(run, { error: errorMessage })
       run = await store.updateRun(run, {
         status: "failed",
+        completionSource: "normal",
         pid: active.pid,
         supervisorPid: active.supervisorPid,
         codexPid: active.codexPid,
@@ -1214,6 +1354,7 @@ export function createScheduler({
           action: authDiagnostic?.action,
         },
       })
+      await notifyRunWebhook(config, run)
       throw error
     } finally {
       signal.removeEventListener("abort", abortFromProject)
@@ -1244,7 +1385,9 @@ export function createScheduler({
     const promptMode =
       stage === "part1"
         ? project.part1PromptMode
-        : stage === "part2"
+        : stage === "split"
+          ? project.splitPromptMode
+          : stage === "part2"
           ? project.part2PromptMode
           : project.part3PromptMode
     const scope = promptMode === "override" ? project.key : "global"
@@ -1512,12 +1655,7 @@ ${formatPromptComments(issue.comments || [], 20)}
   async function markRunLost(run) {
     const detail = await store.getRun(run.id)
     const hasFinalText = Boolean(detail?.final?.trim())
-    const next = await store.updateRun(run, {
-      status: hasFinalText ? "succeeded" : "failed",
-      error: hasFinalText
-        ? undefined
-        : "运行进程已不存在，已从持久化运行记录中标记为失败。",
-    })
+    const next = await store.updateRun(run, lostRunCompletionPatch(hasFinalText))
     await logEvent({
       type: "run-reconciled-missing-process",
       level: hasFinalText ? "info" : "warn",
@@ -1599,6 +1737,16 @@ ${formatPromptComments(issue.comments || [], 20)}
   }
 }
 
+export function lostRunCompletionPatch(hasFinalText) {
+  return {
+    status: hasFinalText ? "succeeded" : "failed",
+    completionSource: "reconciled",
+    error: hasFinalText
+      ? undefined
+      : "运行进程已不存在，已从持久化运行记录中标记为失败。",
+  }
+}
+
 function getLinear(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   const apiKey = process.env[apiKeyEnv]
@@ -1669,16 +1817,38 @@ function linearIssueNumber(issue) {
 
 function stageLabel(stage) {
   if (stage === "part1") return "阶段一"
+  if (stage === "split") return "拆分阶段"
   if (stage === "part2") return "阶段二"
   if (stage === "part3") return "阶段三"
   if (stage === "both") return "全部"
   return stage
 }
 
-function part1EligibleStatuses(config) {
+export function issueCountsTowardPart2ActiveLimit(issue, config) {
+  if (issue.state?.name !== config.statuses.inProgress) {
+    return false
+  }
+  const latestHandoff = findLatestCommentByMarker(issue.comments || [], CODEX_HANDOFF_MARKER)
+  if (!latestHandoff) {
+    return false
+  }
+  const latestSplitComplete = findLatestCommentByMarker(
+    issue.comments || [],
+    CODEX_SPLIT_COMPLETE_MARKER,
+  )
+  if (!latestSplitComplete) {
+    return true
+  }
+  return String(latestHandoff.createdAt || "").localeCompare(
+    String(latestSplitComplete.createdAt || ""),
+  ) >= 0
+}
+
+export function part1EligibleStatuses(config) {
   return new Set([
     config.statuses.todo,
     config.statuses.needsClarification,
+    config.statuses.tooLarge,
     config.statuses.blocked,
   ])
 }

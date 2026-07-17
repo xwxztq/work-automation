@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { ensureDir, fileExists } from "./config.mjs"
 
-const STAGES = new Set(["part1", "part2", "part3"])
+const STAGES = new Set(["part1", "split", "part2", "part3"])
 const IMPLEMENTATION_COMPLETE_MARKER = "Codex Implementation Complete"
 
 export function promptPath(rootDir, scope, stage) {
@@ -33,6 +33,7 @@ export async function writePrompt(rootDir, scope, stage, content) {
 export async function readAllPrompts(rootDir, projects) {
   const global = {
     part1: await readPrompt(rootDir, "global", "part1"),
+    split: await readPrompt(rootDir, "global", "split"),
     part2: await readPrompt(rootDir, "global", "part2"),
     part3: await readPrompt(rootDir, "global", "part3"),
   }
@@ -40,9 +41,11 @@ export async function readAllPrompts(rootDir, projects) {
   for (const project of projects) {
     projectPrompts[project.key] = {
       part1: await readPrompt(rootDir, project.key, "part1"),
+      split: await readPrompt(rootDir, project.key, "split"),
       part2: await readPrompt(rootDir, project.key, "part2"),
       part3: await readPrompt(rootDir, project.key, "part3"),
       part1IsOverride: await fileExists(promptPath(rootDir, project.key, "part1")),
+      splitIsOverride: await fileExists(promptPath(rootDir, project.key, "split")),
       part2IsOverride: await fileExists(promptPath(rootDir, project.key, "part2")),
       part3IsOverride: await fileExists(promptPath(rootDir, project.key, "part3")),
     }
@@ -73,6 +76,8 @@ export function buildPromptContext(config, project, extraContext = {}) {
     EXTRA_RULES: project.extraRules || "No extra project-specific rules.",
     STATUS_TODO: statuses.todo,
     STATUS_NEEDS_CLARIFICATION: statuses.needsClarification,
+    STATUS_TOO_LARGE: statuses.tooLarge,
+    STATUS_NEEDS_SPLITTING: statuses.needsSplitting,
     STATUS_BLOCKED: statuses.blocked,
     STATUS_READY: statuses.ready,
     STATUS_SCHEDULE: statuses.schedule,

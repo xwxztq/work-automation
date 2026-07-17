@@ -1,15 +1,8 @@
 import https from "node:https"
-import { createRequire } from "node:module"
-import { fileURLToPath } from "node:url"
+import { createProxyAgent, resolveProxyUrl } from "./proxy.mjs"
 
 const API_URL = new URL("https://api.linear.app/graphql")
 const STATUS_HEALTH_PROJECT_PAGE_SIZE = 100
-const require = createRequire(import.meta.url)
-const { HttpsProxyAgent } = require(
-  fileURLToPath(
-    new URL("../../node_modules/.pnpm/node_modules/https-proxy-agent/dist/index.js", import.meta.url),
-  ),
-)
 
 export function createLinearClient(apiKey) {
   async function graphql(query, variables = {}) {
@@ -456,8 +449,7 @@ export function createLinearClient(apiKey) {
 
 function postGraphql({ apiKey, body }) {
   const payload = JSON.stringify(body)
-  const proxy = getProxyUrl()
-  const agent = proxy ? new HttpsProxyAgent(proxy) : undefined
+  const agent = createProxyAgent(API_URL)
 
   return new Promise((resolve, reject) => {
     const request = https.request(
@@ -488,22 +480,11 @@ function postGraphql({ apiKey, body }) {
   })
 }
 
-function getProxyUrl() {
-  return [
-    process.env.HTTPS_PROXY,
-    process.env.HTTP_PROXY,
-    process.env.ALL_PROXY,
-    process.env.https_proxy,
-    process.env.http_proxy,
-    process.env.all_proxy,
-  ].find((value) => value?.trim())
-}
-
 function explainLinearFetchError(error) {
   const message = error instanceof Error ? error.message : String(error)
   const code = error?.cause?.code
   if (code === "ENOTFOUND") {
-    if (getProxyUrl()) {
+    if (resolveProxyUrl(API_URL)) {
       return new Error(
         `Linear 请求失败：无法解析 api.linear.app。当前环境检测到代理变量，请检查代理是否可用。原始错误: ${message}`,
       )

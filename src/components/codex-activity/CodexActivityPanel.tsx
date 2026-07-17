@@ -200,6 +200,7 @@ function processLabel(agent: CodexActivityAgent) {
 
 function stageLabel(stage: string) {
   if (stage === "part1") return "阶段一"
+  if (stage === "split") return "拆分阶段"
   if (stage === "part2") return "阶段二"
   if (stage === "part3") return "阶段三"
   if (stage === "both") return "全部"

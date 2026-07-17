@@ -13,6 +13,8 @@ const baseConfig = {
   statuses: {
     todo: "Todo",
     needsClarification: "Needs Clarification",
+    tooLarge: "Too Large",
+    needsSplitting: "Needs Splitting",
     blocked: "Blocked",
     ready: "Ready for Codex",
     schedule: "On Schedule",
@@ -35,6 +37,8 @@ test("reports missing configured statuses per project team", async () => {
     linear: fakeLinear([
       "Todo",
       "Needs Clarification",
+      "Too Large",
+      "Needs Splitting",
       "Blocked",
       "Ready for Codex",
       "On Schedule",
@@ -53,6 +57,8 @@ test("passes when every configured status exists", async () => {
     linear: fakeLinear([
       "Todo",
       "Needs Clarification",
+      "Too Large",
+      "Needs Splitting",
       "Blocked",
       "Ready for Codex",
       "On Schedule",
@@ -232,6 +238,8 @@ function allRequiredStatusNames() {
   return [
     "Todo",
     "Needs Clarification",
+    "Too Large",
+    "Needs Splitting",
     "Blocked",
     "Ready for Codex",
     "On Schedule",

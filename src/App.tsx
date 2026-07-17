@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
+  Bell,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
@@ -22,6 +23,12 @@ import {
 import { toast } from "sonner"
 
 import { api } from "@/app/api"
+import {
+  collectBrowserNotificationCandidates,
+  createBrowserNotificationTracker,
+  markBrowserNotificationDelivered,
+  type BrowserNotificationTracker,
+} from "@/app/run-notifications"
 import { CodexActivityPanel } from "@/components/codex-activity/CodexActivityPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -105,6 +112,7 @@ const emptyProject: ProjectConfig = {
   maxActivePart2: 1,
   defaultTests: [],
   part1PromptMode: "global",
+  splitPromptMode: "global",
   part2PromptMode: "global",
   part3PromptMode: "global",
   extraRules: "无额外项目规则。",
@@ -116,6 +124,13 @@ const APP_TITLE_PREFIX = "WA"
 const DEFAULT_SERVER_ID = "本机"
 const SELECTED_PROJECT_KEY_STORAGE_KEY = "linearAutomation.selectedProjectKey"
 const MAIN_VIEW_STORAGE_KEY = "linearAutomation.mainView"
+
+const notificationStageLabels: Record<PromptStage, string> = {
+  part1: "阶段一",
+  split: "拆分阶段",
+  part2: "阶段二",
+  part3: "阶段三",
+}
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
   key: "本机配置用的稳定标识，日志和提示词会引用它。",
@@ -132,10 +147,12 @@ const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
 const statusConfigDescriptions: Record<keyof AppConfig["statuses"], string> = {
   todo: "阶段一会扫描的新需求入口。",
   needsClarification: "阶段一会复查等待用户补充的问题。",
+  tooLarge: "阶段一对范围过大的事项会回写到这里，等待人工审核后再转 Needs Splitting。",
+  needsSplitting: "拆分阶段会扫描的待拆分队列入口。",
   blocked: "阶段一会复查阻塞是否解除。",
   ready: "阶段一判断可实现后的等待池，不会自动进入已排期。",
   schedule: "用户人工批准后，阶段二才会认领实现。",
-  inProgress: "当前 Codex agent 已认领并正在实现。",
+  inProgress: "阶段二认领后的实现中状态；拆分阶段完成后父 issue 也会进入这里，但不占阶段二并发名额。",
   testing: "阶段二完成后进入阶段三 Auto Review 队列。",
   readyForReview: "阶段三自动复查完成后等待人工验证。",
 }
@@ -258,12 +275,22 @@ function App() {
   const [linearStatusChecking, setLinearStatusChecking] = useState(false)
   const [linearStatusDialogDismissedAt, setLinearStatusDialogDismissedAt] = useState<string | null>(null)
   const autoStartTried = useRef(false)
+  const browserNotificationTracker = useRef<BrowserNotificationTracker | null>(null)
+  const browserNotificationDiagnostics = useRef(new Set<string>())
+  const notificationConfig = useRef<AppConfig | null>(null)
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
+    () => typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  )
 
   useEffect(() => {
     void refreshAll()
     // Initial load only. Subsequent updates use explicit refresh and polling.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    notificationConfig.current = config
+  }, [config])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -406,14 +433,18 @@ function App() {
         selectedProjectKey,
         readPersistedSelectedProjectKey(),
       ])
-      const [nextRuns, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
+      const [nextRuns, nextGlobalRuns, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
         api.getRuns(nextProjectKey || undefined),
+        api.getRuns(),
         loadCodexActivity(nextProjectKey || undefined),
         api.getLinearStatusHealth(),
       ])
       setConfig(nextConfig)
       setPrompts(nextPrompts)
       setRuns(nextRuns.runs)
+      setGlobalRuns(nextGlobalRuns.runs)
+      setGlobalRunTotalCount(nextGlobalRuns.totalCount)
+      processRunNotifications(nextGlobalRuns.runs, nextConfig)
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
@@ -595,14 +626,27 @@ function App() {
 
   async function refreshRuns(silent = false, projectKey = selectedProjectKey) {
     try {
-      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
+      const [
+        nextRuns,
+        nextGlobalRuns,
+        nextDaemon,
+        nextEvents,
+        nextCodexActivity,
+        nextLinearStatusHealth,
+      ] = await Promise.all([
         api.getRuns(projectKey || undefined),
+        api.getRuns(),
         api.getDaemonStatus(),
         api.getEvents(),
         loadCodexActivity(projectKey || undefined),
         api.getLinearStatusHealth(),
       ])
       setRuns(nextRuns.runs)
+      setGlobalRuns(nextGlobalRuns.runs)
+      setGlobalRunTotalCount(nextGlobalRuns.totalCount)
+      if (notificationConfig.current) {
+        processRunNotifications(nextGlobalRuns.runs, notificationConfig.current)
+      }
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
       setEvents(nextEvents.events)
@@ -630,6 +674,9 @@ function App() {
       setEvents(nextEvents.events)
       setGlobalCodexActivity(nextCodexActivity)
       setLinearStatusHealth(nextLinearStatusHealth)
+      if (notificationConfig.current) {
+        processRunNotifications(nextRuns.runs, notificationConfig.current)
+      }
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
@@ -644,6 +691,119 @@ function App() {
     } catch (error) {
       toast.error(errorMessage(error))
       return false
+    }
+  }
+
+  function processRunNotifications(nextRuns: RunSummary[], currentConfig: AppConfig) {
+    if (!browserNotificationTracker.current) {
+      browserNotificationTracker.current = createBrowserNotificationTracker(nextRuns)
+      return
+    }
+
+    const tracker = browserNotificationTracker.current
+    const candidates = collectBrowserNotificationCandidates(
+      tracker,
+      nextRuns,
+      currentConfig.notifications,
+    )
+    const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission
+    setNotificationPermission(permission)
+
+    for (const run of candidates) {
+      if (permission !== "granted") {
+        reportBrowserNotificationDiagnostic(
+          `${run.id}:permission:${permission}`,
+          `${run.issueIdentifier} 已完成，但浏览器通知权限为“${notificationPermissionLabel(permission)}”。`,
+        )
+        continue
+      }
+
+      const result = run.status === "succeeded" ? "成功" : "失败"
+      try {
+        const notification = new Notification(`${run.issueIdentifier} ${result}`, {
+          body: `${run.issueTitle}\n${notificationStageLabels[run.stage]} · ${result}`,
+          tag: `work-automation-${run.id}`,
+        })
+        notification.onclick = () => {
+          window.focus()
+          openProjectView(run.projectKey)
+          void loadRun(run.id)
+          notification.close()
+        }
+        markBrowserNotificationDelivered(tracker, run.id)
+        browserNotificationDiagnostics.current.delete(`${run.id}:create`)
+      } catch (error) {
+        reportBrowserNotificationDiagnostic(
+          `${run.id}:create`,
+          `${run.issueIdentifier} 浏览器通知创建失败：${errorMessage(error)}`,
+          true,
+        )
+      }
+    }
+  }
+
+  function reportBrowserNotificationDiagnostic(key: string, message: string, isError = false) {
+    if (browserNotificationDiagnostics.current.has(key)) return
+    browserNotificationDiagnostics.current.add(key)
+    if (isError) {
+      toast.error(message)
+    } else {
+      toast.warning(message)
+    }
+  }
+
+  async function requestNotificationPermission() {
+    if (typeof Notification === "undefined") {
+      setNotificationPermission("unsupported")
+      return "unsupported" as const
+    }
+    try {
+      const permission = await Notification.requestPermission()
+      setNotificationPermission(permission)
+      return permission
+    } catch (error) {
+      toast.error(`请求浏览器通知权限失败：${errorMessage(error)}`)
+      return Notification.permission
+    }
+  }
+
+  async function sendTestNotification() {
+    let permission: NotificationPermission | "unsupported" = typeof Notification === "undefined"
+      ? "unsupported"
+      : Notification.permission
+    if (permission === "default") {
+      permission = await requestNotificationPermission()
+    }
+    if (permission !== "granted" || typeof Notification === "undefined") {
+      toast.warning(`无法发送测试通知：当前权限为“${notificationPermissionLabel(permission)}”。`)
+      return
+    }
+    try {
+      const notification = new Notification("Work Automation 通知测试", {
+        body: "浏览器通知 API 工作正常。",
+        tag: "work-automation-notification-test",
+      })
+      notification.onclick = () => {
+        window.focus()
+        notification.close()
+      }
+      toast.success("测试通知已发送，请检查 macOS 通知中心。")
+    } catch (error) {
+      toast.error(`测试通知创建失败：${errorMessage(error)}`)
+    }
+  }
+
+  async function toggleNotification(stage: PromptStage, result: "succeeded" | "failed", enabled: boolean) {
+    if (!config) return
+    setConfig({
+      ...config,
+      notifications: {
+        ...config.notifications,
+        [stage]: { ...config.notifications[stage], [result]: enabled },
+      },
+    })
+    if (enabled && notificationPermission === "default") {
+      await requestNotificationPermission()
     }
   }
 
@@ -843,6 +1003,10 @@ function App() {
                 promptText={promptText}
                 setConfig={setConfig}
                 saveConfig={() => void saveConfig(config)}
+                notificationPermission={notificationPermission}
+                requestNotificationPermission={() => void requestNotificationPermission()}
+                sendTestNotification={() => void sendTestNotification()}
+                toggleNotification={(stage, result, enabled) => void toggleNotification(stage, result, enabled)}
                 setPromptScope={setPromptScope}
                 setPromptStage={setPromptStage}
                 setPromptText={setPromptText}
@@ -1345,6 +1509,7 @@ function ProjectView({
                 <SelectContent>
                   <SelectItem value="both">全部</SelectItem>
                   <SelectItem value="part1">阶段一</SelectItem>
+                  <SelectItem value="split">拆分阶段</SelectItem>
                   <SelectItem value="part2">阶段二</SelectItem>
                   <SelectItem value="part3">阶段三 / Auto Review</SelectItem>
                 </SelectContent>
@@ -2131,6 +2296,9 @@ function ProjectEditor({
           <Field label="阶段一提示词模式">
             <ModeSelect value={project.part1PromptMode} onValueChange={(value) => onUpdate({ part1PromptMode: value })} />
           </Field>
+          <Field label="拆分阶段提示词模式">
+            <ModeSelect value={project.splitPromptMode} onValueChange={(value) => onUpdate({ splitPromptMode: value })} />
+          </Field>
           <Field label="阶段二提示词模式">
             <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
           </Field>
@@ -2269,6 +2437,10 @@ function SettingsPage({
   promptText,
   setConfig,
   saveConfig,
+  notificationPermission,
+  requestNotificationPermission,
+  sendTestNotification,
+  toggleNotification,
   setPromptScope,
   setPromptStage,
   setPromptText,
@@ -2283,6 +2455,10 @@ function SettingsPage({
   promptText: string
   setConfig: (config: AppConfig) => void
   saveConfig: () => void
+  notificationPermission: NotificationPermission | "unsupported"
+  requestNotificationPermission: () => void
+  sendTestNotification: () => void
+  toggleNotification: (stage: PromptStage, result: "succeeded" | "failed", enabled: boolean) => void
   setPromptScope: (scope: string) => void
   setPromptStage: (stage: PromptStage) => void
   setPromptText: (text: string) => void
@@ -2361,12 +2537,20 @@ function SettingsPage({
                 }
               />
             </Field>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <Field label="阶段一沙箱">
                 <Input
                   value={config.codex.part1Sandbox}
                   onChange={(event) =>
                     setConfig({ ...config, codex: { ...config.codex, part1Sandbox: event.target.value } })
+                  }
+                />
+              </Field>
+              <Field label="拆分阶段沙箱">
+                <Input
+                  value={config.codex.splitSandbox}
+                  onChange={(event) =>
+                    setConfig({ ...config, codex: { ...config.codex, splitSandbox: event.target.value } })
                   }
                 />
               </Field>
@@ -2393,13 +2577,90 @@ function SettingsPage({
 
       <Card>
         <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle>通知</CardTitle>
+              <p className="mt-2 text-sm text-muted-foreground">
+                阶段开关同时控制浏览器系统通知和 Webhook；取消和服务重启恢复的结果不会通知。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">权限：{notificationPermissionLabel(notificationPermission)}</Badge>
+              <Button variant="outline" onClick={requestNotificationPermission} disabled={notificationPermission === "unsupported"}>
+                <Bell className="size-4" />
+                请求权限
+              </Button>
+              <Button variant="outline" onClick={sendTestNotification} disabled={notificationPermission === "unsupported"}>
+                <Bell className="size-4" />
+                发送测试通知
+              </Button>
+              <Button onClick={saveConfig} disabled={busy}>
+                <Save className="size-4" />
+                保存
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {(Object.keys(notificationStageLabels) as PromptStage[]).map((stage) => (
+              <div key={stage} className="rounded-lg border p-3">
+                <div className="mb-3 font-medium">{notificationStageLabels[stage]}</div>
+                {(["succeeded", "failed"] as const).map((result) => (
+                  <div key={result} className="flex items-center justify-between py-2">
+                    <Label htmlFor={`notification-${stage}-${result}`}>{result === "succeeded" ? "成功" : "失败"}</Label>
+                    <Switch
+                      id={`notification-${stage}-${result}`}
+                      checked={config.notifications[stage][result]}
+                      onCheckedChange={(enabled) => toggleNotification(stage, result, enabled)}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Label htmlFor="webhook-enabled">Webhook GET 推送</Label>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  服务端在符合上方策略的正常运行结束后请求 URL；推送失败只记录日志，不影响运行结果。
+                </p>
+              </div>
+              <Switch
+                id="webhook-enabled"
+                checked={config.webhook.enabled}
+                onCheckedChange={(enabled) => setConfig({ ...config, webhook: { ...config.webhook, enabled } })}
+              />
+            </div>
+            <Field
+              label="URL 模板"
+              description="支持 {IssueID}、{IssueTitle}、{stage}、{status}；变量值会自动进行 URL 编码。"
+            >
+              <Input
+                className="font-mono text-xs"
+                placeholder="https://example.com/{IssueID}-{status}/{IssueTitle}?stage={stage}"
+                value={config.webhook.urlTemplate}
+                onChange={(event) =>
+                  setConfig({ ...config, webhook: { ...config.webhook, urlTemplate: event.target.value } })
+                }
+              />
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Linear 状态</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            状态名称必须和 Linear 工作流中的名称完全一致。阶段一只扫描待处理、需要澄清和阻塞状态；阶段二只扫描已排期状态；阶段三只扫描 Testing。Ready for Codex 到 On Schedule 需要用户人工批准，阶段三完成后最小支持流转到 Ready for Review 或回到 On Schedule。
+            状态名称必须和 Linear 工作流中的名称完全一致。阶段一会扫描待处理、需要澄清、范围过大和阻塞状态；当结论为
+            `TOO LARGE` 时，阶段一会把 issue 移到 Too Large。拆分阶段只扫描 Needs Splitting；阶段二只扫描已排期状态；
+            阶段三只扫描 Testing。Too Large 不会被服务自动继续移动到 Needs Splitting，仍需用户人工审核后变更状态。
           </p>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 gap-3 xl:grid-cols-5">
             {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
               <Field key={key} label={statusConfigLabel(key)} description={statusConfigDescriptions[key]}>
                 <Input
@@ -2432,6 +2693,7 @@ function SettingsPage({
             <Tabs value={promptStage} onValueChange={(value) => setPromptStage(value as PromptStage)}>
               <TabsList>
                 <TabsTrigger value="part1">阶段一</TabsTrigger>
+                <TabsTrigger value="split">拆分阶段</TabsTrigger>
                 <TabsTrigger value="part2">阶段二</TabsTrigger>
                 <TabsTrigger value="part3">阶段三</TabsTrigger>
               </TabsList>
@@ -2445,6 +2707,7 @@ function SettingsPage({
                 {projectKeys.map((key) => (
                   <SelectItem key={key} value={key}>
                     {prompts.projects[key]?.part1IsOverride ||
+                    prompts.projects[key]?.splitIsOverride ||
                     prompts.projects[key]?.part2IsOverride ||
                     prompts.projects[key]?.part3IsOverride
                       ? `${key}`
@@ -2622,6 +2885,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function stageLabel(stage: string) {
   if (stage === "part1") return "阶段一"
+  if (stage === "split") return "拆分阶段"
   if (stage === "part2") return "阶段二"
   if (stage === "part3") return "阶段三"
   if (stage === "both") return "全部"
@@ -2658,10 +2922,21 @@ function viewTitle(view: View, selectedProject: ProjectConfig | null) {
   return selectedProject?.repoName || selectedProject?.key || "项目"
 }
 
+function notificationPermissionLabel(permission: NotificationPermission | "unsupported") {
+  return {
+    default: "未询问",
+    granted: "已允许",
+    denied: "已拒绝",
+    unsupported: "浏览器不支持",
+  }[permission]
+}
+
 function statusConfigLabel(key: keyof AppConfig["statuses"]) {
   const labels: Record<keyof AppConfig["statuses"], string> = {
     todo: "待处理",
     needsClarification: "需要澄清",
+    tooLarge: "范围过大",
+    needsSplitting: "待拆分",
     blocked: "阻塞",
     ready: "可交给 Codex",
     schedule: "已排期",

@@ -5,6 +5,8 @@ export const DEFAULT_STATUS_HEALTH_CACHE_TTL_MS = 60_000
 export const REQUIRED_STATUS_KEYS = [
   "todo",
   "needsClarification",
+  "tooLarge",
+  "needsSplitting",
   "blocked",
   "ready",
   "schedule",
@@ -16,6 +18,8 @@ export const REQUIRED_STATUS_KEYS = [
 export const STATUS_LABELS = {
   todo: "Todo",
   needsClarification: "Needs Clarification",
+  tooLarge: "Too Large",
+  needsSplitting: "Needs Splitting",
   blocked: "Blocked",
   ready: "Ready for Codex",
   schedule: "On Schedule",

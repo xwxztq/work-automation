@@ -3,9 +3,18 @@ import path from "node:path"
 import { accessSync, constants } from "node:fs"
 import { DEFAULT_CONFIG } from "./defaults.mjs"
 import { resolveExecutable } from "./executable.mjs"
-import { isLoopbackHost, validateHost } from "./host.mjs"
+import { isLoopbackHost, isWildcardHostAllowed, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
 import { checkLinearStatusHealth } from "./status-health.mjs"
+import { validateWebhookUrlTemplate } from "./webhook-notifier.mjs"
+
+const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"])
+export const CODEX_SANDBOX_RUNTIME_ENV = {
+  part1Sandbox: "LINEAR_AUTOMATION_PART1_SANDBOX",
+  splitSandbox: "LINEAR_AUTOMATION_SPLIT_SANDBOX",
+  part2Sandbox: "LINEAR_AUTOMATION_PART2_SANDBOX",
+  part3Sandbox: "LINEAR_AUTOMATION_PART3_SANDBOX",
+}
 
 export function resolveFromRoot(rootDir, filePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath)
@@ -50,6 +59,12 @@ export async function loadConfig(configPath, rootDir = process.cwd()) {
 export async function saveConfig(configPath, config, rootDir = process.cwd()) {
   const resolved = resolveFromRoot(rootDir, configPath)
   const normalized = normalizeConfig(config)
+  if (normalized.webhook.enabled) {
+    const webhookError = validateWebhookUrlTemplate(normalized.webhook.urlTemplate)
+    if (webhookError) {
+      throw new Error(webhookError)
+    }
+  }
   const current = normalizeConfig(await readJsonFile(resolved, DEFAULT_CONFIG))
   const projectKeyValidation = validateProjectKeys(normalized.projects, {
     previousProjects: current.projects,
@@ -69,6 +84,13 @@ export function normalizeConfig(raw) {
     linear: { ...DEFAULT_CONFIG.linear, ...(raw?.linear || {}) },
     codex: { ...DEFAULT_CONFIG.codex, ...(raw?.codex || {}) },
     statuses: { ...DEFAULT_CONFIG.statuses, ...(raw?.statuses || {}) },
+    notifications: Object.fromEntries(
+      Object.entries(DEFAULT_CONFIG.notifications).map(([stage, defaults]) => [
+        stage,
+        { ...defaults, ...(raw?.notifications?.[stage] || {}) },
+      ]),
+    ),
+    webhook: { ...DEFAULT_CONFIG.webhook, ...(raw?.webhook || {}) },
     projects: Array.isArray(raw?.projects) ? raw.projects : [],
   }
 
@@ -88,6 +110,7 @@ export function normalizeConfig(raw) {
       maxActivePart2: 1,
       defaultTests: [],
       part1PromptMode: "global",
+      splitPromptMode: "global",
       part2PromptMode: "global",
       part3PromptMode: "global",
       extraRules: "无额外项目规则。",
@@ -109,6 +132,23 @@ export function normalizeConfig(raw) {
   return config
 }
 
+export function applyRuntimeConfigOverrides(config, env = process.env) {
+  const codex = { ...config.codex }
+  for (const [configKey, envKey] of Object.entries(CODEX_SANDBOX_RUNTIME_ENV)) {
+    const value = String(env[envKey] || "").trim()
+    if (!value) {
+      continue
+    }
+    if (!CODEX_SANDBOX_MODES.has(value)) {
+      throw new Error(
+        `${envKey} 必须是 read-only、workspace-write 或 danger-full-access。`,
+      )
+    }
+    codex[configKey] = value
+  }
+  return { ...config, codex }
+}
+
 export function redactConfig(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   return {
@@ -128,7 +168,9 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   if (!config.serverId?.trim()) {
     errors.push("必须填写 serverId。")
   }
-  const hostError = validateHost(config.host)
+  const hostError = validateHost(config.host, {
+    allowWildcard: options.allowWildcardHost ?? isWildcardHostAllowed(),
+  })
   if (hostError) {
     errors.push(hostError)
   } else if (!isLoopbackHost(config.host)) {
@@ -142,6 +184,12 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   }
   if (!process.env[apiKeyEnv]) {
     warnings.push(`当前进程环境未设置 ${apiKeyEnv}。`)
+  }
+  if (config.webhook?.enabled) {
+    const webhookError = validateWebhookUrlTemplate(config.webhook.urlTemplate)
+    if (webhookError) {
+      errors.push(webhookError)
+    }
   }
   const codexBin = config.codex?.bin || DEFAULT_CONFIG.codex.bin
   if (!(await resolveExecutable(codexBin, { cwd: rootDir }))) {
@@ -184,6 +232,8 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
   for (const statusKey of [
     "todo",
     "needsClarification",
+    "tooLarge",
+    "needsSplitting",
     "blocked",
     "ready",
     "schedule",
