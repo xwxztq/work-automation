@@ -4,6 +4,23 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -z "${DEVELOPER_ROOT:-}" ]]; then
+  if [[ -z "${HOME:-}" ]]; then
+    echo "未设置 HOME 或 DEVELOPER_ROOT，无法确定宿主机项目挂载目录。" >&2
+    exit 1
+  fi
+  DEVELOPER_ROOT="$HOME"
+fi
+if [[ "$DEVELOPER_ROOT" != /* ]]; then
+  echo "DEVELOPER_ROOT 必须是绝对路径: $DEVELOPER_ROOT" >&2
+  exit 1
+fi
+if [[ ! -d "$DEVELOPER_ROOT" ]]; then
+  echo "DEVELOPER_ROOT 不存在或不是目录: $DEVELOPER_ROOT" >&2
+  exit 1
+fi
+export DEVELOPER_ROOT
+
 if [[ -n "${DOCKER_BIN:-}" ]]; then
   docker_bin="$DOCKER_BIN"
 elif command -v docker >/dev/null 2>&1; then
@@ -64,7 +81,7 @@ case "$action" in
     ;;
   validate)
     "$docker_bin" compose config --quiet
-    echo "Compose 配置有效。"
+    echo "Compose 配置有效（项目挂载根目录: ${DEVELOPER_ROOT}）。"
     ;;
   *)
     echo "用法: ./docker.sh [up|down|restart|rebuild|logs|status|validate]" >&2

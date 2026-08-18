@@ -52,8 +52,8 @@ services:
         source: ./.linear-automation
         target: /app/.linear-automation
       - type: bind
-        source: "${DEVELOPER_ROOT:-/Users/jack/Developer}"
-        target: "${DEVELOPER_ROOT:-/Users/jack/Developer}"
+        source: "${DEVELOPER_ROOT:-${HOME}}"
+        target: "${DEVELOPER_ROOT:-${HOME}}"
       - type: bind
         source: "${HOME}/.codex"
         target: /home/workautomation/.codex

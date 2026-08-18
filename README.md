@@ -99,7 +99,7 @@
    - `key`: 系统生成的内部稳定标识，用于本机运行目录、处理快照和项目提示词文件名；新增项目会自动生成类似 UUID 的文件夹安全值。如果手写配置，只使用小写字母、数字和连字符。
    - `repoName`: 展示给用户和写入提示词的仓库名称。
    - `linearProjectId`: Linear 项目 UUID，只扫描这个项目下的 issue。
-   - `path`: 本机仓库绝对路径，例如 `/Users/san/Projects/Infra/linear/linear-automation`。
+   - `path`: 本机仓库绝对路径，例如 `/absolute/path/to/linear-automation`。
    - `codexCwd`: `codex exec -C` 的执行目录；通常和 `path` 相同。
    - `branchOrScopePrefix`: 分支或提交 scope 前缀，例如 `main`。
    - `defaultTests`: AI Triage 没有给出测试命令时使用的默认测试，每行一条。
@@ -221,7 +221,7 @@ pnpm start -- --host 192.168.1.23
    ./docker.sh down
    ```
 
-容器会复用当前仓库的 `config.local.json`、`prompts/` 和 `.linear-automation/`，并挂载 `~/.codex`、`~/.gitconfig` 以及 `${DEVELOPER_ROOT:-/Users/jack/Developer}`。因此现有项目绝对路径、Codex 登录态、运行历史和界面中保存的设置在容器重建后仍然保留。`~/.codex` 包含认证信息，只应挂载到本机可信容器，不要复制进镜像或提交到仓库。
+容器会复用当前仓库的 `config.local.json`、`prompts/` 和 `.linear-automation/`，并挂载 `~/.codex`、`~/.gitconfig` 以及宿主机项目目录。项目目录默认使用当前用户的 `$HOME`，并以相同绝对路径挂载进容器，因此配置中的项目绝对路径不需要改写，也不会依赖某个固定用户名。可以通过 `DEVELOPER_ROOT` 将挂载范围缩小到所有项目的共同父目录；项目位于 `$HOME` 之外时也必须显式指定它。`docker.sh` 会在启动前检查该路径存在且为绝对路径。`~/.codex` 包含认证信息，只应挂载到本机可信容器，不要复制进镜像或提交到仓库。
 
 镜像内置 Node.js、pnpm、Python、Git、ripgrep 和 Codex CLI，适合当前项目的常见检查。项目若依赖 Xcode、macOS GUI、宿主机专用命令或其他语言工具链，需要在 `Dockerfile` 中补充 Linux 工具链，或继续在宿主机直接运行服务。Codex 配置里仅适用于 macOS 的可选 MCP 服务在容器中可能不可用。
 
@@ -233,7 +233,10 @@ Docker 内部无法使用 Codex 的 Bubblewrap 沙箱，因此 Compose 只在容
 # 改宿主机访问端口
 WORK_AUTOMATION_PORT=14378 ./docker.sh up
 
-# 项目不全在默认目录时，挂载另一个共同父目录
+# 可选：把默认的整个 $HOME 挂载缩小到所有项目的共同父目录
+DEVELOPER_ROOT="$HOME/Projects" ./docker.sh up
+
+# 项目位于 $HOME 之外时，显式指定它们的共同父目录
 DEVELOPER_ROOT=/path/to/projects ./docker.sh up
 
 # 非默认 macOS 用户 UID/GID
