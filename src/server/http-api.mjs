@@ -1,7 +1,6 @@
 import fs from "node:fs/promises"
 import http from "node:http"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { createLinearClient } from "./linear-client.mjs"
 import {
   loadConfig,
@@ -13,13 +12,13 @@ import { createCodexActivityPayload } from "./codex-activity.mjs"
 import { readAllPrompts, readPrompt, writePrompt } from "./prompts.mjs"
 import { createLinearStatusHealthChecker } from "./status-health.mjs"
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ROOT_DIR = path.resolve(__dirname, "../..")
-
 export function createHttpApi({
   configPath,
+  rootDir = process.cwd(),
+  staticRootDir = rootDir,
   scheduler,
   store,
+  setupManager = null,
   dev = false,
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
 }) {
@@ -27,7 +26,14 @@ export function createHttpApi({
     try {
       const url = new URL(req.url || "/", "http://localhost")
       if (url.pathname.startsWith("/api/")) {
-        await handleApi(req, res, url, { configPath, scheduler, store, linearStatusHealthChecker })
+        await handleApi(req, res, url, {
+          configPath,
+          rootDir,
+          scheduler,
+          store,
+          setupManager,
+          linearStatusHealthChecker,
+        })
         return
       }
       if (dev) {
@@ -36,7 +42,7 @@ export function createHttpApi({
         })
         return
       }
-      await serveStatic(res, url.pathname)
+      await serveStatic(res, url.pathname, staticRootDir)
     } catch (error) {
       sendJson(res, 500, {
         error: error instanceof Error ? error.message : String(error),
@@ -46,12 +52,48 @@ export function createHttpApi({
 }
 
 async function handleApi(req, res, url, context) {
-  const { configPath, scheduler, store, linearStatusHealthChecker } = context
+  const {
+    configPath,
+    rootDir,
+    scheduler,
+    store,
+    setupManager,
+    linearStatusHealthChecker,
+  } = context
   const method = req.method || "GET"
   const parts = url.pathname.split("/").filter(Boolean)
 
+  if (method === "GET" && url.pathname === "/api/setup/status") {
+    if (!setupManager) {
+      sendJson(res, 501, { error: "当前服务未启用首次配置功能。" })
+      return
+    }
+    sendJson(res, 200, await setupManager.status())
+    return
+  }
+
+  if (method === "POST" && url.pathname === "/api/setup/configure") {
+    if (!setupManager) {
+      sendJson(res, 501, { error: "当前服务未启用首次配置功能。" })
+      return
+    }
+    try {
+      const result = await setupManager.configure(await readBody(req))
+      linearStatusHealthChecker.clear()
+      if (result.ready) {
+        scheduler.start()
+      }
+      sendJson(res, 200, result)
+    } catch (error) {
+      sendJson(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return
+  }
+
   if (method === "GET" && url.pathname === "/api/config") {
-    const config = await loadConfig(configPath, ROOT_DIR)
+    const config = await loadConfig(configPath, rootDir)
     sendJson(res, 200, redactConfig(config))
     return
   }
@@ -59,7 +101,7 @@ async function handleApi(req, res, url, context) {
   if (method === "PUT" && url.pathname === "/api/config") {
     const body = await readBody(req)
     try {
-      const saved = await saveConfig(configPath, body, ROOT_DIR)
+      const saved = await saveConfig(configPath, body, rootDir)
       sendJson(res, 200, redactConfig(saved))
     } catch (error) {
       sendJson(res, 400, {
@@ -70,13 +112,13 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "POST" && url.pathname === "/api/config/validate") {
-    const config = await loadConfig(configPath, ROOT_DIR)
-    sendJson(res, 200, await validateConfig(config, ROOT_DIR))
+    const config = await loadConfig(configPath, rootDir)
+    sendJson(res, 200, await validateConfig(config, rootDir))
     return
   }
 
   if (method === "GET" && url.pathname === "/api/linear/status-health") {
-    const config = await loadConfig(configPath, ROOT_DIR)
+    const config = await loadConfig(configPath, rootDir)
     sendJson(
       res,
       200,
@@ -88,13 +130,13 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "GET" && url.pathname === "/api/prompts") {
-    const config = await loadConfig(configPath, ROOT_DIR)
-    sendJson(res, 200, await readAllPrompts(ROOT_DIR, config.projects))
+    const config = await loadConfig(configPath, rootDir)
+    sendJson(res, 200, await readAllPrompts(rootDir, config.projects))
     return
   }
 
   if (method === "GET" && url.pathname === "/api/linear/projects") {
-    const config = await loadConfig(configPath, ROOT_DIR)
+    const config = await loadConfig(configPath, rootDir)
     const apiKey = process.env[config.linear.apiKeyEnv]
     if (!apiKey) {
       sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
@@ -110,14 +152,14 @@ async function handleApi(req, res, url, context) {
   if (method === "PUT" && parts[1] === "prompts" && parts.length === 4) {
     const [, , scope, stage] = parts
     const body = await readBody(req)
-    const result = await writePrompt(ROOT_DIR, scope, stage, String(body.content || ""))
+    const result = await writePrompt(rootDir, scope, stage, String(body.content || ""))
     sendJson(res, 200, result)
     return
   }
 
   if (method === "GET" && parts[1] === "prompts" && parts.length === 4) {
     const [, , scope, stage] = parts
-    sendJson(res, 200, { content: await readPrompt(ROOT_DIR, scope, stage) })
+    sendJson(res, 200, { content: await readPrompt(rootDir, scope, stage) })
     return
   }
 
@@ -128,7 +170,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "GET" && parts[1] === "projects" && parts[3] === "linear-preview") {
-    const config = await loadConfig(configPath, ROOT_DIR)
+    const config = await loadConfig(configPath, rootDir)
     const project = config.projects.find((item) => item.key === parts[2])
     if (!project) {
       sendJson(res, 404, { error: `未知项目: ${parts[2]}` })
@@ -165,6 +207,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "POST" && url.pathname === "/api/runs/once") {
+    if (!(await ensureSetupReady(res, setupManager))) return
     const body = await readBody(req)
     const stage = body.stage || "both"
     const force = Boolean(body.force)
@@ -174,6 +217,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "POST" && url.pathname === "/api/runs/issue") {
+    if (!(await ensureSetupReady(res, setupManager))) return
     const body = await readBody(req)
     const stage = body.stage || "both"
     const force = Boolean(body.force)
@@ -211,6 +255,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "POST" && url.pathname === "/api/daemon/start") {
+    if (!(await ensureSetupReady(res, setupManager))) return
     scheduler.start()
     sendJson(res, 200, await scheduler.status())
     return
@@ -251,6 +296,21 @@ async function handleApi(req, res, url, context) {
   }
 
   sendJson(res, 404, { error: `未找到接口: ${method} ${url.pathname}` })
+}
+
+async function ensureSetupReady(res, setupManager) {
+  if (!setupManager) {
+    return true
+  }
+  const status = await setupManager.status()
+  if (status.ready) {
+    return true
+  }
+  sendJson(res, 409, {
+    error: "首次配置尚未完成，不能启动自动执行。",
+    setup: status,
+  })
+  return false
 }
 
 function startManualRunInBackground({ scheduler, store, stage, issueId, projectKey, force = false }) {
@@ -302,8 +362,8 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload, null, 2))
 }
 
-async function serveStatic(res, pathname) {
-  const distDir = path.join(ROOT_DIR, "dist")
+async function serveStatic(res, pathname, staticRootDir) {
+  const distDir = path.join(staticRootDir, "dist")
   const requested = pathname === "/" ? "/index.html" : pathname
   const filePath = path.join(distDir, requested)
   const resolved = path.resolve(filePath)

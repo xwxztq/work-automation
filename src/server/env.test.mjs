@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { loadLocalEnv, parseEnvContent } from "./env.mjs"
+import { loadLocalEnv, parseEnvContent, writeLocalEnvValue } from "./env.mjs"
 
 async function withTempDir(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "linear-automation-env-"))
@@ -80,5 +80,23 @@ test("ignores missing local env files", async () => {
 
     assert.deepEqual(await loadLocalEnv(dir, { env }), [])
     assert.deepEqual(env, {})
+  })
+})
+
+test("writes a private local env value without changing unrelated entries", async () => {
+  await withTempDir(async (dir) => {
+    await fs.writeFile(
+      path.join(dir, ".env.local"),
+      "UNCHANGED=yes\nLINEAR_API_KEY=old\nLINEAR_API_KEY=duplicate\n",
+    )
+
+    const filePath = await writeLocalEnvValue(dir, "LINEAR_API_KEY", 'new "token"')
+    const content = await fs.readFile(filePath, "utf8")
+    const stat = await fs.stat(filePath)
+
+    assert.match(content, /^UNCHANGED=yes$/m)
+    assert.equal((content.match(/LINEAR_API_KEY=/g) || []).length, 1)
+    assert.equal(parseEnvContent(content).LINEAR_API_KEY, 'new "token"')
+    assert.equal(stat.mode & 0o777, 0o600)
   })
 })

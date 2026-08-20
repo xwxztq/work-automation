@@ -95,6 +95,7 @@ import type {
   PromptBundle,
   RunDetail,
   RunSummary,
+  SetupStatus,
   Stage,
 } from "@/shared/types"
 
@@ -242,6 +243,9 @@ function useMediaQuery(query: string) {
 
 function App() {
   const [view, setView] = useState<View>(readPersistedView)
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null)
+  const [setupError, setSetupError] = useState("")
+  const [setupSubmitting, setSetupSubmitting] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [prompts, setPrompts] = useState<PromptBundle | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
@@ -283,7 +287,7 @@ function App() {
   )
 
   useEffect(() => {
-    void refreshAll()
+    void bootstrap()
     // Initial load only. Subsequent updates use explicit refresh and polling.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -293,6 +297,7 @@ function App() {
   }, [config])
 
   useEffect(() => {
+    if (!setupStatus?.ready) return
     const timer = setInterval(() => {
       if (view === "activity") {
         void refreshGlobalActivity(true)
@@ -303,7 +308,7 @@ function App() {
     return () => clearInterval(timer)
     // Rebind polling when the active view or selected project changes so activity uses the right filter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProjectKey, view])
+  }, [selectedProjectKey, setupStatus?.ready, view])
 
   useEffect(() => {
     if (view !== "project") {
@@ -410,6 +415,44 @@ function App() {
     persistView("activity")
     setSelectedRun(null)
     void refreshGlobalActivity(true)
+  }
+
+  async function bootstrap() {
+    setBusy(true)
+    setSetupError("")
+    try {
+      const nextSetupStatus = await api.getSetupStatus()
+      setSetupStatus(nextSetupStatus)
+      if (nextSetupStatus.ready) {
+        await refreshAll()
+      }
+    } catch (error) {
+      const message = errorMessage(error)
+      setSetupError(message)
+      toast.error(message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function completeSetup(input: { linearApiKey?: string; codexBin?: string }) {
+    setSetupSubmitting(true)
+    setSetupError("")
+    try {
+      const nextSetupStatus = await api.configureSetup(input)
+      setSetupStatus(nextSetupStatus)
+      if (!nextSetupStatus.ready) {
+        setSetupError("首次配置仍有未满足的项目。")
+        return
+      }
+      autoStartTried.current = false
+      await refreshAll()
+      toast.success("首次配置已保存")
+    } catch (error) {
+      setSetupError(errorMessage(error))
+    } finally {
+      setSetupSubmitting(false)
+    }
   }
 
   async function refreshCurrentView() {
@@ -882,16 +925,63 @@ function App() {
     }
   }
 
-  if (!config || !prompts) {
+  if (!setupStatus) {
     return (
       <main className="flex min-h-svh items-center justify-center bg-background">
-        <Card className="w-[360px]">
+        <Card className="w-[min(420px,calc(100vw-2rem))]">
           <CardHeader>
             <div className="flex items-center gap-3">
               <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-9 rounded-md object-contain" />
               <CardTitle>{APP_BRAND_NAME}</CardTitle>
             </div>
           </CardHeader>
+          {setupError && (
+            <CardContent className="space-y-4">
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {setupError}
+              </div>
+              <Button variant="outline" onClick={() => void bootstrap()} disabled={busy}>
+                <RefreshCcw className={cn("size-4", busy && "animate-spin")} />
+                重新连接
+              </Button>
+            </CardContent>
+          )}
+        </Card>
+        <Toaster />
+      </main>
+    )
+  }
+
+  if (setupStatus.needsSetup) {
+    return (
+      <SetupPage
+        status={setupStatus}
+        error={setupError}
+        busy={setupSubmitting}
+        onSubmit={(input) => void completeSetup(input)}
+      />
+    )
+  }
+
+  if (!config || !prompts) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-background">
+        <Card className="w-[min(420px,calc(100vw-2rem))]">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-9 rounded-md object-contain" />
+              <div>
+                <CardTitle>{APP_BRAND_NAME}</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">正在读取本机配置</p>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <Button variant="outline" onClick={() => void bootstrap()} disabled={busy}>
+              <RefreshCcw className={cn("size-4", busy && "animate-spin")} />
+              重新读取
+            </Button>
+          </CardContent>
         </Card>
         <Toaster />
       </main>
@@ -1037,6 +1127,118 @@ function App() {
         onDismiss={dismissLinearStatusDialog}
         onOpenSettings={openSettingsFromLinearStatusDialog}
       />
+      <Toaster />
+    </main>
+  )
+}
+
+function SetupPage({
+  status,
+  error,
+  busy,
+  onSubmit,
+}: {
+  status: SetupStatus
+  error: string
+  busy: boolean
+  onSubmit: (input: { linearApiKey?: string; codexBin?: string }) => void
+}) {
+  const [linearApiKey, setLinearApiKey] = useState("")
+  const [codexBin, setCodexBin] = useState(
+    status.codex.resolvedBin || status.codex.configuredBin,
+  )
+
+  return (
+    <main className="min-h-svh bg-muted/30 px-4 py-8 sm:py-14">
+      <div className="mx-auto w-full max-w-2xl">
+        <div className="mb-5 flex items-center gap-3 px-1">
+          <img src={APP_LOGO_SRC} alt="WorkAutomation logo" className="size-10 rounded-md object-contain" />
+          <div>
+            <div className="font-semibold">{APP_BRAND_NAME}</div>
+            <div className="text-xs text-muted-foreground">本机首次配置</div>
+          </div>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>连接 Linear 与 Codex</CardTitle>
+            <p className="text-sm leading-6 text-muted-foreground">
+              完成后服务才会启动后台扫描。密钥只保存在这台机器的用户数据目录中，界面和配置接口不会返回密钥明文。
+            </p>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="space-y-6"
+              onSubmit={(event) => {
+                event.preventDefault()
+                onSubmit({
+                  linearApiKey: linearApiKey.trim() || undefined,
+                  codexBin: codexBin.trim() || undefined,
+                })
+              }}
+            >
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label htmlFor="setup-linear-key">Linear API key</Label>
+                  <Badge variant={status.linear.apiKeySet ? "secondary" : "outline"}>
+                    {status.linear.apiKeySet ? "已保存" : "尚未设置"}
+                  </Badge>
+                </div>
+                <Input
+                  id="setup-linear-key"
+                  type="password"
+                  value={linearApiKey}
+                  onChange={(event) => setLinearApiKey(event.target.value)}
+                  placeholder={status.linear.apiKeySet ? "留空以继续使用现有密钥" : "lin_api_..."}
+                  autoComplete="off"
+                  required={!status.linear.apiKeySet}
+                />
+                <p className="text-xs leading-5 text-muted-foreground">
+                  保存前会调用 Linear API 校验。文件权限设为仅当前用户可读写。
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label htmlFor="setup-codex-bin">Codex 可执行文件</Label>
+                  <Badge variant={status.codex.found ? "secondary" : "outline"}>
+                    {status.codex.found ? "已检测到" : "需要指定"}
+                  </Badge>
+                </div>
+                <Input
+                  id="setup-codex-bin"
+                  value={codexBin}
+                  onChange={(event) => setCodexBin(event.target.value)}
+                  placeholder="/Applications/ChatGPT.app/Contents/Resources/codex"
+                  autoComplete="off"
+                  required
+                />
+                <p className="text-xs leading-5 text-muted-foreground">
+                  必须保存绝对路径，后台服务启动后不会依赖终端里的 PATH。
+                </p>
+              </div>
+
+              <div className="rounded-lg border bg-muted/30 px-3 py-3">
+                <div className="text-xs font-medium text-muted-foreground">用户数据目录</div>
+                <div className="mt-1 break-all font-mono text-xs leading-5">
+                  {status.runtimeRootDir}
+                </div>
+              </div>
+
+              {error && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+
+              <Button type="submit" className="w-full" disabled={busy}>
+                <CheckCircle2 className="size-4" />
+                {busy ? "正在校验" : "校验并保存"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
       <Toaster />
     </main>
   )

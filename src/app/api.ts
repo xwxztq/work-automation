@@ -11,6 +11,8 @@ import type {
   RunDetail,
   RunListResponse,
   RunRequestAccepted,
+  SetupConfigurationInput,
+  SetupStatus,
   Stage,
 } from "@/shared/types"
 
@@ -30,6 +32,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  getSetupStatus: () => request<SetupStatus>("/api/setup/status"),
+  configureSetup: (input: SetupConfigurationInput) =>
+    request<SetupStatus>("/api/setup/configure", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   getConfig: () => request<AppConfig>("/api/config"),
   saveConfig: (config: AppConfig) =>
     request<AppConfig>("/api/config", { method: "PUT", body: JSON.stringify(config) }),

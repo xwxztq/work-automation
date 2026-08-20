@@ -9,6 +9,29 @@ export type LinearProjectOption = {
   teamNames: string[]
 }
 
+export type SetupStatus = {
+  ready: boolean
+  needsSetup: boolean
+  runtimeRootDir: string
+  configPath: string
+  linear: {
+    apiKeyEnv: string
+    apiKeySet: boolean
+  }
+  codex: {
+    configuredBin: string
+    resolvedBin: string | null
+    found: boolean
+    absolutePathSaved: boolean
+  }
+  projectsConfigured: number
+}
+
+export type SetupConfigurationInput = {
+  linearApiKey?: string
+  codexBin?: string
+}
+
 export type ProjectConfig = {
   key: string
   enabled: boolean

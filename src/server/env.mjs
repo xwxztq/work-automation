@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 export const DEFAULT_LOCAL_ENV_FILES = [".env.local", ".env"]
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 export async function loadLocalEnv(rootDir = process.cwd(), options = {}) {
   const env = options.env || process.env
@@ -63,6 +64,57 @@ export function parseEnvContent(content) {
   return parsed
 }
 
+export async function writeLocalEnvValue(
+  rootDir,
+  key,
+  value,
+  options = {},
+) {
+  if (!ENV_KEY_PATTERN.test(String(key || ""))) {
+    throw new Error(`无效的环境变量名: ${key}`)
+  }
+
+  const file = options.file || ".env.local"
+  const filePath = path.isAbsolute(file) ? file : path.resolve(rootDir, file)
+  let content = ""
+  try {
+    content = await fs.readFile(filePath, "utf8")
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error
+    }
+  }
+
+  const replacement = `${key}=${serializeEnvValue(value)}`
+  const lines = content.replace(/^\uFEFF/, "").split(/\r?\n/)
+  const assignment = new RegExp(`^(?:export\\s+)?${escapeRegExp(key)}\\s*=`)
+  const nextLines = []
+  let replaced = false
+  for (const line of lines) {
+    if (!assignment.test(line.trim())) {
+      nextLines.push(line)
+      continue
+    }
+    if (!replaced) {
+      nextLines.push(replacement)
+      replaced = true
+    }
+  }
+  if (!replaced) {
+    while (nextLines.at(-1) === "") {
+      nextLines.pop()
+    }
+    nextLines.push(replacement)
+  }
+
+  await fs.mkdir(path.dirname(filePath), { recursive: true })
+  const temporaryPath = `${filePath}.${process.pid}.tmp`
+  await fs.writeFile(temporaryPath, `${nextLines.join("\n")}\n`, { mode: 0o600 })
+  await fs.rename(temporaryPath, filePath)
+  await fs.chmod(filePath, 0o600)
+  return filePath
+}
+
 function parseEnvValue(rawValue) {
   const value = rawValue.trim()
   if (!value) {
@@ -110,4 +162,17 @@ function unescapeDoubleQuotedValue(value) {
     if (char === "t") return "\t"
     return char
   })
+}
+
+function serializeEnvValue(value) {
+  return `"${String(value ?? "")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t")
+    .replaceAll('"', '\\"')}"`
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }

@@ -1,9 +1,13 @@
 #!/usr/bin/env node
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { createHttpApi } from "./http-api.mjs"
+import { ensureRuntimeLayout, resolveRuntimePaths } from "./app-paths.mjs"
 import { applyRuntimeConfigOverrides, loadConfig, validateConfig } from "./config.mjs"
 import { loadLocalEnv } from "./env.mjs"
 import { createRunStore } from "./run-store.mjs"
 import { createScheduler } from "./scheduler.mjs"
+import { createSetupManager } from "./setup.mjs"
 import {
   applyHostOverride,
   isWildcardHostAllowed,
@@ -13,22 +17,35 @@ import {
 } from "./host.mjs"
 import { createLinearStatusHealthChecker } from "./status-health.mjs"
 
-const ROOT_DIR = process.cwd()
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const APP_ROOT_DIR = path.resolve(__dirname, "../..")
 const args = parseArgs(process.argv.slice(2))
 const command = args._[0] || "serve"
-const configPath = args.config || "config.local.json"
-await loadLocalEnv(ROOT_DIR)
+const runtimePaths = resolveRuntimePaths({
+  appRootDir: APP_ROOT_DIR,
+  launchCwd: process.cwd(),
+  runtimeRoot: args.runtimeRoot,
+  configPath: args.config,
+})
+await ensureRuntimeLayout(runtimePaths)
+await loadLocalEnv(runtimePaths.runtimeRootDir)
 const hostOverride = resolveHostOverride(args)
 
-const store = createRunStore(ROOT_DIR)
+const store = createRunStore(runtimePaths.runtimeRootDir)
 const configProvider = async () =>
   applyHostOverride(
-    applyRuntimeConfigOverrides(await loadConfig(configPath, ROOT_DIR)),
+    applyRuntimeConfigOverrides(
+      await loadConfig(runtimePaths.configPath, runtimePaths.runtimeRootDir),
+    ),
     hostOverride,
   )
 const linearStatusHealthChecker = createLinearStatusHealthChecker()
+const setupManager = createSetupManager({
+  configPath: runtimePaths.configPath,
+  rootDir: runtimePaths.runtimeRootDir,
+})
 const scheduler = createScheduler({
-  rootDir: ROOT_DIR,
+  rootDir: runtimePaths.runtimeRootDir,
   configProvider,
   store,
   linearStatusHealthChecker,
@@ -36,7 +53,7 @@ const scheduler = createScheduler({
 
 if (command === "validate-config") {
   const config = await configProvider()
-  const result = await validateConfig(config, ROOT_DIR)
+  const result = await validateConfig(config, runtimePaths.runtimeRootDir)
   console.log(JSON.stringify(result, null, 2))
   process.exit(result.ok ? 0 : 1)
 }
@@ -60,19 +77,26 @@ if (hostError) {
 }
 
 const server = createHttpApi({
-  configPath,
+  configPath: runtimePaths.configPath,
+  rootDir: runtimePaths.runtimeRootDir,
+  staticRootDir: runtimePaths.appRootDir,
   scheduler,
   store,
+  setupManager,
   linearStatusHealthChecker,
   dev: Boolean(args.dev),
 })
 
 server.listen(config.port, config.host, () => {
   console.log(`Linear 自动执行服务已监听 http://${config.host}:${config.port}`)
+  console.log(`用户数据目录: ${runtimePaths.runtimeRootDir}`)
 })
 
-if (!args.dev) {
+const setupStatus = await setupManager.status()
+if (!args.dev && setupStatus.ready) {
   scheduler.start()
+} else if (!setupStatus.ready) {
+  console.log("首次配置尚未完成，后台扫描暂不启动。")
 }
 
 process.on("SIGINT", shutdown)
