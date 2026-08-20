@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   Bell,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
   CheckCircle2,
   CircleDot,
   FileJson,
@@ -37,6 +39,8 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -50,13 +54,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
 import {
   Table,
@@ -2398,6 +2395,21 @@ function ProjectEditor({
   const [linearProjectOptions, setLinearProjectOptions] = useState<LinearProjectOption[]>([])
   const [linearProjectLoading, setLinearProjectLoading] = useState(false)
   const [linearProjectError, setLinearProjectError] = useState<string | null>(null)
+  const [advancedOpen, setAdvancedOpen] = useState(editing)
+  const [repoNameManual, setRepoNameManual] = useState(editing)
+
+  const loadLinearProjects = useCallback(async () => {
+    setLinearProjectLoading(true)
+    setLinearProjectError(null)
+    try {
+      const response = await api.listLinearProjects()
+      setLinearProjectOptions(response.projects)
+    } catch (error) {
+      setLinearProjectError(errorMessage(error))
+    } finally {
+      setLinearProjectLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) {
@@ -2407,7 +2419,10 @@ function ProjectEditor({
       setLinearProjectLoading(false)
       return
     }
-  }, [open])
+    setAdvancedOpen(editing)
+    setRepoNameManual(editing)
+    void loadLinearProjects()
+  }, [open, editing, loadLinearProjects])
 
   const filteredLinearProjects = useMemo(() => {
     const query = linearProjectFilter.trim().toLowerCase()
@@ -2420,17 +2435,15 @@ function ProjectEditor({
     )
   }, [linearProjectFilter, linearProjectOptions])
 
-  async function openLinearProjectPicker() {
+  const selectedLinearProject = useMemo(
+    () => linearProjectOptions.find((item) => item.id === project.linearProjectId) || null,
+    [linearProjectOptions, project.linearProjectId],
+  )
+
+  function openLinearProjectPicker() {
     setLinearProjectPickerOpen(true)
-    setLinearProjectLoading(true)
-    setLinearProjectError(null)
-    try {
-      const response = await api.listLinearProjects()
-      setLinearProjectOptions(response.projects)
-    } catch (error) {
-      setLinearProjectError(errorMessage(error))
-    } finally {
-      setLinearProjectLoading(false)
+    if (linearProjectOptions.length === 0 && !linearProjectLoading) {
+      void loadLinearProjects()
     }
   }
 
@@ -2439,99 +2452,215 @@ function ProjectEditor({
     setLinearProjectPickerOpen(false)
   }
 
+  function handlePathChange(nextPath: string) {
+    const shouldSyncCodexCwd = !project.codexCwd || project.codexCwd === project.path
+    const derivedName = deriveRepoName(nextPath)
+    onUpdate({
+      path: nextPath,
+      ...(shouldSyncCodexCwd ? { codexCwd: nextPath } : {}),
+      ...(!repoNameManual && derivedName ? { repoName: derivedName } : {}),
+    })
+  }
+
+  function handleRepoNameChange(nextName: string) {
+    if (!nextName.trim()) {
+      setRepoNameManual(false)
+      onUpdate({ repoName: deriveRepoName(project.path) })
+      return
+    }
+    setRepoNameManual(true)
+    onUpdate({ repoName: nextName })
+  }
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[720px] overflow-y-auto sm:max-w-[720px]">
-        <SheetHeader>
-          <SheetTitle>{editing ? "修改项目" : "新建项目"}</SheetTitle>
-        </SheetHeader>
-        <div className="grid grid-cols-2 gap-3 px-4">
-          <Field label="仓库名称" description={projectFieldDescriptions.repoName}>
-            <Input value={project.repoName} onChange={(event) => onUpdate({ repoName: event.target.value })} />
-          </Field>
-          <Field label="Linear 项目 ID" description={projectFieldDescriptions.linearProjectId}>
-            <div className="flex gap-2">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex max-h-[85svh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[600px]"
+        onEscapeKeyDown={(event) => {
+          if (linearProjectPickerOpen) {
+            event.preventDefault()
+            setLinearProjectPickerOpen(false)
+          }
+        }}
+      >
+        {linearProjectPickerOpen ? (
+          <LinearProjectPickerPanel
+            filter={linearProjectFilter}
+            onFilterChange={setLinearProjectFilter}
+            options={filteredLinearProjects}
+            totalCount={linearProjectOptions.length}
+            loading={linearProjectLoading}
+            error={linearProjectError}
+            currentId={project.linearProjectId}
+            onRefresh={() => void loadLinearProjects()}
+            onSelect={selectLinearProject}
+            onBack={() => setLinearProjectPickerOpen(false)}
+          />
+        ) : (
+          <>
+        <DialogHeader className="gap-1 border-b px-5 pt-5 pb-4">
+          <DialogTitle>{editing ? "修改项目" : "新建项目"}</DialogTitle>
+          <DialogDescription>
+            {editing
+              ? "调整项目配置，保存后立即生效。"
+              : "关联 Linear 项目和本地仓库即可开始，其余配置保持默认。"}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="space-y-4">
+            {editing && (
+              <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+                <Label>启用</Label>
+                <Switch checked={project.enabled} onCheckedChange={(checked) => onUpdate({ enabled: checked })} />
+              </div>
+            )}
+            <Field label="Linear 项目" description={projectFieldDescriptions.linearProjectId}>
+              <button
+                type="button"
+                onClick={openLinearProjectPicker}
+                disabled={busy}
+                className="flex min-h-[56px] w-full items-center justify-between gap-3 rounded-lg border border-input bg-transparent px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+              >
+                {selectedLinearProject ? (
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium">{selectedLinearProject.displayName}</span>
+                    <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">
+                      {selectedLinearProject.id}
+                    </span>
+                  </span>
+                ) : project.linearProjectId ? (
+                  <span className="min-w-0 truncate font-mono text-xs">{project.linearProjectId}</span>
+                ) : (
+                  <span className="text-sm text-muted-foreground">选择 Linear 项目...</span>
+                )}
+                {linearProjectLoading ? (
+                  <RefreshCcw className="size-4 shrink-0 animate-spin text-muted-foreground" />
+                ) : (
+                  <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+            </Field>
+            <Field label="仓库路径" description={projectFieldDescriptions.path}>
               <Input
                 className="font-mono"
-                value={project.linearProjectId}
-                onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
+                placeholder="/Users/you/Projects/my-repo"
+                value={project.path}
+                onChange={(event) => handlePathChange(event.target.value)}
               />
-              <Button type="button" variant="outline" onClick={() => void openLinearProjectPicker()} disabled={busy || linearProjectLoading}>
-                <RefreshCcw className={cn("size-4", linearProjectLoading && "animate-spin")} />
-                选择
-              </Button>
-            </div>
-          </Field>
-          <Field label="分支 / 提交范围前缀" description={projectFieldDescriptions.branchOrScopePrefix}>
-            <Input
-              value={project.branchOrScopePrefix}
-              onChange={(event) => onUpdate({ branchOrScopePrefix: event.target.value })}
-            />
-          </Field>
-          <Field label="仓库路径" description={projectFieldDescriptions.path}>
-            <Input
-              value={project.path}
-              onChange={(event) => {
-                const nextPath = event.target.value
-                const shouldSyncCodexCwd = !project.codexCwd || project.codexCwd === project.path
-                onUpdate({
-                  path: nextPath,
-                  ...(shouldSyncCodexCwd ? { codexCwd: nextPath } : {}),
-                })
-              }}
-            />
-          </Field>
-          <Field label="Codex 执行路径" description={projectFieldDescriptions.codexCwd}>
-            <Input value={project.codexCwd} onChange={(event) => onUpdate({ codexCwd: event.target.value })} />
-          </Field>
-          <Field label="阶段二并发上限" description={projectFieldDescriptions.maxActivePart2}>
-            <Input
-              type="number"
-              value={project.maxActivePart2}
-              onChange={(event) => onUpdate({ maxActivePart2: Number(event.target.value) })}
-            />
-          </Field>
-          <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-            <Label>启用</Label>
-            <Switch checked={project.enabled} onCheckedChange={(checked) => onUpdate({ enabled: checked })} />
+            </Field>
+            <Field
+              label="仓库名称"
+              description={repoNameManual ? projectFieldDescriptions.repoName : "已根据仓库路径自动填充，可手动修改。"}
+            >
+              <Input
+                placeholder="my-repo"
+                value={project.repoName}
+                onChange={(event) => handleRepoNameChange(event.target.value)}
+              />
+            </Field>
           </div>
-          <Field label="阶段一提示词模式">
-            <ModeSelect value={project.part1PromptMode} onValueChange={(value) => onUpdate({ part1PromptMode: value })} />
-          </Field>
-          <Field label="拆分阶段提示词模式">
-            <ModeSelect value={project.splitPromptMode} onValueChange={(value) => onUpdate({ splitPromptMode: value })} />
-          </Field>
-          <Field label="阶段二提示词模式">
-            <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
-          </Field>
-          <Field label="阶段三提示词模式">
-            <ModeSelect value={project.part3PromptMode} onValueChange={(value) => onUpdate({ part3PromptMode: value })} />
-          </Field>
-          <Field label="默认测试命令" description={projectFieldDescriptions.defaultTests} className="col-span-2">
-            <Textarea
-              className="min-h-24 font-mono text-xs"
-              value={project.defaultTests.join("\n")}
-              onChange={(event) =>
-                onUpdate({
-                  defaultTests: event.target.value
-                    .split("\n")
-                    .map((line) => line.trim())
-                    .filter(Boolean),
-                })
-              }
+
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((current) => !current)}
+            className="mt-6 flex w-full items-center gap-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ChevronDown
+              className={cn("size-3.5 transition-transform duration-200", !advancedOpen && "-rotate-90")}
             />
-          </Field>
-          <Field label="项目规则" description={projectFieldDescriptions.extraRules} className="col-span-2">
-            <Textarea
-              className="min-h-24"
-              value={project.extraRules}
-              onChange={(event) => onUpdate({ extraRules: event.target.value })}
-            />
-          </Field>
+            高级设置
+            <span className="font-normal text-muted-foreground/70">提示词模式、并发上限、测试命令等</span>
+            <span aria-hidden className="h-px flex-1 bg-border" />
+          </button>
+
+          <div
+            className={cn(
+              "grid transition-[grid-template-rows] duration-200 ease-out",
+              advancedOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+            )}
+          >
+            <div className="min-h-0 overflow-hidden">
+              <div className="grid grid-cols-1 gap-4 pt-4 pb-1 sm:grid-cols-2">
+                <Field
+                  label="Linear 项目 ID"
+                  description={projectFieldDescriptions.linearProjectId}
+                  className="sm:col-span-2"
+                >
+                  <Input
+                    className="font-mono"
+                    value={project.linearProjectId}
+                    onChange={(event) => onUpdate({ linearProjectId: event.target.value })}
+                  />
+                </Field>
+                <Field
+                  label="Codex 执行路径"
+                  description={projectFieldDescriptions.codexCwd}
+                  className="sm:col-span-2"
+                >
+                  <Input
+                    className="font-mono"
+                    value={project.codexCwd}
+                    onChange={(event) => onUpdate({ codexCwd: event.target.value })}
+                  />
+                </Field>
+                <Field label="分支 / 提交范围前缀" description={projectFieldDescriptions.branchOrScopePrefix}>
+                  <Input
+                    value={project.branchOrScopePrefix}
+                    onChange={(event) => onUpdate({ branchOrScopePrefix: event.target.value })}
+                  />
+                </Field>
+                <Field label="阶段二并发上限" description={projectFieldDescriptions.maxActivePart2}>
+                  <Input
+                    type="number"
+                    value={project.maxActivePart2}
+                    onChange={(event) => onUpdate({ maxActivePart2: Number(event.target.value) })}
+                  />
+                </Field>
+                <div className="pt-1 text-xs font-medium text-muted-foreground sm:col-span-2">
+                  提示词模式（默认使用全局提示词）
+                </div>
+                <Field label="阶段一">
+                  <ModeSelect value={project.part1PromptMode} onValueChange={(value) => onUpdate({ part1PromptMode: value })} />
+                </Field>
+                <Field label="拆分阶段">
+                  <ModeSelect value={project.splitPromptMode} onValueChange={(value) => onUpdate({ splitPromptMode: value })} />
+                </Field>
+                <Field label="阶段二">
+                  <ModeSelect value={project.part2PromptMode} onValueChange={(value) => onUpdate({ part2PromptMode: value })} />
+                </Field>
+                <Field label="阶段三">
+                  <ModeSelect value={project.part3PromptMode} onValueChange={(value) => onUpdate({ part3PromptMode: value })} />
+                </Field>
+                <Field label="默认测试命令" description={projectFieldDescriptions.defaultTests} className="sm:col-span-2">
+                  <Textarea
+                    className="min-h-24 font-mono text-xs"
+                    value={project.defaultTests.join("\n")}
+                    onChange={(event) =>
+                      onUpdate({
+                        defaultTests: event.target.value
+                          .split("\n")
+                          .map((line) => line.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="项目规则" description={projectFieldDescriptions.extraRules} className="sm:col-span-2">
+                  <Textarea
+                    className="min-h-24"
+                    value={project.extraRules}
+                    onChange={(event) => onUpdate({ extraRules: event.target.value })}
+                  />
+                </Field>
+              </div>
+            </div>
+          </div>
         </div>
-        <SheetFooter>
+
+        <DialogFooter className="mx-0 mb-0 px-5 py-4">
           {validationMessage && (
-            <p className="mr-auto max-w-[420px] text-sm text-destructive">{validationMessage}</p>
+            <p className="mr-auto max-w-[360px] text-sm text-destructive">{validationMessage}</p>
           )}
           {onRemove && (
             <Button variant="destructive" onClick={onRemove} disabled={busy}>
@@ -2543,90 +2672,121 @@ function ProjectEditor({
             <Save className="size-4" />
             保存
           </Button>
-        </SheetFooter>
-      </SheetContent>
+        </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
 
-      <Dialog open={linearProjectPickerOpen} onOpenChange={setLinearProjectPickerOpen}>
-        <DialogContent className="max-h-[min(82svh,720px)] max-w-[min(900px,calc(100vw-2rem))] grid-rows-[auto_1fr] overflow-hidden p-0">
-          <div className="flex flex-col gap-4 p-4 pb-0">
-            <div className="space-y-1">
-              <DialogTitle>选择 Linear 项目</DialogTitle>
-              <DialogDescription>
-                点击按钮会实时拉取当前 Linear workspace 的项目列表，选择后自动回填项目 UUID。
-              </DialogDescription>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                placeholder="按 display name、team 或 UUID 过滤"
-                value={linearProjectFilter}
-                onChange={(event) => setLinearProjectFilter(event.target.value)}
-              />
-              <Button type="button" variant="outline" onClick={() => void openLinearProjectPicker()} disabled={linearProjectLoading}>
-                <RefreshCcw className={cn("size-4", linearProjectLoading && "animate-spin")} />
-                刷新
-              </Button>
-            </div>
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>共 {linearProjectOptions.length} 个项目</span>
-              <span>当前值: {project.linearProjectId || "未填写"}</span>
-            </div>
+function LinearProjectPickerPanel({
+  filter,
+  onFilterChange,
+  options,
+  totalCount,
+  loading,
+  error,
+  currentId,
+  onRefresh,
+  onSelect,
+  onBack,
+}: {
+  filter: string
+  onFilterChange: (value: string) => void
+  options: LinearProjectOption[]
+  totalCount: number
+  loading: boolean
+  error: string | null
+  currentId: string
+  onRefresh: () => void
+  onSelect: (item: LinearProjectOption) => void
+  onBack: () => void
+}) {
+  return (
+    <div className="flex min-h-[min(70svh,480px)] flex-1 animate-in flex-col fade-in-0 slide-in-from-right-2 duration-150">
+      <DialogHeader className="gap-1 border-b px-5 pt-5 pb-4">
+        <div className="flex items-center gap-3">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onBack} aria-label="返回">
+            <ChevronLeft />
+          </Button>
+          <div className="space-y-1">
+            <DialogTitle>选择 Linear 项目</DialogTitle>
+            <DialogDescription>
+              实时拉取当前 Linear workspace 的项目列表，选择后自动回填项目 UUID。
+            </DialogDescription>
           </div>
-          <ScrollArea className="min-h-0 px-4 pb-4">
-            <div className="space-y-2">
-              {linearProjectError && (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-                  {linearProjectError}
-                </div>
-              )}
-              {!linearProjectError && linearProjectLoading && linearProjectOptions.length === 0 && (
-                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
-                  正在从 Linear 拉取项目列表...
-                </div>
-              )}
-              {!linearProjectError && !linearProjectLoading && linearProjectOptions.length === 0 && (
-                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
-                  未拉取到任何 Linear 项目。
-                </div>
-              )}
-              {!linearProjectError && !linearProjectLoading && linearProjectOptions.length > 0 && filteredLinearProjects.length === 0 && (
-                <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
-                  没有匹配当前过滤条件的项目。
-                </div>
-              )}
-              {filteredLinearProjects.map((item) => {
-                const selected = item.id === project.linearProjectId
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={cn(
-                      "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
-                      selected && "border-primary bg-primary/5",
-                    )}
-                    onClick={() => selectLinearProject(item)}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{item.displayName}</div>
-                        <div className="mt-1 font-mono text-xs text-muted-foreground">{item.id}</div>
-                        {item.teamNames.length > 0 && (
-                          <div className="mt-2 text-xs text-muted-foreground">
-                            Teams: {item.teamNames.join(", ")}
-                          </div>
-                        )}
-                      </div>
-                      <Badge variant={selected ? "default" : "outline"}>
-                        {selected ? "当前已选" : "选择"}
-                      </Badge>
-                    </div>
-                  </button>
-                )
-              })}
+        </div>
+      </DialogHeader>
+      <div className="flex items-center gap-2 border-b px-5 py-3">
+        <Input
+          placeholder="按 display name、team 或 UUID 过滤"
+          value={filter}
+          onChange={(event) => onFilterChange(event.target.value)}
+        />
+        <Button type="button" variant="outline" onClick={onRefresh} disabled={loading}>
+          <RefreshCcw className={cn("size-4", loading && "animate-spin")} />
+          刷新
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+        <div className="space-y-2">
+          {error && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              {error}
             </div>
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
-    </Sheet>
+          )}
+          {!error && loading && options.length === 0 && (
+            <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+              正在从 Linear 拉取项目列表...
+            </div>
+          )}
+          {!error && !loading && totalCount === 0 && (
+            <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+              未拉取到任何 Linear 项目。
+            </div>
+          )}
+          {!error && !loading && totalCount > 0 && options.length === 0 && (
+            <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+              没有匹配当前过滤条件的项目。
+            </div>
+          )}
+          {options.map((item) => {
+            const selected = item.id === currentId
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
+                  selected && "border-primary bg-primary/5",
+                )}
+                onClick={() => onSelect(item)}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">{item.displayName}</div>
+                    <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{item.id}</div>
+                    {item.teamNames.length > 0 && (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        Teams: {item.teamNames.join(", ")}
+                      </div>
+                    )}
+                  </div>
+                  <Badge variant={selected ? "default" : "outline"}>
+                    {selected ? "当前已选" : "选择"}
+                  </Badge>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className="flex items-center justify-between border-t px-5 py-2.5 text-xs text-muted-foreground">
+        <span>共 {totalCount} 个项目</span>
+        <span className="max-w-[280px] truncate font-mono">当前值: {currentId || "未填写"}</span>
+      </div>
+    </div>
   )
 }
 
@@ -3175,6 +3335,12 @@ function formatDate(value: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function deriveRepoName(path: string) {
+  const normalized = path.trim().replace(/[/\\]+$/, "")
+  if (!normalized) return ""
+  return normalized.split(/[/\\]/).pop() || ""
 }
 
 export default App
