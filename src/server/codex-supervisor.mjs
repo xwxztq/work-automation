@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises"
 import { spawn } from "node:child_process"
+import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
 
@@ -148,6 +149,26 @@ async function main() {
     }
     await stdoutHandle?.close().catch(() => {})
     await stderrHandle?.close().catch(() => {})
+    await cleanupCompletedReview().catch(async (error) => {
+      await appendStderr(`Review 临时文件清理失败: ${error instanceof Error ? error.message : String(error)}\n`).catch(() => {})
+    })
+  }
+
+  async function cleanupCompletedReview() {
+    const run = await readJsonFile(input.metadataPath, null)
+    if (
+      !run?.cleanupReviewTempOnCompletion ||
+      !["succeeded", "failed", "canceled"].includes(run.status)
+    ) {
+      return
+    }
+    const cleanup = await cleanupReviewTempArtifacts(dirname(input.metadataPath))
+    await updateRun({
+      reviewCleanup: {
+        completedAt: new Date().toISOString(),
+        removedEntries: cleanup.removedEntries,
+      },
+    })
   }
 }
 

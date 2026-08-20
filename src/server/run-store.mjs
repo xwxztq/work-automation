@@ -4,11 +4,17 @@ import { randomUUID } from "node:crypto"
 import { ensureDir, fileExists, readJsonFile, writeJsonFile } from "./config.mjs"
 import { EVENTS_FILE, PROCESSED_FILE, RUNS_DIR, STATE_DIR } from "./defaults.mjs"
 
+const EVENT_READ_CHUNK_BYTES = 64 * 1024
+const RUNS_CACHE_TTL_MS = 250
+
 export function createRunStore(rootDir) {
   const baseDir = path.join(rootDir, STATE_DIR)
   const runsDir = path.join(baseDir, RUNS_DIR)
   const eventsPath = path.join(baseDir, EVENTS_FILE)
   const processedPath = path.join(baseDir, PROCESSED_FILE)
+  let runsVersion = 0
+  let runsCache = null
+  let runsRead = null
 
   async function createRun({ projectKey, stage, issue }) {
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${projectKey}-${stage}-${issue.identifier || issue.id}-${randomUUID().slice(0, 8)}`
@@ -21,6 +27,7 @@ export function createRunStore(rootDir) {
       issueIdentifier: issue.identifier,
       issueTitle: issue.title,
       status: "running",
+      cleanupReviewTempOnCompletion: stage === "part3",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       dir,
@@ -32,16 +39,20 @@ export function createRunStore(rootDir) {
     }
     await ensureDir(dir)
     await writeJsonFile(run.metadataPath, run)
+    invalidateRunsCache()
     return run
   }
 
   async function updateRun(run, patch) {
+    const persisted = await readJsonFile(run.metadataPath, run)
     const next = {
       ...run,
+      ...persisted,
       ...patch,
       updatedAt: new Date().toISOString(),
     }
     await writeJsonFile(next.metadataPath, next)
+    invalidateRunsCache()
     return next
   }
 
@@ -64,32 +75,10 @@ export function createRunStore(rootDir) {
     if (!(await fileExists(eventsPath))) {
       return []
     }
-    const text = await fs.readFile(eventsPath, "utf8")
-    const max = Math.max(1, Math.min(Number(limit || 200), 1000))
-    const events = []
-    for (const line of text.trim().split("\n").reverse()) {
-      if (!line) {
-        continue
-      }
-      try {
-        const event = JSON.parse(line)
-        if (projectKey && event.projectKey !== projectKey) {
-          continue
-        }
-        events.push(event)
-      } catch {
-        events.push({
-          timestamp: new Date(0).toISOString(),
-          level: "error",
-          type: "log-parse-error",
-          message: line,
-        })
-      }
-      if (events.length >= max) {
-        break
-      }
-    }
-    return events
+    return readRecentEvents(eventsPath, {
+      limit: normalizeEventLimit(limit),
+      projectKey,
+    })
   }
 
   async function getProcessedIssue(projectKey, stage, issueId) {
@@ -130,6 +119,36 @@ export function createRunStore(rootDir) {
   }
 
   async function readRuns() {
+    const now = Date.now()
+    if (runsCache && runsCache.version === runsVersion && runsCache.expiresAt > now) {
+      return [...runsCache.runs]
+    }
+    if (runsRead?.version === runsVersion) {
+      return [...await runsRead.promise]
+    }
+
+    const version = runsVersion
+    const promise = readRunsFromDisk().then((runs) => {
+      if (runsVersion === version) {
+        runsCache = {
+          version,
+          expiresAt: Date.now() + RUNS_CACHE_TTL_MS,
+          runs,
+        }
+      }
+      return runs
+    })
+    runsRead = { version, promise }
+    try {
+      return [...await promise]
+    } finally {
+      if (runsRead?.promise === promise) {
+        runsRead = null
+      }
+    }
+  }
+
+  async function readRunsFromDisk() {
     if (!(await fileExists(runsDir))) {
       return []
     }
@@ -146,6 +165,11 @@ export function createRunStore(rootDir) {
       }
     }
     return runs
+  }
+
+  function invalidateRunsCache() {
+    runsVersion += 1
+    runsCache = null
   }
 
   async function getRun(id) {
@@ -202,4 +226,67 @@ async function readOptional(filePath) {
     }
     throw error
   }
+}
+
+async function readRecentEvents(filePath, { limit, projectKey }) {
+  const handle = await fs.open(filePath, "r")
+  try {
+    const { size } = await handle.stat()
+    const events = []
+    let position = size
+    let carry = Buffer.alloc(0)
+
+    while (position > 0 && events.length < limit) {
+      const bytesToRead = Math.min(EVENT_READ_CHUNK_BYTES, position)
+      position -= bytesToRead
+      const chunk = Buffer.allocUnsafe(bytesToRead)
+      const { bytesRead } = await handle.read(chunk, 0, bytesToRead, position)
+      const combined = Buffer.concat([chunk.subarray(0, bytesRead), carry])
+      let lineEnd = combined.length
+
+      for (let index = combined.length - 1; index >= 0 && events.length < limit; index -= 1) {
+        if (combined[index] !== 0x0a) {
+          continue
+        }
+        addEventLine(events, combined.subarray(index + 1, lineEnd), projectKey)
+        lineEnd = index
+      }
+      carry = combined.subarray(0, lineEnd)
+    }
+
+    if (position === 0 && events.length < limit) {
+      addEventLine(events, carry, projectKey)
+    }
+    return events
+  } finally {
+    await handle.close()
+  }
+}
+
+function addEventLine(events, lineBuffer, projectKey) {
+  if (lineBuffer.length === 0) {
+    return
+  }
+  const line = lineBuffer.toString("utf8")
+  try {
+    const event = JSON.parse(line)
+    if (!projectKey || event.projectKey === projectKey) {
+      events.push(event)
+    }
+  } catch {
+    events.push({
+      timestamp: new Date(0).toISOString(),
+      level: "error",
+      type: "log-parse-error",
+      message: line,
+    })
+  }
+}
+
+function normalizeEventLimit(limit) {
+  const value = Number(limit)
+  if (!Number.isFinite(value)) {
+    return 200
+  }
+  return Math.max(1, Math.min(Math.trunc(value), 1000))
 }

@@ -148,6 +148,8 @@
 - 非 JSON 输出按实际格式改用 `.txt`、`.html` 或其他可读扩展名；不要为了统一命名强行改内容格式。
 - 如果场景没有 `before`，不要创建空文件，用 `manifest.json` 标记 `baselineType: "spec-only"`。
 
+阶段三运行进入成功、失败或已中止状态后，服务会自动删除以下临时项：`_work`、`_commit-snapshot`、`_commit-snapshot.tar`、`_implementation`、`_baseline`、`snapshots`、`.tmp-worktree`、`.tooling`、`.runtime-parent`、`.runtime-after`、`.compiled-parent`、`.compiled-after`、`tmp` 和 `node_modules`。这些名称只用于临时检出、编译和依赖，不能存放最终审阅证据。`manifest.json`、`summary.md`、`gui/`、`api/`、`logs/` 及 review 根目录下的其他证据会保留。
+
 `manifest.json` 至少包含这些字段:
 
 ```json

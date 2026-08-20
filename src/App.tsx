@@ -276,6 +276,7 @@ function App() {
   const [linearStatusChecking, setLinearStatusChecking] = useState(false)
   const [linearStatusDialogDismissedAt, setLinearStatusDialogDismissedAt] = useState<string | null>(null)
   const autoStartTried = useRef(false)
+  const bootstrapInFlight = useRef<Promise<void> | null>(null)
   const browserNotificationTracker = useRef<BrowserNotificationTracker | null>(null)
   const browserNotificationDiagnostics = useRef(new Set<string>())
   const notificationConfig = useRef<AppConfig | null>(null)
@@ -294,21 +295,37 @@ function App() {
   }, [config])
 
   useEffect(() => {
-    if (!setupStatus?.ready) return
-    const timer = setInterval(() => {
+    if (!setupStatus?.ready || !config || !prompts || view === "settings") return
+    let stopped = false
+    let timer: number | undefined
+
+    const poll = async () => {
+      if (stopped) return
       if (view === "activity") {
-        void refreshGlobalActivity(true)
-        return
+        await refreshGlobalActivity(true)
+      } else if (view === "logs") {
+        await refreshEvents(true)
+      } else {
+        await refreshRuns(true)
       }
-      void refreshRuns(true)
-    }, 3000)
-    return () => clearInterval(timer)
+      if (!stopped) {
+        timer = window.setTimeout(() => void poll(), 3000)
+      }
+    }
+
+    timer = window.setTimeout(() => void poll(), 3000)
+    return () => {
+      stopped = true
+      if (timer !== undefined) {
+        window.clearTimeout(timer)
+      }
+    }
     // Rebind polling when the active view or selected project changes so activity uses the right filter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProjectKey, setupStatus?.ready, view])
+  }, [config, prompts, selectedProjectKey, setupStatus?.ready, view])
 
   useEffect(() => {
-    if (view !== "project") {
+    if (!setupStatus?.ready || !config || view !== "project") {
       return
     }
     if (!selectedProjectKey) {
@@ -316,12 +333,14 @@ function App() {
       return
     }
     void loadCodexActivity(selectedProjectKey).then(setCodexActivity)
-  }, [selectedProjectKey, view])
+  }, [config, selectedProjectKey, setupStatus?.ready, view])
 
   useEffect(() => {
-    if (view !== "activity") return
+    if (!setupStatus?.ready || !config || view !== "activity") return
     void refreshGlobalActivity(true)
-  }, [view])
+    // The view/config transition is the trigger; polling handles later refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, setupStatus?.ready, view])
 
   useEffect(() => {
     if (!prompts) return
@@ -411,17 +430,41 @@ function App() {
     setView("activity")
     persistView("activity")
     setSelectedRun(null)
-    void refreshGlobalActivity(true)
+  }
+
+  function openLogs() {
+    setView("logs")
+    setSelectedRun(null)
+    void refreshEvents(true)
   }
 
   async function bootstrap() {
+    if (bootstrapInFlight.current) {
+      await bootstrapInFlight.current
+      return
+    }
+    const request = bootstrapOnce()
+    bootstrapInFlight.current = request
+    try {
+      await request
+    } finally {
+      if (bootstrapInFlight.current === request) {
+        bootstrapInFlight.current = null
+      }
+    }
+  }
+
+  async function bootstrapOnce() {
     setBusy(true)
     setSetupError("")
     try {
       const nextSetupStatus = await api.getSetupStatus()
       setSetupStatus(nextSetupStatus)
       if (nextSetupStatus.ready) {
-        await refreshAll()
+        const shell = await refreshShellState()
+        void refreshDashboardState(shell.nextConfig, shell.nextProjectKey).catch((error) => {
+          toast.error(errorMessage(error))
+        })
       }
     } catch (error) {
       const message = errorMessage(error)
@@ -457,45 +500,71 @@ function App() {
       await refreshGlobalActivity()
       return
     }
+    if (view === "logs") {
+      await refreshEvents()
+      return
+    }
+    if (view === "project") {
+      await refreshRuns()
+      return
+    }
     await refreshAll()
   }
 
   async function refreshAll() {
     setBusy(true)
     try {
-      const [nextConfig, nextPrompts, nextDaemon, nextEvents] = await Promise.all([
-        api.getConfig(),
-        api.getPrompts(),
-        api.getDaemonStatus(),
-        api.getEvents(),
-      ])
-      const nextProjectKey = resolveSelectedProjectKey(nextConfig.projects, [
-        selectedProjectKey,
-        readPersistedSelectedProjectKey(),
-      ])
-      const [nextRuns, nextGlobalRuns, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
-        api.getRuns(nextProjectKey || undefined),
-        api.getRuns(),
-        loadCodexActivity(nextProjectKey || undefined),
-        api.getLinearStatusHealth(),
-      ])
-      setConfig(nextConfig)
-      setPrompts(nextPrompts)
-      setRuns(nextRuns.runs)
-      setGlobalRuns(nextGlobalRuns.runs)
-      setGlobalRunTotalCount(nextGlobalRuns.totalCount)
-      processRunNotifications(nextGlobalRuns.runs, nextConfig)
-      setRunTotalCount(nextRuns.totalCount)
-      setDaemon(nextDaemon)
-      setEvents(nextEvents.events)
-      setCodexActivity(nextCodexActivity)
-      setLinearStatusHealth(nextLinearStatusHealth)
-      setSelectedProjectKey(nextProjectKey)
-      persistSelectedProjectKey(nextProjectKey)
+      const shell = await refreshShellState()
+      await refreshDashboardState(shell.nextConfig, shell.nextProjectKey, view === "logs")
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function refreshShellState() {
+    const [nextConfig, nextPrompts] = await Promise.all([
+      api.getConfig(),
+      api.getPrompts(),
+    ])
+    const nextProjectKey = resolveSelectedProjectKey(nextConfig.projects, [
+      selectedProjectKey,
+      readPersistedSelectedProjectKey(),
+    ])
+    setConfig(nextConfig)
+    setPrompts(nextPrompts)
+    setSelectedProjectKey(nextProjectKey)
+    persistSelectedProjectKey(nextProjectKey)
+    return { nextConfig, nextProjectKey }
+  }
+
+  async function refreshDashboardState(nextConfig: AppConfig, nextProjectKey: string, includeEvents = false) {
+    const [
+      nextRuns,
+      nextGlobalRuns,
+      nextDaemon,
+      nextCodexActivity,
+      nextLinearStatusHealth,
+      nextEvents,
+    ] = await Promise.all([
+      api.getRuns(nextProjectKey || undefined),
+      api.getRuns(),
+      api.getDaemonStatus(),
+      loadCodexActivity(nextProjectKey || undefined),
+      api.getLinearStatusHealth(),
+      includeEvents ? api.getEvents() : Promise.resolve(null),
+    ])
+    setRuns(nextRuns.runs)
+    setGlobalRuns(nextGlobalRuns.runs)
+    setGlobalRunTotalCount(nextGlobalRuns.totalCount)
+    processRunNotifications(nextGlobalRuns.runs, nextConfig)
+    setRunTotalCount(nextRuns.totalCount)
+    setDaemon(nextDaemon)
+    setCodexActivity(nextCodexActivity)
+    setLinearStatusHealth(nextLinearStatusHealth)
+    if (nextEvents) {
+      setEvents(nextEvents.events)
     }
   }
 
@@ -670,14 +739,12 @@ function App() {
         nextRuns,
         nextGlobalRuns,
         nextDaemon,
-        nextEvents,
         nextCodexActivity,
         nextLinearStatusHealth,
       ] = await Promise.all([
         api.getRuns(projectKey || undefined),
         api.getRuns(),
         api.getDaemonStatus(),
-        api.getEvents(),
         loadCodexActivity(projectKey || undefined),
         api.getLinearStatusHealth(),
       ])
@@ -689,7 +756,6 @@ function App() {
       }
       setRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
-      setEvents(nextEvents.events)
       setCodexActivity(nextCodexActivity)
       setLinearStatusHealth(nextLinearStatusHealth)
     } catch (error) {
@@ -701,22 +767,31 @@ function App() {
 
   async function refreshGlobalActivity(silent = false) {
     try {
-      const [nextRuns, nextDaemon, nextEvents, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
+      const [nextRuns, nextDaemon, nextCodexActivity, nextLinearStatusHealth] = await Promise.all([
         api.getRuns(),
         api.getDaemonStatus(),
-        api.getEvents(),
         loadCodexActivity(),
         api.getLinearStatusHealth(),
       ])
       setGlobalRuns(nextRuns.runs)
       setGlobalRunTotalCount(nextRuns.totalCount)
       setDaemon(nextDaemon)
-      setEvents(nextEvents.events)
       setGlobalCodexActivity(nextCodexActivity)
       setLinearStatusHealth(nextLinearStatusHealth)
       if (notificationConfig.current) {
         processRunNotifications(nextRuns.runs, notificationConfig.current)
       }
+    } catch (error) {
+      if (!silent) {
+        toast.error(errorMessage(error))
+      }
+    }
+  }
+
+  async function refreshEvents(silent = false) {
+    try {
+      const nextEvents = await api.getEvents()
+      setEvents(nextEvents.events)
     } catch (error) {
       if (!silent) {
         toast.error(errorMessage(error))
@@ -1003,7 +1078,7 @@ function App() {
           onToggleProject={(project, enabled) => void toggleProjectEnabled(project, enabled)}
           onToggleDaemon={(enabled) => void setDaemonEnabled(enabled)}
           onActivity={openGlobalActivity}
-          onLogs={() => setView("logs")}
+          onLogs={openLogs}
           onSettings={() => setView("settings")}
         />
 

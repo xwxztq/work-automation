@@ -20,6 +20,7 @@
 硬规则:
 - 按仓库内 `docs/auto-review-protocol.md` 执行阶段三，不要停留在骨架版 Auto Review。
 - 只在 `{{CURRENT_REVIEW_DIR}}` 下写 review 产物，不要把 review 文件写回业务仓库其他位置。
+- 任务结束后，服务会删除 review 下的临时检出、编译和依赖目录。需要保留的证据必须放进 `gui/`、`api/`、`logs/` 或 review 根目录，不能留在协议列出的临时目录中。
 - 默认只做检查、产物生成、评论和状态流转，不主动修改业务代码、不创建提交。
 - Linear 是 issue 状态、讨论和用户决策的唯一来源。
 - 如果当前 issue 已不在 `{{STATUS_TESTING}}`，不要重复评论，只在最终回复说明跳过。

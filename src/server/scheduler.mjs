@@ -6,6 +6,7 @@ import {
   isCodexLinearAuthFailureRun,
 } from "./linear-auth-diagnostics.mjs"
 import { diagnoseLinearWriteVerification } from "./linear-write-verification.mjs"
+import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 import { sendRunWebhook } from "./webhook-notifier.mjs"
 import {
   buildIssueReviewPromptContext,
@@ -75,6 +76,40 @@ export function createScheduler({
         message: `${run.issueIdentifier} ${stageLabel(run.stage)} Webhook 通知失败: ${error instanceof Error ? error.message : String(error)}`,
         data: { status: run.status },
       })
+    }
+  }
+
+  async function cleanupCompletedRunReview(run) {
+    if (
+      !run?.cleanupReviewTempOnCompletion ||
+      !["succeeded", "failed", "canceled"].includes(run.status)
+    ) {
+      return run
+    }
+
+    try {
+      const cleanup = await cleanupReviewTempArtifacts(run.dir)
+      const priorEntries = Array.isArray(run.reviewCleanup?.removedEntries)
+        ? run.reviewCleanup.removedEntries
+        : []
+      return await store.updateRun(run, {
+        reviewCleanup: {
+          completedAt: new Date().toISOString(),
+          removedEntries: [...new Set([...priorEntries, ...cleanup.removedEntries])],
+        },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await logEvent({
+        type: "review-cleanup-failed",
+        level: "warn",
+        stage: run.stage,
+        projectKey: run.projectKey,
+        issueIdentifier: run.issueIdentifier,
+        runId: run.id,
+        message,
+      })
+      return run
     }
   }
 
@@ -1217,7 +1252,9 @@ export function createScheduler({
         data: { runDir: run.dir },
       })
       if (runController.signal.aborted) {
-        return await markRunCanceled(run, runController.signal)
+        run = await markRunCanceled(run, runController.signal)
+        run = await cleanupCompletedRunReview(run)
+        return run
       }
 
       const prompt = await buildStagePrompt({ config, project, issue, stage, run })
@@ -1250,13 +1287,15 @@ export function createScheduler({
       })
 
       if (codexResult.canceled || runController.signal.aborted) {
-        return await markRunCanceled(run, runController.signal, {
+        run = await markRunCanceled(run, runController.signal, {
           exitCode: codexResult.exitCode,
           pid: active.pid,
           supervisorPid: codexResult.supervisorPid || active.supervisorPid,
           codexPid: codexResult.codexPid || active.codexPid,
           codexStarted: codexResult.started,
         })
+        run = await cleanupCompletedRunReview(run)
+        return run
       }
 
       const succeeded = codexResult.exitCode === 0
@@ -1310,17 +1349,20 @@ export function createScheduler({
         },
       })
       await notifyRunWebhook(config, run)
+      run = await cleanupCompletedRunReview(run)
       return run
     } catch (error) {
       if (!run) {
         throw error
       }
       if (runController.signal.aborted) {
-        return await markRunCanceled(run, runController.signal, {
+        run = await markRunCanceled(run, runController.signal, {
           pid: active.pid,
           supervisorPid: active.supervisorPid,
           codexPid: active.codexPid,
         })
+        run = await cleanupCompletedRunReview(run)
+        return run
       }
       const codexStarted = Boolean(active.codexPid)
       const errorMessage = error instanceof Error ? error.message : String(error)
@@ -1355,6 +1397,7 @@ export function createScheduler({
         },
       })
       await notifyRunWebhook(config, run)
+      run = await cleanupCompletedRunReview(run)
       throw error
     } finally {
       signal.removeEventListener("abort", abortFromProject)
@@ -1670,6 +1713,7 @@ ${formatPromptComments(issue.comments || [], 20)}
         codexPid: run.codexPid || null,
       },
     })
+    await cleanupCompletedRunReview(next)
   }
 
   async function getPersistedRun(runId) {
