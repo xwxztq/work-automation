@@ -26,6 +26,13 @@ import { toast } from "sonner"
 
 import { api } from "@/app/api"
 import {
+  getInitialProjectNameSource,
+  getLinearProjectSelectionUpdate,
+  getProjectNameInputUpdate,
+  getProjectNamePatchForPath,
+  type ProjectNameSource,
+} from "@/app/project-name"
+import {
   collectBrowserNotificationCandidates,
   createBrowserNotificationTracker,
   markBrowserNotificationDelivered,
@@ -2470,7 +2477,9 @@ function ProjectEditor({
   const [linearProjectLoading, setLinearProjectLoading] = useState(false)
   const [linearProjectError, setLinearProjectError] = useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(editing)
-  const [repoNameManual, setRepoNameManual] = useState(editing)
+  const [projectNameSource, setProjectNameSource] = useState<ProjectNameSource>(
+    getInitialProjectNameSource(editing),
+  )
 
   const loadLinearProjects = useCallback(async () => {
     setLinearProjectLoading(true)
@@ -2494,7 +2503,7 @@ function ProjectEditor({
       return
     }
     setAdvancedOpen(editing)
-    setRepoNameManual(editing)
+    setProjectNameSource(getInitialProjectNameSource(editing))
     void loadLinearProjects()
   }, [open, editing, loadLinearProjects])
 
@@ -2522,28 +2531,25 @@ function ProjectEditor({
   }
 
   function selectLinearProject(item: LinearProjectOption) {
-    onUpdate({ linearProjectId: item.id })
+    const update = getLinearProjectSelectionUpdate(project, item, projectNameSource)
+    onUpdate(update.patch)
+    setProjectNameSource(update.source)
     setLinearProjectPickerOpen(false)
   }
 
   function handlePathChange(nextPath: string) {
     const shouldSyncCodexCwd = !project.codexCwd || project.codexCwd === project.path
-    const derivedName = deriveRepoName(nextPath)
     onUpdate({
       path: nextPath,
       ...(shouldSyncCodexCwd ? { codexCwd: nextPath } : {}),
-      ...(!repoNameManual && derivedName ? { repoName: derivedName } : {}),
+      ...getProjectNamePatchForPath(nextPath, projectNameSource),
     })
   }
 
   function handleRepoNameChange(nextName: string) {
-    if (!nextName.trim()) {
-      setRepoNameManual(false)
-      onUpdate({ repoName: deriveRepoName(project.path) })
-      return
-    }
-    setRepoNameManual(true)
-    onUpdate({ repoName: nextName })
+    const update = getProjectNameInputUpdate(nextName, project.path)
+    setProjectNameSource(update.source)
+    onUpdate({ repoName: update.repoName })
   }
 
   return (
@@ -2625,7 +2631,13 @@ function ProjectEditor({
             </Field>
             <Field
               label="仓库名称"
-              description={repoNameManual ? projectFieldDescriptions.repoName : "已根据仓库路径自动填充，可手动修改。"}
+              description={
+                projectNameSource === "manual"
+                  ? projectFieldDescriptions.repoName
+                  : projectNameSource === "linear"
+                    ? "已根据 Linear 项目名称填充，可手动修改。"
+                    : "已根据仓库路径自动填充，可手动修改。"
+              }
             >
               <Input
                 placeholder="my-repo"
@@ -3409,12 +3421,6 @@ function formatDate(value: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
-}
-
-function deriveRepoName(path: string) {
-  const normalized = path.trim().replace(/[/\\]+$/, "")
-  if (!normalized) return ""
-  return normalized.split(/[/\\]/).pop() || ""
 }
 
 export default App
