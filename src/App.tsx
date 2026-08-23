@@ -1104,6 +1104,12 @@ function App() {
                 <CheckCircle2 className="size-4" />
                 校验
               </Button>
+              {view === "project" && selectedProject && (
+                <Button variant="outline" onClick={() => openEditProject(selectedProject)} disabled={busy}>
+                  <Settings className="size-4" />
+                  项目设置
+                </Button>
+              )}
             </div>
           </header>
 
@@ -1130,7 +1136,6 @@ function App() {
                 retryRun={retryRun}
                 cancelRun={(id) => void cancelRun(id)}
                 cancelProject={(key) => void cancelProject(key)}
-                editProject={(project) => openEditProject(project)}
                 addProject={openNewProject}
               />
             )}
@@ -1665,7 +1670,6 @@ function ProjectView({
   retryRun,
   cancelRun,
   cancelProject,
-  editProject,
   addProject,
 }: {
   project: ProjectConfig | null
@@ -1688,7 +1692,6 @@ function ProjectView({
   retryRun: (run: RunDetail | RunSummary) => void
   cancelRun: (id: string) => void
   cancelProject: (key: string) => void
-  editProject: (project: ProjectConfig) => void
   addProject: () => void
 }) {
   const shouldUseRunDialog = useMediaQuery("(max-width: 1535px)")
@@ -1745,10 +1748,6 @@ function ProjectView({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle>当前项目</CardTitle>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => editProject(project)} disabled={busy}>
-                    <Pencil className="size-4" />
-                    修改
-                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
