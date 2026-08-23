@@ -3,7 +3,12 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHttpApi } from "./http-api.mjs"
 import { ensureRuntimeLayout, resolveRuntimePaths } from "./app-paths.mjs"
-import { applyRuntimeConfigOverrides, loadConfig, validateConfig } from "./config.mjs"
+import {
+  applyPortOverride,
+  applyRuntimeConfigOverrides,
+  loadConfig,
+  validateConfig,
+} from "./config.mjs"
 import { loadLocalEnv } from "./env.mjs"
 import { createRunStore } from "./run-store.mjs"
 import { createScheduler } from "./scheduler.mjs"
@@ -34,8 +39,11 @@ const hostOverride = resolveHostOverride(args)
 const store = createRunStore(runtimePaths.runtimeRootDir)
 const configProvider = async () =>
   applyHostOverride(
-    applyRuntimeConfigOverrides(
-      await loadConfig(runtimePaths.configPath, runtimePaths.runtimeRootDir),
+    applyPortOverride(
+      applyRuntimeConfigOverrides(
+        await loadConfig(runtimePaths.configPath, runtimePaths.runtimeRootDir),
+      ),
+      args.port,
     ),
     hostOverride,
   )

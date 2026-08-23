@@ -149,6 +149,20 @@ export function applyRuntimeConfigOverrides(config, env = process.env) {
   return { ...config, codex }
 }
 
+export function applyPortOverride(config, portOverride) {
+  if (portOverride === undefined || portOverride === null || portOverride === "") {
+    return config
+  }
+  if (typeof portOverride === "boolean") {
+    throw new Error("--port 需要指定一个端口号。")
+  }
+  const port = Number(portOverride)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("--port 必须是 1 到 65535 之间的整数。")
+  }
+  return { ...config, port }
+}
+
 export function redactConfig(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   return {

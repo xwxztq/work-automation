@@ -28,7 +28,7 @@
   "scripts": {
     "dev": "vite --port 8888",
     "dev:lan": "node src/server/with-host.mjs dev:all",
-    "dev:server": "node --watch src/server/index.mjs --runtime-root . --config config.local.json --dev",
+    "dev:server": "node --watch src/server/index.mjs --runtime-root . --config config.local.json --dev --port 4379",
     "dev:all": "concurrently \"pnpm dev\" \"pnpm dev:server\"",
     "build": "tsc -b && vite build",
     "test": "node --test src/server/*.test.mjs src/app/*.test.mjs",

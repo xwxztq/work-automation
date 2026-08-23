@@ -4,7 +4,12 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { applyRuntimeConfigOverrides, normalizeConfig, saveConfig } from "./config.mjs"
+import {
+  applyPortOverride,
+  applyRuntimeConfigOverrides,
+  normalizeConfig,
+  saveConfig,
+} from "./config.mjs"
 
 test("notification defaults match the four-stage policy", () => {
   const config = normalizeConfig({})
@@ -63,4 +68,20 @@ test("runtime sandbox overrides reject unknown modes", () => {
       }),
     /LINEAR_AUTOMATION_PART1_SANDBOX/,
   )
+})
+
+test("command-line port override does not mutate the saved config", () => {
+  const config = normalizeConfig({ port: 4378 })
+  const overridden = applyPortOverride(config, "4379")
+
+  assert.equal(config.port, 4378)
+  assert.equal(overridden.port, 4379)
+})
+
+test("command-line port override rejects invalid ports", () => {
+  const config = normalizeConfig({})
+
+  assert.throws(() => applyPortOverride(config, true), /--port/)
+  assert.throws(() => applyPortOverride(config, "0"), /--port/)
+  assert.throws(() => applyPortOverride(config, "not-a-port"), /--port/)
 })
