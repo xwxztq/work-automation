@@ -363,11 +363,25 @@ function sendJson(res, status, payload) {
 }
 
 async function serveStatic(res, pathname, staticRootDir) {
-  const distDir = path.join(staticRootDir, "dist")
-  const requested = pathname === "/" ? "/index.html" : pathname
-  const filePath = path.join(distDir, requested)
-  const resolved = path.resolve(filePath)
-  if (!resolved.startsWith(distDir)) {
+  const distDir = path.resolve(staticRootDir, "dist")
+  let decodedPathname
+  try {
+    decodedPathname = decodeURIComponent(pathname)
+  } catch {
+    sendJson(res, 400, { error: "静态资源路径编码无效" })
+    return
+  }
+  if (decodedPathname.includes("\0")) {
+    sendJson(res, 400, { error: "静态资源路径无效" })
+    return
+  }
+
+  const requested = decodedPathname === "/"
+    ? "index.html"
+    : decodedPathname.replace(/^[/\\]+/u, "")
+  const resolved = path.resolve(distDir, requested)
+  const relative = path.relative(distDir, resolved)
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     sendJson(res, 403, { error: "无权访问" })
     return
   }
