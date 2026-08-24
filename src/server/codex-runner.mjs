@@ -92,10 +92,20 @@ export async function runCodex({
     path.join(resolvedRuntimeRoot, ".env"),
   ]
   const runtimeReadPaths = buildCodexRuntimeReadPaths(codexEnvironment)
+  const [codexExecutableReadPaths, nodeExecutableReadPaths] = await Promise.all([
+    resolveExecutableReadPaths(resolvedCodexBin, {
+      cwd: project.codexCwd || project.path,
+      path: codexEnvironment.PATH,
+    }),
+    resolveExecutableReadPaths(process.execPath, {
+      cwd: project.codexCwd || project.path,
+      path: codexEnvironment.PATH,
+    }),
+  ])
   const launcherReadPaths = [
     SANDBOX_TARGET_PATH,
-    ...(await resolveExecutableReadPaths(resolvedCodexBin)),
-    ...(await resolveExecutableReadPaths(process.execPath)),
+    ...codexExecutableReadPaths,
+    ...nodeExecutableReadPaths,
   ]
   const permissionBoundary = buildCodexPermissionBoundary({
     stage,

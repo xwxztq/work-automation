@@ -130,6 +130,137 @@ test("runtime tool paths cannot reopen the filesystem root or the whole home dir
   assert.ok(paths.includes("/home/test/certs/company.pem"))
 })
 
+test("macOS executable paths include resolved rpath library directories", async (t) => {
+  const fixtureRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "work-automation-mach-runtime-"),
+  )
+  t.after(() => fs.rm(fixtureRoot, { recursive: true, force: true }))
+  const executablePath = path.join(fixtureRoot, "node", "bin", "node")
+  const libraryDir = path.join(fixtureRoot, "node", "lib")
+  const libraryPath = path.join(libraryDir, "libnode.test.dylib")
+  await fs.mkdir(path.dirname(executablePath), { recursive: true })
+  await fs.mkdir(libraryDir, { recursive: true })
+  await fs.writeFile(executablePath, "synthetic executable")
+  await fs.writeFile(libraryPath, "synthetic library")
+
+  const paths = await resolveExecutableReadPaths(executablePath, {
+    platform: "darwin",
+    async inspectMacBinary() {
+      return {
+        dependencies: ["@rpath/libnode.test.dylib"],
+        rpaths: ["@loader_path/../lib"],
+      }
+    },
+  })
+
+  assert.ok(paths.includes(path.dirname(executablePath)))
+  assert.ok(paths.includes(await fs.realpath(libraryPath)))
+  assert.ok(paths.includes(await fs.realpath(libraryDir)))
+  assert.equal(paths.includes(fixtureRoot), false)
+})
+
+test("macOS executable paths follow Homebrew library dependencies without opening private config", async (t) => {
+  const fixtureRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "work-automation-homebrew-runtime-"),
+  )
+  t.after(() => fs.rm(fixtureRoot, { recursive: true, force: true }))
+  const prefix = path.join(fixtureRoot, "homebrew")
+  const nodePath = path.join(prefix, "Cellar", "node", "26.5.0", "bin", "node")
+  const mervePath = path.join(
+    prefix,
+    "Cellar",
+    "merve",
+    "1.2.2",
+    "lib",
+    "libmerve.dylib",
+  )
+  const simdutfPath = path.join(
+    prefix,
+    "Cellar",
+    "simdutf",
+    "9.0.0",
+    "lib",
+    "libsimdutf.dylib",
+  )
+  const opensslPath = path.join(
+    prefix,
+    "Cellar",
+    "openssl@3",
+    "3.6.3",
+    "lib",
+    "libcrypto.3.dylib",
+  )
+  const opensslConfigPath = path.join(
+    prefix,
+    "etc",
+    "openssl@3",
+    "openssl.cnf",
+  )
+  const privateKeyPath = path.join(
+    prefix,
+    "etc",
+    "openssl@3",
+    "private",
+    "key.pem",
+  )
+  for (const filePath of [
+    nodePath,
+    mervePath,
+    simdutfPath,
+    opensslPath,
+    opensslConfigPath,
+    privateKeyPath,
+  ]) {
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, "synthetic runtime file")
+  }
+  await fs.mkdir(path.join(prefix, "opt"), { recursive: true })
+  for (const [formula, version] of [
+    ["merve", "1.2.2"],
+    ["simdutf", "9.0.0"],
+    ["openssl@3", "3.6.3"],
+  ]) {
+    await fs.symlink(
+      path.join("..", "Cellar", formula, version),
+      path.join(prefix, "opt", formula),
+    )
+  }
+
+  const inspections = new Map([
+    [
+      await fs.realpath(nodePath),
+      {
+        dependencies: [
+          path.join(prefix, "opt", "merve", "lib", "libmerve.dylib"),
+          path.join(prefix, "opt", "openssl@3", "lib", "libcrypto.3.dylib"),
+        ],
+        rpaths: [],
+      },
+    ],
+    [
+      await fs.realpath(mervePath),
+      {
+        dependencies: [
+          path.join(prefix, "opt", "simdutf", "lib", "libsimdutf.dylib"),
+        ],
+        rpaths: [],
+      },
+    ],
+  ])
+  const paths = await resolveExecutableReadPaths(nodePath, {
+    platform: "darwin",
+    async inspectMacBinary(filePath) {
+      return inspections.get(filePath) || { dependencies: [], rpaths: [] }
+    },
+  })
+
+  assert.ok(paths.includes(path.join(prefix, "opt")))
+  assert.ok(paths.includes(path.dirname(await fs.realpath(simdutfPath))))
+  assert.ok(paths.includes(opensslConfigPath))
+  assert.equal(paths.includes(path.dirname(opensslConfigPath)), false)
+  assert.equal(paths.includes(privateKeyPath), false)
+})
+
 test("runner filters credentials before starting the supervisor", async (t) => {
   const runDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-runner-env-"))
   t.after(() => fs.rm(runDir, { recursive: true, force: true }))
@@ -390,13 +521,25 @@ test("real macOS sandbox denies the Codex process access to service credentials 
   )
   const reviewDir = path.join(runDir, "review")
   const credentialPath = path.join(runtimeRoot, ".env.local")
+  const configPath = path.join(runtimeRoot, "config.local.json")
+  const otherRunPath = path.join(
+    runtimeRoot,
+    ".linear-automation",
+    "runs",
+    "other-run",
+    "run.json",
+  )
+  const projectWritePath = path.join(projectDir, "sandbox-write-probe.txt")
   await fs.mkdir(projectDir, { recursive: true })
   await fs.mkdir(runDir, { recursive: true })
+  await fs.mkdir(path.dirname(otherRunPath), { recursive: true })
   await fs.writeFile(
     credentialPath,
     "LINEAR_API_KEY=FILESYSTEM_LINEAR_SENTINEL\n",
     { mode: 0o600 },
   )
+  await fs.writeFile(configPath, '{"sentinel":"CONFIG_SENTINEL"}\n')
+  await fs.writeFile(otherRunPath, '{"sentinel":"OTHER_RUN_SENTINEL"}\n')
 
   const issue = {
     id: "issue-1172",
@@ -430,14 +573,26 @@ import path from "node:path"
 const args = process.argv.slice(2)
 process.stdin.resume()
 await new Promise((resolve) => process.stdin.once("end", resolve))
-let credentialReadable = true
-let credentialErrorCode = null
-try {
-  await fs.readFile(${JSON.stringify(credentialPath)}, "utf8")
-} catch (error) {
-  credentialReadable = false
-  credentialErrorCode = error?.code || null
+const probeRead = async (filePath) => {
+  try {
+    await fs.readFile(filePath, "utf8")
+    return { allowed: true, errorCode: null }
+  } catch (error) {
+    return { allowed: false, errorCode: error?.code || null }
+  }
 }
+const probeWrite = async (filePath) => {
+  try {
+    await fs.writeFile(filePath, "synthetic write probe")
+    return { allowed: true, errorCode: null }
+  } catch (error) {
+    return { allowed: false, errorCode: error?.code || null }
+  }
+}
+const credentialRead = await probeRead(${JSON.stringify(credentialPath)})
+const configRead = await probeRead(${JSON.stringify(configPath)})
+const otherRunRead = await probeRead(${JSON.stringify(otherRunPath)})
+const projectWrite = await probeWrite(${JSON.stringify(projectWritePath)})
 const gitIdentityUsable = await new Promise((resolve) => {
   const child = spawn("git", ["var", "GIT_AUTHOR_IDENT"], { stdio: "ignore" })
   child.once("error", () => resolve(false))
@@ -446,7 +601,7 @@ const gitIdentityUsable = await new Promise((resolve) => {
 const finalIndex = args.indexOf("--output-last-message")
 await fs.writeFile(args[finalIndex + 1], ${JSON.stringify(JSON.stringify(finalValue))})
 await fs.mkdir(${JSON.stringify(reviewDir)}, { recursive: true })
-await fs.writeFile(path.join(${JSON.stringify(reviewDir)}, "filesystem-boundary.json"), JSON.stringify({ credentialReadable, credentialErrorCode, gitIdentityUsable, reviewWritable: true }, null, 2))
+await fs.writeFile(path.join(${JSON.stringify(reviewDir)}, "filesystem-boundary.json"), JSON.stringify({ credentialRead, configRead, otherRunRead, projectWrite, gitIdentityUsable, reviewWritable: true }, null, 2))
 console.log("sandboxed fake stdout")
 console.error("sandboxed fake stderr")
 `,
@@ -509,10 +664,18 @@ console.error("sandboxed fake stderr")
   const evidence = JSON.parse(
     await fs.readFile(path.join(reviewDir, "filesystem-boundary.json"), "utf8"),
   )
-  assert.equal(evidence.credentialReadable, false)
-  assert.match(evidence.credentialErrorCode || "", /EACCES|EPERM/u)
+  for (const probe of [
+    evidence.credentialRead,
+    evidence.configRead,
+    evidence.otherRunRead,
+    evidence.projectWrite,
+  ]) {
+    assert.equal(probe.allowed, false)
+    assert.match(probe.errorCode || "", /EACCES|EPERM/u)
+  }
   assert.equal(evidence.gitIdentityUsable, true)
   assert.equal(evidence.reviewWritable, true)
+  await assert.rejects(fs.access(projectWritePath))
   assert.match(await fs.readFile(run.stdoutPath, "utf8"), /sandboxed fake stdout/u)
   assert.match(await fs.readFile(run.stderrPath, "utf8"), /sandboxed fake stderr/u)
   const supervisorConfig = JSON.parse(
