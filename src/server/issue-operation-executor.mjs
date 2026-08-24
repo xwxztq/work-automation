@@ -377,7 +377,7 @@ async function executePreparedOperations({
         operation: ISSUE_PLATFORM_OPERATION.READ_ISSUE,
       })
       record = await store.updateIssueOperation(input.scope, {
-        status: readError.retryable ? "retryable" : "manual-required",
+        status: readError.retryable ? "provider-succeeded" : "manual-required",
         verification: {
           status: "refresh-failed",
           checkedAt: new Date().toISOString(),

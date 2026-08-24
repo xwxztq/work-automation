@@ -334,6 +334,62 @@ test("stops when Linear reports state success but the state is unchanged", async
   assert.equal(fixture.issue.state.name, "On Schedule")
 })
 
+test("does not repeat a successful state mutation after verification is rate limited", async (t) => {
+  const fixture = await createFixture(t, {
+    stage: "part2",
+    stateName: "On Schedule",
+    stateMutationApplies: false,
+  })
+  const reader = fixture.platforms["primary-issues"].reader
+  const readIssue = reader.readIssue.bind(reader)
+  let reads = 0
+  reader.readIssue = async (...args) => {
+    reads += 1
+    if (reads === 2) {
+      throw new IssuePlatformError({
+        code: "RATE_LIMITED",
+        operation: "issue.read",
+        retryable: true,
+      })
+    }
+    return readIssue(...args)
+  }
+  const idempotencyKey = "issue-1174:part2:refresh-rate-limited-state"
+  const agentResult = resultFor(fixture, [
+    operation("issue.state.update", idempotencyKey, {
+      state: "Testing",
+    }),
+  ])
+
+  const first = await fixture.executor.execute({
+    run: fixture.run,
+    project: fixture.project,
+    config: { statuses },
+    agentResult,
+  })
+  const resumed = await fixture.executor.execute({
+    run: fixture.run,
+    project: fixture.project,
+    config: { statuses },
+    agentResult,
+  })
+  const record = await fixture.store.getIssueOperation({
+    platform: "primary-issues",
+    projectKey: "work-automation",
+    issueId: "issue-1174",
+    type: "issue.state.update",
+    idempotencyKey,
+  })
+
+  assert.equal(first.status, "retryable")
+  assert.equal(first.operations[0].status, "provider-succeeded")
+  assert.equal(resumed.status, "manual-required")
+  assert.deepEqual(fixture.mutations, ["issue.state.update"])
+  assert.equal(record.status, "manual-required")
+  assert.equal(record.provider.status, "succeeded")
+  assert.equal(record.attempts, 1)
+})
+
 test("fails closed on an unregistered split operation before later writes", async (t) => {
   const fixture = await createFixture(t, {
     stage: "split",
