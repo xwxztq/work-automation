@@ -41,6 +41,10 @@ test("marks new runs for review cleanup on completion", async (t) => {
   })
 
   assert.equal(run.cleanupReviewTempOnCompletion, true)
+  assert.equal(
+    run.resultSchemaPath,
+    path.join(run.dir, "agent-result-schema.json"),
+  )
 })
 
 test("preserves supervisor metadata when the scheduler updates a stale run object", async (t) => {

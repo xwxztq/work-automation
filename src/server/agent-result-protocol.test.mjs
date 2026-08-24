@@ -8,6 +8,13 @@ import {
   parseAgentResult,
   validateAgentResult,
 } from "./agent-result-protocol.mjs"
+import {
+  AGENT_RESULT_ALLOWED_OPERATIONS_BY_STAGE,
+  agentResultRunPatch,
+  buildAgentResultOutputSchema,
+  createAgentResultContext,
+  evaluateAgentResult,
+} from "./agent-result-runtime.mjs"
 
 const ALL_OPERATIONS = Object.values(AGENT_RESULT_OPERATION)
 
@@ -416,4 +423,81 @@ test("rejects malformed JSON without returning the raw text", () => {
 
   assert.equal(result.error?.code, AGENT_RESULT_ERROR_CODE.INVALID_JSON)
   assert.doesNotMatch(JSON.stringify(result), new RegExp(privateValue, "u"))
+})
+
+test("builds immutable stage permissions and a target-bound output schema", () => {
+  const context = createAgentResultContext({
+    stage: "split",
+    projectKey: "work-automation",
+    issue: {
+      id: "issue-1172",
+      parent: { id: "issue-1170" },
+    },
+  })
+  const schema = buildAgentResultOutputSchema(context)
+
+  assert.deepEqual(
+    context.allowedOperations,
+    AGENT_RESULT_ALLOWED_OPERATIONS_BY_STAGE.split,
+  )
+  assert.equal(context.parentIssueId, "issue-1170")
+  assert.equal(context.target.platform, "primary-issues")
+  assert.deepEqual(schema.properties.run.properties.stage.enum, ["split"])
+  assert.deepEqual(
+    schema.properties.run.properties.allowedOperations.items.enum,
+    context.allowedOperations,
+  )
+  assert.deepEqual(schema.properties.target.properties.issueId.enum, ["issue-1172"])
+  assert.equal(schema.properties.operations.items.anyOf.length, 3)
+  assertStructuredOutputObjectFieldsAreRequired(schema)
+  assert.equal(JSON.stringify(schema).includes('"const"'), false)
+  assert.equal(JSON.stringify(schema).includes('"oneOf"'), false)
+})
+
+function assertStructuredOutputObjectFieldsAreRequired(schema) {
+  if (!schema || typeof schema !== "object") return
+  if (schema.type === "object") {
+    assert.deepEqual(
+      [...(schema.required || [])].sort(),
+      Object.keys(schema.properties || {}).sort(),
+    )
+    assert.equal(schema.additionalProperties, false)
+  }
+  for (const value of Object.values(schema)) {
+    if (Array.isArray(value)) {
+      for (const item of value) assertStructuredOutputObjectFieldsAreRequired(item)
+    } else {
+      assertStructuredOutputObjectFieldsAreRequired(value)
+    }
+  }
+}
+
+test("runtime failure patch keeps stable diagnostics without persisting invalid output", () => {
+  const context = createAgentResultContext({
+    stage: "part2",
+    projectKey: "work-automation",
+    issue: { id: "issue-1172" },
+  })
+  const evaluation = evaluateAgentResult(
+    JSON.stringify({
+      schemaVersion: "999",
+      run: {
+        stage: context.stage,
+        projectKey: context.projectKey,
+        parentIssueId: context.parentIssueId,
+        allowedOperations: context.allowedOperations,
+      },
+      target: context.target,
+      operations: [],
+      extensions: { secret: "RESULT_SENTINEL" },
+    }),
+    context,
+  )
+  const patch = agentResultRunPatch(evaluation)
+
+  assert.equal(patch.status, "failed")
+  assert.equal(patch.agentResult, undefined)
+  assert.equal(patch.agentResultValidation.error.code, "UNKNOWN_VERSION")
+  assert.match(patch.error, /UNKNOWN_VERSION/u)
+  assert.doesNotMatch(JSON.stringify(patch), /999|RESULT_SENTINEL/u)
 })

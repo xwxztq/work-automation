@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises"
 import { spawn } from "node:child_process"
+import {
+  agentResultRunPatch,
+  evaluateAgentResult,
+} from "./agent-result-runtime.mjs"
+import { buildCodexProcessEnv } from "./codex-environment.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
@@ -68,7 +73,9 @@ async function main() {
 
     child = spawn(input.codexBin, input.args, {
       cwd: input.cwd,
-      env: process.env,
+      env: buildCodexProcessEnv(process.env, {
+        blockedNames: input.blockedEnvironmentNames,
+      }),
       stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
     })
 
@@ -120,18 +127,39 @@ async function main() {
       await appendStderr(`${result.error.stack || result.error.message}\n`)
     }
 
-    const succeeded = result.code === 0 && !result.signal && !result.error
+    const processSucceeded = result.code === 0 && !result.signal && !result.error
     const startupError = childStarted
       ? null
       : result.error?.message || "Codex 子进程没有成功启动。"
+    let completionPatch
+    if (processSucceeded) {
+      const finalText = await readOptional(input.finalPath)
+      const evaluation = evaluateAgentResult(finalText, input.agentResultContext)
+      completionPatch = agentResultRunPatch(evaluation)
+      if (!evaluation.ok) {
+        await appendStderr(`${completionPatch.error}\n`)
+      }
+    } else {
+      completionPatch = {
+        status: "failed",
+        agentResult: undefined,
+        agentResultValidation: undefined,
+        failureKind: undefined,
+        failureSummary: undefined,
+        failureAction: undefined,
+        retryableFailure: undefined,
+        error:
+          startupError ||
+          (result.signal
+            ? `Codex 被信号 ${result.signal} 结束。`
+            : `Codex 退出码为 ${result.code}`),
+      }
+    }
     await updateRun({
-      status: succeeded ? "succeeded" : "failed",
+      ...completionPatch,
       exitCode: result.code,
       codexStarted: childStarted,
       startupError,
-      error: succeeded
-        ? undefined
-        : startupError || (result.signal ? `Codex 被信号 ${result.signal} 结束。` : `Codex 退出码为 ${result.code}`),
     })
   } catch (error) {
     await appendStderr(`${error.stack || error.message}\n`).catch(() => {})
@@ -193,6 +221,17 @@ async function writeJsonFile(filePath, value) {
   const tmpPath = `${filePath}.${process.pid}.tmp`
   await fs.writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`)
   await fs.rename(tmpPath, filePath)
+}
+
+async function readOptional(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8")
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return ""
+    }
+    throw error
+  }
 }
 
 main().catch((error) => {

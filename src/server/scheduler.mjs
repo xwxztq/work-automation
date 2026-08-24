@@ -1,19 +1,20 @@
 import { createHash } from "node:crypto"
+import {
+  agentResultRunPatch,
+  createAgentResultContext,
+  evaluateAgentResult,
+} from "./agent-result-runtime.mjs"
 import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
-import {
-  diagnoseCodexLinearAuthFailure,
-  isCodexLinearAuthFailureRun,
-} from "./linear-auth-diagnostics.mjs"
-import { diagnoseLinearWriteVerification } from "./linear-write-verification.mjs"
+import { isCodexLinearAuthFailureRun } from "./linear-auth-diagnostics.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 import { sendRunWebhook } from "./webhook-notifier.mjs"
 import {
   buildIssueReviewPromptContext,
+  buildAgentResultPromptSection,
   buildPromptContext,
   buildRunPromptContext,
   findLatestCommentByMarker,
-  formatPromptComments,
   readPrompt,
   renderPrompt,
 } from "./prompts.mjs"
@@ -32,6 +33,8 @@ export function createScheduler({
   configProvider,
   store,
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
+  linearProvider = getLinear,
+  codexRunner = runCodex,
 }) {
   let timer = null
   let enabled = false
@@ -115,7 +118,7 @@ export function createScheduler({
 
   async function runOnce(stage = "both", options = {}) {
     const config = await configProvider()
-    const linear = getLinear(config)
+    const linear = linearProvider(config)
     const summary = {
       startedAt: new Date().toISOString(),
       stage,
@@ -1074,37 +1077,6 @@ export function createScheduler({
         message: refreshErrorMessage,
       })
     }
-    if (run.status === "succeeded") {
-      const verification = diagnoseLinearWriteVerification({
-        beforeStateName: issue.state?.name,
-        afterStateName: latestIssue.state?.name,
-        refreshErrorMessage,
-      })
-      if (verification) {
-        run = await store.updateRun(run, {
-          status: "failed",
-          error: verification.message,
-          failureKind: verification.kind,
-          failureSummary: verification.summary,
-          failureAction: verification.action,
-          retryableFailure: verification.retryable,
-        })
-        await logEvent({
-          type: "run-linear-manual-required",
-          level: "error",
-          stage,
-          projectKey: project.key,
-          issueIdentifier: issue.identifier,
-          runId: run.id,
-          message: verification.summary,
-          data: {
-            beforeState: issue.state?.name || null,
-            afterState: latestIssue.state?.name || null,
-            refreshError: refreshErrorMessage,
-          },
-        })
-      }
-    }
     const fingerprint = issueFingerprint(latestIssue)
     const entry = await store.setProcessedIssue({
       projectKey: project.key,
@@ -1240,6 +1212,13 @@ export function createScheduler({
     let run = null
     try {
       run = await store.createRun({ projectKey: project.key, stage, issue })
+      run = await store.updateRun(run, {
+        agentResultContext: createAgentResultContext({
+          stage,
+          projectKey: project.key,
+          issue,
+        }),
+      })
       active.runId = run.id
       activeRunsById.set(run.id, active)
       await logEvent({
@@ -1258,7 +1237,7 @@ export function createScheduler({
       }
 
       const prompt = await buildStagePrompt({ config, project, issue, stage, run })
-      const codexResult = await runCodex({
+      const codexResult = await codexRunner({
         config,
         project,
         stage,
@@ -1298,17 +1277,14 @@ export function createScheduler({
         return run
       }
 
-      const succeeded = codexResult.exitCode === 0
+      const succeeded =
+        codexResult.status === "succeeded" &&
+        codexResult.agentResultValidation?.ok === true
       const startupError = codexResult.started
         ? null
         : codexResult.startError || `Codex 子进程未成功启动（退出码 ${codexResult.exitCode}）`
-      const fallbackError = startupError || `Codex 退出码为 ${codexResult.exitCode}`
-      const authDiagnostic = succeeded
-        ? null
-        : await diagnoseRunFailure(run, {
-            finalText: codexResult.finalText,
-            error: fallbackError,
-          })
+      const fallbackError =
+        codexResult.error || startupError || `Codex 退出码为 ${codexResult.exitCode}`
       active.supervisorPid = codexResult.supervisorPid || active.supervisorPid
       active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
@@ -1320,14 +1296,16 @@ export function createScheduler({
         codexPid: active.codexPid,
         codexStarted: codexResult.started,
         startupError,
-        error: succeeded ? undefined : authDiagnostic?.message || fallbackError,
-        failureKind: authDiagnostic?.kind,
-        failureSummary: authDiagnostic?.summary,
-        failureAction: authDiagnostic?.action,
-        retryableFailure: authDiagnostic?.retryable,
+        agentResult: codexResult.agentResult,
+        agentResultValidation: codexResult.agentResultValidation,
+        error: succeeded ? undefined : fallbackError,
+        failureKind: codexResult.failureKind,
+        failureSummary: codexResult.failureSummary,
+        failureAction: codexResult.failureAction,
+        retryableFailure: codexResult.retryableFailure,
       })
       await logEvent({
-        type: succeeded ? "run-succeeded" : authDiagnostic ? "run-codex-linear-auth-required" : "run-failed",
+        type: succeeded ? "run-succeeded" : "run-failed",
         level: succeeded ? "info" : "error",
         stage,
         projectKey: project.key,
@@ -1335,17 +1313,17 @@ export function createScheduler({
         runId: run.id,
         message: succeeded
           ? `${issue.identifier} ${stageLabel(stage)} 成功`
-          : authDiagnostic
-            ? `${issue.identifier} ${stageLabel(stage)}失败: ${authDiagnostic.summary}`
-            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? `启动失败: ${startupError}` : `失败: ${fallbackError}`}`,
+          : `${issue.identifier} ${stageLabel(stage)} ${startupError ? `启动失败: ${startupError}` : `失败: ${fallbackError}`}`,
         data: {
           exitCode: codexResult.exitCode,
           runDir: run.dir,
           codexStarted: codexResult.started,
           startupError,
-          failureKind: authDiagnostic?.kind,
-          retryableFailure: authDiagnostic?.retryable,
-          action: authDiagnostic?.action,
+          failureKind: codexResult.failureKind,
+          retryableFailure: codexResult.retryableFailure,
+          action: codexResult.failureAction,
+          agentResultErrorCode:
+            codexResult.agentResultValidation?.error?.code || null,
         },
       })
       await notifyRunWebhook(config, run)
@@ -1366,7 +1344,6 @@ export function createScheduler({
       }
       const codexStarted = Boolean(active.codexPid)
       const errorMessage = error instanceof Error ? error.message : String(error)
-      const authDiagnostic = await diagnoseRunFailure(run, { error: errorMessage })
       run = await store.updateRun(run, {
         status: "failed",
         completionSource: "normal",
@@ -1375,25 +1352,18 @@ export function createScheduler({
         codexPid: active.codexPid,
         codexStarted,
         startupError: codexStarted ? null : errorMessage,
-        error: authDiagnostic?.message || errorMessage,
-        failureKind: authDiagnostic?.kind,
-        failureSummary: authDiagnostic?.summary,
-        failureAction: authDiagnostic?.action,
-        retryableFailure: authDiagnostic?.retryable,
+        error: errorMessage,
       })
       await logEvent({
-        type: authDiagnostic ? "run-codex-linear-auth-required" : "run-error",
+        type: "run-error",
         level: "error",
         stage,
         projectKey: project.key,
         issueIdentifier: issue.identifier,
         runId: run.id,
-        message: authDiagnostic?.summary || errorMessage,
+        message: errorMessage,
         data: {
           runDir: run.dir,
-          failureKind: authDiagnostic?.kind,
-          retryableFailure: authDiagnostic?.retryable,
-          action: authDiagnostic?.action,
         },
       })
       await notifyRunWebhook(config, run)
@@ -1406,22 +1376,6 @@ export function createScheduler({
         activeRunsById.delete(run.id)
       }
     }
-  }
-
-  async function diagnoseRunFailure(run, extra = {}) {
-    let detail = null
-    try {
-      detail = await store.getRun(run.id)
-    } catch {
-      detail = null
-    }
-    return diagnoseCodexLinearAuthFailure({
-      stdout: detail?.stdout,
-      stderr: detail?.stderr,
-      final: detail?.final,
-      finalText: extra.finalText,
-      error: extra.error || detail?.error || run.error || run.startupError,
-    })
   }
 
   async function buildStagePrompt({ config, project, issue, stage, run }) {
@@ -1443,30 +1397,12 @@ export function createScheduler({
           }
         : {}
     const context = buildPromptContext(config, project, extraContext)
-    return `${renderPrompt(template, context)}
-
-当前 Linear 事项:
-- ID: ${issue.identifier}
-- Linear 内部 ID: ${issue.id}
-- 标题: ${issue.title}
-- URL: ${issue.url}
-- 当前状态: ${issue.state?.name || "未知"}
-- 团队: ${issue.team?.key || issue.team?.name || "未知"} (${issue.team?.id || "未知"})
-- 项目: ${issue.project?.name || "未知"}
-- 优先级: ${issue.priorityLabel || issue.priority || "无"}
-- 更新时间: ${issue.updatedAt || "未知"}
-
-服务职责说明:
-- 本地服务只负责发现队列并启动当前 Codex 进程。
-- Linear 评论、状态移动、标签、阻塞关系和完成交接都由当前 Codex agent 直接操作。
-- 运行结束前，请在最终回复里用简体中文说明你对 Linear 做了哪些操作；如果因为已有新鲜标记而跳过，也要说明跳过原因。
-
-描述:
-${issue.description || "（空）"}
-
-最近评论:
-${formatPromptComments(issue.comments || [], 20)}
-`
+    const templateText = renderPrompt(template, context).trimEnd()
+    const resultContextText = buildAgentResultPromptSection(
+      run.agentResultContext,
+      issue,
+    )
+    return `${templateText}\n\n${resultContextText}\n`
   }
 
   function start() {
@@ -1697,20 +1633,28 @@ ${formatPromptComments(issue.comments || [], 20)}
 
   async function markRunLost(run) {
     const detail = await store.getRun(run.id)
-    const hasFinalText = Boolean(detail?.final?.trim())
-    const next = await store.updateRun(run, lostRunCompletionPatch(hasFinalText))
+    const completionPatch = lostRunCompletionPatch(
+      detail?.final || "",
+      detail?.agentResultContext || run.agentResultContext,
+    )
+    const next = await store.updateRun(run, completionPatch)
+    const succeeded = next.status === "succeeded"
     await logEvent({
       type: "run-reconciled-missing-process",
-      level: hasFinalText ? "info" : "warn",
+      level: succeeded ? "info" : "warn",
       stage: run.stage,
       projectKey: run.projectKey,
       issueIdentifier: run.issueIdentifier,
       runId: run.id,
-      message: hasFinalText ? "运行进程已结束，检测到最终结果并标记成功" : next.error,
+      message: succeeded
+        ? "运行进程已结束，结构化结果校验通过并标记成功"
+        : next.error,
       data: {
         pid: run.pid || null,
         supervisorPid: run.supervisorPid || null,
         codexPid: run.codexPid || null,
+        agentResultErrorCode:
+          next.agentResultValidation?.error?.code || null,
       },
     })
     await cleanupCompletedRunReview(next)
@@ -1781,13 +1725,10 @@ ${formatPromptComments(issue.comments || [], 20)}
   }
 }
 
-export function lostRunCompletionPatch(hasFinalText) {
+export function lostRunCompletionPatch(finalText, context) {
   return {
-    status: hasFinalText ? "succeeded" : "failed",
+    ...agentResultRunPatch(evaluateAgentResult(finalText, context)),
     completionSource: "reconciled",
-    error: hasFinalText
-      ? undefined
-      : "运行进程已不存在，已从持久化运行记录中标记为失败。",
   }
 }
 

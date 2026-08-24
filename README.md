@@ -6,12 +6,12 @@
 
 本地服务，执行 Linear 到 Codex 的四阶段自动化流程。
 
-- **阶段一**：扫描 `Todo / Needs Clarification / Too Large / Blocked`，Codex 做需求分析。
-- **拆分阶段**：扫描 `Needs Splitting`，Codex 创建 parent/sub-issue、回写覆盖清单，父 issue 移到 `In Progress`。
-- **阶段二**：扫描 `On Schedule`，Codex 实现代码；按 Linear 优先级（Urgent → Low）排序执行。
-- **阶段三**：扫描 `Testing`，Codex 做 Auto Review，生成产物、上传附件，流转到 `Ready for Review` / `On Schedule` / `Blocked`。
+- **阶段一**：扫描 `Todo / Needs Clarification / Too Large / Blocked`，Codex 做需求分析并输出结构化事项操作。
+- **拆分阶段**：扫描 `Needs Splitting`，Codex 规划 parent/sub-issue、覆盖清单和目标状态操作。
+- **阶段二**：扫描 `On Schedule`，Codex 实现代码、测试并提交，再输出完成或阻塞操作；按 Linear 优先级（Urgent → Low）排序执行。
+- **阶段三**：扫描 `Testing`，Codex 做 Auto Review、生成产物，并输出附件、评论和状态操作。
 
-服务端只负责扫描队列、启动独立 Codex supervisor、记录日志；Linear 评论和状态移动由 Codex agent 直接完成。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
+服务端读取候选事项并提供不可变快照，启动独立 Codex supervisor，再按 [Agent 结构化结果协议](docs/agent-result-protocol.md) 校验和保存 `final.txt`。Codex 子进程不接收 Linear API key，也不加载用户级 Linear MCP 配置。当前版本尚不执行结果中的 operations；评论、状态、子事项和附件需要后续受控执行器接入。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
 
 其他行为要点：
 
@@ -82,7 +82,7 @@ workflow 固定使用 Node 24.19.0、npm 11.17.0 和仓库声明的 pnpm 11.2.2�
 
 2. 在 `.env.local` 填写 `LINEAR_API_KEY`（不要写入 `config.local.json`；服务按 `.env.local` → `.env` 顺序加载，不覆盖已有环境变量）。
 
-3. 在 Codex `config.toml` 中给 Linear MCP 工具配置审批权限（`save_issue`、`research`、`save_comment`、`prepare_attachment_upload`、`create_attachment_from_upload` 均设为 `approval_mode = "approve"`）。
+3. 确认 Codex CLI 支持 `exec --ignore-user-config`、`--output-schema` 和 `--output-last-message`。自动化运行不会加载用户 `config.toml`，不需要配置 Linear MCP。
 
 4. 在 Linear 工作流中确认以下状态名，并与 `config.local.json` 的 `statuses` 保持一致：
    `Todo`、`Needs Clarification`、`Too Large`、`Needs Splitting`、`Blocked`、`Ready for Codex`、`On Schedule`、`In Progress`、`Testing`、`Ready for Review`。
@@ -103,7 +103,7 @@ workflow 固定使用 Node 24.19.0、npm 11.17.0 和仓库声明的 pnpm 11.2.2�
 ## 运行方式
 
 - 局域网访问：`pnpm dev:lan --host 192.168.1.23`（前后端和 `/api` proxy 使用同一 IP；不要用 `0.0.0.0`，换 IP 需重启）。
-- 开发后端自带 watch，修改 `src/server` 自动重启，正在运行的 Codex 由独立 supervisor 恢复。
+- 开发后端自带 watch，修改 `src/server` 自动重启，正在运行的 Codex 由独立 supervisor 恢复；恢复路径仍会重新校验结构化结果，不能仅凭非空 `final.txt` 标记成功。
 - 关闭前端轮询只停止扫描，不会停止已运行的 Codex 子进程。
 - 生产模式：`pnpm build && pnpm start`，访问 `http://127.0.0.1:4378`；局域网用 `pnpm start:lan --host <IP>`。`--host` 优先级高于配置文件 `host`。
 

@@ -105,6 +105,7 @@ export function createLinearClient(apiKey) {
               state { id name type }
               team { id key name }
               project { id name }
+              parent { id identifier }
               assignee { name email }
               labels { nodes { id name } }
               comments(first: 50) {
@@ -371,6 +372,7 @@ export function createLinearClient(apiKey) {
           state { id name type }
           team { id key name }
           project { id name }
+          parent { id identifier }
           assignee { name email }
           labels { nodes { id name } }
           comments(first: 80) {

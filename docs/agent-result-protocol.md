@@ -1,6 +1,6 @@
 # Agent 结构化结果协议 v1
 
-这份协议定义 Work Automation 四个处理阶段与 Codex Agent 之间的结果边界，以及服务内部统一的事项平台接口。LIV-1171 只提供协议、无副作用的解析与校验、兼容规则和接口定义，不把结果接入调度器，也不执行任何 Linear 写入。
+这份协议定义 Work Automation 四个处理阶段与 Codex Agent 之间的结果边界，以及服务内部统一的事项平台接口。调度器会把运行绑定和事项快照交给 Agent，校验并保存最终结果；当前仍不执行 operations 中的事项平台操作。
 
 ## 结果封装
 
@@ -101,6 +101,18 @@ src/server/agent-result-protocol.mjs 提供两个无副作用入口：
 - INVALID_CONTEXT，表示服务传入的校验上下文本身不合法
 
 解析器只接受完整 JSON。现有 extractJson 从代码块或文字中猜测 JSON 的行为不能用于这个协议。
+
+## 运行时接入
+
+每次 run 会在 `run.json` 保存 `agentResultContext`，并在同一目录生成绑定当前阶段与目标的 `agent-result-schema.json`。Codex 以 `--output-schema` 和 `--output-last-message` 运行；正常结束和丢失进程恢复都使用同一个 v1 parser 校验 `final.txt`。
+
+运行时输出 schema 使用严格生成所需的规范形式：`issue.child.create` 同时输出 `title` 和 `description`，`attachment.upload` 同时输出 `filePath` 和 `title`。v1 parser 仍保持上表定义的兼容性，接受省略这些可选字段的外部合法结果。
+
+只有 Codex 进程成功结束且结果校验通过时，run 才能进入 `succeeded`。缺失结果、无效 JSON、未知版本或操作、阶段与项目不一致、父事项或目标不一致、未授权操作都会进入 `failed`。`run.json` 只保存规范化成功结果，或稳定错误码、路径和脱敏消息；原始 `final.txt` 作为运行产物保留，但不会被猜测或执行。
+
+Codex 子进程使用受控环境变量集合，并通过 `--ignore-user-config` 阻止加载用户级 MCP 配置。Linear API key、配置的自定义 Linear 凭据变量、Linear MCP token 和未授权环境变量不会传入 supervisor 或 Codex；Codex 自身认证、PATH、临时目录、locale、代理和自定义 CA 等必要变量仍可用。
+
+当前接入只校验和持久化 operations，不调用事项平台适配器。评论、状态、子事项和附件操作需要后续受控执行器处理。
 
 ## 事项平台接口
 

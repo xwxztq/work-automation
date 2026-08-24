@@ -35,6 +35,7 @@ export function createRunStore(rootDir) {
       stderrPath: path.join(dir, "stderr.log"),
       promptPath: path.join(dir, "prompt.md"),
       finalPath: path.join(dir, "final.txt"),
+      resultSchemaPath: path.join(dir, "agent-result-schema.json"),
       metadataPath: path.join(dir, "run.json"),
     }
     await ensureDir(dir)
