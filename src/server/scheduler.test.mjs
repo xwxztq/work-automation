@@ -11,6 +11,7 @@ import {
   part1EligibleStatuses,
 } from "./scheduler.mjs"
 import { createAgentResultContext } from "./agent-result-runtime.mjs"
+import { IssuePlatformError } from "./issue-platform.mjs"
 import { createRunStore } from "./run-store.mjs"
 
 const baseConfig = {
@@ -279,6 +280,251 @@ test("invalid structured results fail without calling any Linear write method", 
   assert.doesNotMatch(JSON.stringify(runs[0]), /RESULT_SENTINEL/u)
 })
 
+test("executes validated operations before completing and recording the issue", async (t) => {
+  const fixture = await createOperationSchedulerFixture(t)
+  const scheduler = createScheduler({
+    rootDir: fixture.rootDir,
+    store: fixture.store,
+    configProvider: async () => fixture.config,
+    linearProvider: () => fixture.linear,
+    linearStatusHealthChecker: {
+      async check() {
+        return { ok: true, projects: [] }
+      },
+    },
+    codexRunner: async ({ run }) => {
+      const agentResult = completedAgentResult(run.agentResultContext, "normal")
+      return {
+        exitCode: 0,
+        status: "succeeded",
+        canceled: false,
+        started: true,
+        startError: null,
+        supervisorPid: 100,
+        codexPid: 101,
+        error: null,
+        agentResult,
+        agentResultValidation: { ok: true, schemaVersion: "1" },
+      }
+    },
+  })
+
+  const summary = await scheduler.runOnce("part2")
+  const [run] = await fixture.store.listRuns(10)
+  const processed = await fixture.store.getProcessedIssue(
+    "work-automation",
+    "part2",
+    "issue-1174",
+  )
+
+  assert.equal(summary.projects[0].error, undefined)
+  assert.equal(summary.projects[0].part2[0].result, "succeeded")
+  assert.deepEqual(fixture.mutations, ["comment.create", "issue.state.update"])
+  assert.equal(run.status, "succeeded")
+  assert.equal(run.operationExecution.status, "completed")
+  assert.equal(run.operationExecution.safeTerminal, true)
+  assert.equal(processed.stateName, "Testing")
+})
+
+test("recovers validated operations from a supervisor-completed run after restart", async (t) => {
+  const fixture = await createOperationSchedulerFixture(t)
+  let run = await fixture.store.createRun({
+    projectKey: "work-automation",
+    stage: "part2",
+    issue: fixture.issue,
+  })
+  const agentResultContext = createAgentResultContext({
+    stage: "part2",
+    projectKey: "work-automation",
+    issue: fixture.issue,
+  })
+  const agentResult = completedAgentResult(agentResultContext, "recovery")
+  run = await fixture.store.updateRun(run, {
+    status: "succeeded",
+    completionSource: "reconciled",
+    agentResultContext,
+    agentResult,
+    agentResultValidation: { ok: true, schemaVersion: "1" },
+  })
+  let codexRunCount = 0
+  const scheduler = createScheduler({
+    rootDir: fixture.rootDir,
+    store: fixture.store,
+    configProvider: async () => fixture.config,
+    linearProvider: () => fixture.linear,
+    linearStatusHealthChecker: {
+      async check() {
+        return { ok: true, projects: [] }
+      },
+    },
+    codexRunner: async () => {
+      codexRunCount += 1
+      throw new Error("不应重新启动 Codex")
+    },
+  })
+
+  await scheduler.runOnce("part2")
+  const recovered = await fixture.store.getRunMetadata(run.id)
+  const processed = await fixture.store.getProcessedIssue(
+    "work-automation",
+    "part2",
+    "issue-1174",
+  )
+
+  assert.equal(codexRunCount, 0)
+  assert.deepEqual(fixture.mutations, ["comment.create", "issue.state.update"])
+  assert.equal(recovered.status, "succeeded")
+  assert.equal(recovered.operationExecution.status, "completed")
+  assert.equal(processed.runId, run.id)
+})
+
+test("validates a lost run artifact and executes its operations before starting Codex", async (t) => {
+  const fixture = await createOperationSchedulerFixture(t)
+  let run = await fixture.store.createRun({
+    projectKey: "work-automation",
+    stage: "part2",
+    issue: fixture.issue,
+  })
+  const agentResultContext = createAgentResultContext({
+    stage: "part2",
+    projectKey: "work-automation",
+    issue: fixture.issue,
+  })
+  const agentResult = completedAgentResult(agentResultContext, "lost")
+  run = await fixture.store.updateRun(run, {
+    agentResultContext,
+    createdAt: "2026-08-24T00:00:00.000Z",
+  })
+  await fs.writeFile(run.finalPath, JSON.stringify(agentResult))
+  let codexRunCount = 0
+  const scheduler = createScheduler({
+    rootDir: fixture.rootDir,
+    store: fixture.store,
+    configProvider: async () => fixture.config,
+    linearProvider: () => fixture.linear,
+    linearStatusHealthChecker: {
+      async check() {
+        return { ok: true, projects: [] }
+      },
+    },
+    codexRunner: async () => {
+      codexRunCount += 1
+      throw new Error("不应重新启动 Codex")
+    },
+  })
+
+  await scheduler.runOnce("part2")
+  const recovered = await fixture.store.getRunMetadata(run.id)
+
+  assert.equal(codexRunCount, 0)
+  assert.equal(recovered.status, "succeeded")
+  assert.equal(recovered.operationExecution.status, "completed")
+  assert.deepEqual(fixture.mutations, ["comment.create", "issue.state.update"])
+})
+
+test("keeps retryable writes unprocessed and resumes them without rerunning Codex", async (t) => {
+  const fixture = await createOperationSchedulerFixture(t, { stateFailures: 1 })
+  let codexRunCount = 0
+  const scheduler = createScheduler({
+    rootDir: fixture.rootDir,
+    store: fixture.store,
+    configProvider: async () => fixture.config,
+    linearProvider: () => fixture.linear,
+    linearStatusHealthChecker: {
+      async check() {
+        return { ok: true, projects: [] }
+      },
+    },
+    codexRunner: async ({ run }) => {
+      codexRunCount += 1
+      const agentResult = completedAgentResult(run.agentResultContext, "retry")
+      return {
+        exitCode: 0,
+        status: "succeeded",
+        canceled: false,
+        started: true,
+        startError: null,
+        supervisorPid: 100,
+        codexPid: 101,
+        error: null,
+        agentResult,
+        agentResultValidation: { ok: true, schemaVersion: "1" },
+      }
+    },
+  })
+
+  await scheduler.runOnce("part2")
+  const [pendingRun] = await fixture.store.listRuns(10)
+  const beforeRecovery = await fixture.store.getProcessedIssue(
+    "work-automation",
+    "part2",
+    "issue-1174",
+  )
+  await scheduler.runOnce("part2")
+  const recoveredRun = await fixture.store.getRunMetadata(pendingRun.id)
+  const afterRecovery = await fixture.store.getProcessedIssue(
+    "work-automation",
+    "part2",
+    "issue-1174",
+  )
+
+  assert.equal(beforeRecovery, null)
+  assert.equal(codexRunCount, 1)
+  assert.deepEqual(fixture.mutations, [
+    "comment.create",
+    "issue.state.update",
+    "issue.state.update",
+  ])
+  assert.equal(recoveredRun.status, "succeeded")
+  assert.equal(recoveredRun.operationExecution.status, "completed")
+  assert.equal(afterRecovery.runId, pendingRun.id)
+})
+
+test("does not create a second run while operation recovery is still retryable", async (t) => {
+  const fixture = await createOperationSchedulerFixture(t, { stateFailures: 3 })
+  let codexRunCount = 0
+  const scheduler = createScheduler({
+    rootDir: fixture.rootDir,
+    store: fixture.store,
+    configProvider: async () => fixture.config,
+    linearProvider: () => fixture.linear,
+    linearStatusHealthChecker: {
+      async check() {
+        return { ok: true, projects: [] }
+      },
+    },
+    codexRunner: async ({ run }) => {
+      codexRunCount += 1
+      const agentResult = completedAgentResult(run.agentResultContext, "long-retry")
+      return {
+        exitCode: 0,
+        status: "succeeded",
+        canceled: false,
+        started: true,
+        startError: null,
+        supervisorPid: 100,
+        codexPid: 101,
+        error: null,
+        agentResult,
+        agentResultValidation: { ok: true, schemaVersion: "1" },
+      }
+    },
+  })
+
+  await scheduler.runOnce("part2")
+  await scheduler.runOnce("part2")
+  const runs = await fixture.store.listRuns(10)
+
+  assert.equal(codexRunCount, 1)
+  assert.equal(runs.length, 1)
+  assert.equal(runs[0].operationExecution.status, "retryable")
+  assert.deepEqual(fixture.mutations, [
+    "comment.create",
+    "issue.state.update",
+    "issue.state.update",
+  ])
+})
+
 const config = {
   statuses: {
     inProgress: "In Progress",
@@ -384,3 +630,146 @@ test("lost runs only succeed when their final artifact passes the bound parser",
   assert.equal(wrongTarget.status, "failed")
   assert.equal(wrongTarget.agentResultValidation.error.code, "TARGET_MISMATCH")
 })
+
+async function createOperationSchedulerFixture(t, { stateFailures = 0 } = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-scheduler-write-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+  await fs.mkdir(path.join(rootDir, "prompts"), { recursive: true })
+  await fs.writeFile(
+    path.join(rootDir, "prompts", "part2.global.md"),
+    "实现当前事项，并输出结构化结果。\n",
+  )
+  const states = [
+    { id: "state-schedule", name: "On Schedule", type: "unstarted", archivedAt: null },
+    { id: "state-testing", name: "Testing", type: "completed", archivedAt: null },
+    { id: "state-clarification", name: "Needs Clarification", type: "unstarted", archivedAt: null },
+    { id: "state-blocked", name: "Blocked", type: "canceled", archivedAt: null },
+  ]
+  const issue = {
+    id: "issue-1174",
+    identifier: "LIV-1174",
+    title: "Controlled writes",
+    description: "Execute operations",
+    target: { platform: "primary-issues", issueId: "issue-1174" },
+    priority: 0,
+    priorityLabel: "No priority",
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T01:00:00.000Z",
+    state: { ...states[0] },
+    team: { id: "team-1", key: "LIV", name: "Livehappy-workhappy" },
+    project: { id: "project-1", name: "work-automation" },
+    labels: [],
+    comments: [],
+    complete: true,
+  }
+  const mutations = []
+  let remainingStateFailures = stateFailures
+  const linear = {
+    platform: "primary-issues",
+    async listProjectIssues() {
+      return {
+        project: { id: "project-1", name: "work-automation" },
+        issues: [structuredClone(issue)],
+        complete: true,
+      }
+    },
+    async readIssue() {
+      return structuredClone(issue)
+    },
+    async readProject() {
+      return {
+        id: "project-1",
+        name: "work-automation",
+        teams: [{ id: "team-1", key: "LIV", name: "Livehappy-workhappy" }],
+        complete: true,
+      }
+    },
+    async listTeamWorkflowStates() {
+      return structuredClone(states)
+    },
+  }
+  linear.operationWriter = {
+    platform: "primary-issues",
+    supportedOperations: ["comment.create", "issue.state.update"],
+    async createComment(request, { commentId }) {
+      mutations.push("comment.create")
+      const comment = {
+        id: commentId,
+        body: request.payload.body,
+        createdAt: "2026-08-24T02:00:00.000Z",
+        updatedAt: "2026-08-24T02:00:00.000Z",
+        archivedAt: null,
+      }
+      issue.comments.push(comment)
+      issue.updatedAt = "2026-08-24T02:00:00.000Z"
+      return comment
+    },
+    async updateIssueState(_request, { stateId }) {
+      mutations.push("issue.state.update")
+      if (remainingStateFailures > 0) {
+        remainingStateFailures -= 1
+        throw new IssuePlatformError({
+          code: "RATE_LIMITED",
+          operation: "issue.state.update",
+          retryable: true,
+        })
+      }
+      issue.state = { ...states.find((state) => state.id === stateId) }
+      issue.updatedAt = "2026-08-24T03:00:00.000Z"
+      return structuredClone(issue.state)
+    },
+  }
+  const config = {
+    serverId: "test",
+    linear: { apiKeyEnv: "LINEAR_API_KEY" },
+    codex: {},
+    statuses: baseConfig.statuses,
+    notifications: {},
+    webhook: { enabled: false, urlTemplate: "" },
+    projects: [{
+      key: "work-automation",
+      enabled: true,
+      repoName: "work-automation",
+      linearProjectId: "project-1",
+      path: rootDir,
+      codexCwd: rootDir,
+      branchOrScopePrefix: "main",
+      maxActivePart2: 1,
+      defaultTests: [],
+      extraRules: "无",
+    }],
+  }
+  return {
+    config,
+    issue,
+    linear,
+    mutations,
+    rootDir,
+    store: createRunStore(rootDir),
+  }
+}
+
+function completedAgentResult(context, suffix) {
+  return {
+    schemaVersion: "1",
+    run: {
+      stage: context.stage,
+      projectKey: context.projectKey,
+      parentIssueId: context.parentIssueId,
+      allowedOperations: context.allowedOperations,
+    },
+    target: context.target,
+    operations: [
+      {
+        type: "comment.create",
+        idempotencyKey: `issue-1174:part2:${suffix}:comment`,
+        payload: { body: "Codex Implementation Complete" },
+      },
+      {
+        type: "issue.state.update",
+        idempotencyKey: `issue-1174:part2:${suffix}:state`,
+        payload: { state: "Testing" },
+      },
+    ],
+  }
+}

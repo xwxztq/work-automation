@@ -1,6 +1,6 @@
 # Agent 结构化结果协议 v1
 
-这份协议定义 Work Automation 四个处理阶段与 Codex Agent 之间的结果边界，以及服务内部统一的事项平台接口。调度器会把运行绑定和事项快照交给 Agent，校验并保存最终结果；当前仍不执行 operations 中的事项平台操作。
+这份协议定义 Work Automation 四个处理阶段与 Codex Agent 之间的结果边界，以及服务内部统一的事项平台接口。调度器会把运行绑定和事项快照交给 Agent，校验并保存最终结果，再受控执行已注册的事项平台操作。
 
 ## 结果封装
 
@@ -108,11 +108,15 @@ src/server/agent-result-protocol.mjs 提供两个无副作用入口：
 
 运行时输出 schema 使用严格生成所需的规范形式：`issue.child.create` 同时输出 `title` 和 `description`，`attachment.upload` 同时输出 `filePath` 和 `title`。v1 parser 仍保持上表定义的兼容性，接受省略这些可选字段的外部合法结果。
 
-只有 Codex 进程成功结束且结果校验通过时，run 才能进入 `succeeded`。缺失结果、无效 JSON、未知版本或操作、阶段与项目不一致、父事项或目标不一致、未授权操作都会进入 `failed`。`run.json` 只保存规范化成功结果，或稳定错误码、路径和脱敏消息；原始 `final.txt` 作为运行产物保留，但不会被猜测或执行。
+只有 Codex 进程成功结束、结果校验通过且已注册 operations 通过写后复查时，run 才能进入 `succeeded`。缺失结果、无效 JSON、未知版本或操作、阶段与项目不一致、父事项或目标不一致、未授权操作都会进入 `failed`。`run.json` 只保存规范化成功结果，或稳定错误码、路径和脱敏消息；原始 `final.txt` 作为运行产物保留，但不会被猜测或执行。
 
 Codex 子进程使用受控环境变量集合，并通过 `--ignore-user-config` 阻止加载用户级 MCP 配置。Linear API key、配置的自定义 Linear 凭据变量、Linear MCP token 和未授权环境变量不会传入 supervisor 或 Codex；Codex 自身认证、PATH、临时目录、locale、代理和自定义 CA 等必要变量仍可用。
 
-当前接入只校验和持久化 operations，不调用事项平台适配器。评论、状态、子事项和附件操作需要后续受控执行器处理。
+当前生产路径注册 `comment.create` 和 `issue.state.update`。执行器重新读取目标事项和项目，核对 run 绑定的项目、事项、团队、阶段输入状态和允许的目标状态；整个列表存在未注册操作或非法流转时，不调用任何 Linear mutation。阶段一不允许自动请求从 `Ready for Codex` 进入 `On Schedule`。
+
+每项操作以 platform、projectKey、目标 issue、操作类型和 idempotencyKey 组成持久化作用域，记录在 `.linear-automation/issue-operations`。所有 intent 和顺序在第一项 mutation 前落盘；评论同时预分配 UUID v4。重放或服务重启时，执行器先用完整事项快照核对已生效操作，只恢复尚未确认的操作。评论按预分配 ID 和正文核对，状态按目标 state ID 和名称核对。
+
+速率限制、瞬时网络和分页失败进入可恢复状态，不记录 processed issue 快照，也不重新运行 Codex。权限、归档、目标冲突、非法流转、已返回成功但写后复查未生效，以及无法判断副作用的失败进入人工处理终态。公开 run 和 event 只保存固定错误码与脱敏消息，不包含凭据、请求头或 provider 原始响应。
 
 ## 事项平台接口
 
@@ -132,7 +136,7 @@ Codex 子进程使用受控环境变量集合，并通过 `--ignore-user-config`
 
 项目事项、评论、关系、项目团队和工作流状态必须读完所有游标页后才返回。成功集合显式包含 `complete: true`，因此 `issues: []` 或 `teams: []` 表示完整的空结果；缺失或重复游标、后续页面失败及无效连接数据不会返回部分数组。队列扫描和状态健康检查必须拒绝 `complete: false` 的兼容输入。
 
-src/server/issue-platform.mjs 定义五个固定方法：
+src/server/issue-platform.mjs 定义五种固定操作的通用接口：
 
     const adapter = defineIssuePlatform({
       platform: "primary-issues",
@@ -151,7 +155,7 @@ src/server/issue-platform.mjs 定义五个固定方法：
       payload
     }
 
-读取结果统一为 IssuePlatformIssue，评论、状态、子事项和附件分别返回协议中用 JSDoc 定义的通用对象。平台 SDK 客户端、凭据、原始响应和专属字段由闭包或适配器内部持有，defineIssuePlatform 返回的表面只包含 platform 和五个已绑定方法。
+读取结果统一为 IssuePlatformIssue，评论、状态、子事项和附件分别返回协议中用 JSDoc 定义的通用对象。平台 SDK 客户端、凭据、原始响应和专属字段由闭包或适配器内部持有。Linear 当前通过 `linear-write-adapter.mjs` 注册评论和状态处理器；子事项与附件处理器注册前，执行器会拒绝包含它们的整个操作列表。
 
 平台错误统一为：
 

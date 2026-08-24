@@ -7,7 +7,9 @@ import {
 import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
+import { createLinearWriteAdapter } from "./linear-write-adapter.mjs"
 import { isCodexLinearAuthFailureRun } from "./linear-auth-diagnostics.mjs"
+import { createIssueOperationExecutor } from "./issue-operation-executor.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 import { sendRunWebhook } from "./webhook-notifier.mjs"
 import {
@@ -86,6 +88,11 @@ export function createScheduler({
   async function cleanupCompletedRunReview(run) {
     if (
       !run?.cleanupReviewTempOnCompletion ||
+      (
+        run.status !== "canceled" &&
+        run.operationExecution?.required === true &&
+        run.operationExecution?.safeTerminal !== true
+      ) ||
       !["succeeded", "failed", "canceled"].includes(run.status)
     ) {
       return run
@@ -162,6 +169,12 @@ export function createScheduler({
       return summary
     }
 
+    await recoverPendingOperationRuns({
+      config,
+      linear,
+      projectKeys: new Set(projects.map((project) => project.key)),
+    })
+
     summary.projects = await Promise.all(
       projects.map((project) =>
         runProjectCycle({ config, project, linear, stage, issueId: options.issueId, force: Boolean(options.force) }).catch(async (error) => {
@@ -226,6 +239,146 @@ export function createScheduler({
         ],
       }
     })
+  }
+
+  async function recoverPendingOperationRuns({ config, linear, projectKeys }) {
+    const runs = await store.listRuns(Number.MAX_SAFE_INTEGER)
+    const pending = runs
+      .filter((run) =>
+        operationExecutionIsUnfinished(run) && projectKeys.has(run.projectKey)
+      )
+      .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))
+
+    for (const candidate of pending) {
+      if (
+        activeRunsById.has(candidate.id) ||
+        isRunAlive(candidate) ||
+        (candidate.agentResultValidation?.ok !== true && isWithinStartupGrace(candidate))
+      ) {
+        continue
+      }
+      let persisted = candidate
+      if (!operationExecutionNeedsRecovery(persisted)) {
+        const detail = await store.getRun(persisted.id)
+        const completionPatch = lostRunCompletionPatch(
+          detail?.final || "",
+          detail?.agentResultContext || persisted.agentResultContext,
+        )
+        const validated = completionPatch.agentResultValidation?.ok === true
+        persisted = await store.updateRun(persisted, {
+          ...completionPatch,
+          status: validated ? "running" : completionPatch.status,
+          completionSource: "reconciled",
+          operationExecution: validated
+            ? {
+                ...persisted.operationExecution,
+                status: "pending",
+                safeTerminal: false,
+              }
+            : {
+                ...persisted.operationExecution,
+                status: "not-executable",
+                safeTerminal: true,
+                finishedAt: new Date().toISOString(),
+              },
+        })
+        await logEvent({
+          type: "run-reconciled-missing-process",
+          level: validated ? "info" : "warn",
+          stage: persisted.stage,
+          projectKey: persisted.projectKey,
+          issueIdentifier: persisted.issueIdentifier,
+          runId: persisted.id,
+          message: validated
+            ? "运行进程已结束，结构化结果校验通过并等待事项操作恢复"
+            : persisted.error,
+          data: {
+            agentResultErrorCode:
+              persisted.agentResultValidation?.error?.code || null,
+          },
+        })
+        if (!validated) {
+          const failedProject = config.projects.find(
+            (item) => item.key === persisted.projectKey,
+          )
+          if (failedProject) {
+            await recordProcessedIssue({
+              linear,
+              project: failedProject,
+              issue: {
+                id: persisted.issueId,
+                identifier: persisted.issueIdentifier,
+              },
+              stage: persisted.stage,
+              run: persisted,
+            })
+          }
+          await cleanupCompletedRunReview(persisted)
+          continue
+        }
+      }
+      const project = config.projects.find((item) => item.key === persisted.projectKey)
+      let execution
+      if (!project) {
+        execution = manualOperationExecution("CONFLICT")
+      } else {
+        try {
+          execution = await executeAgentOperations({
+            config,
+            project,
+            linear,
+            run: persisted,
+            agentResult: persisted.agentResult,
+          })
+        } catch {
+          execution = manualOperationExecution("OPERATION_FAILED")
+        }
+      }
+      const run = await store.updateRun(persisted, {
+        ...operationExecutionRunPatch(execution, persisted.operationExecution),
+        completionSource: persisted.completionSource || "reconciled",
+      })
+      await logEvent({
+        type: execution.status === "completed"
+          ? "run-operations-recovered"
+          : execution.status === "retryable"
+            ? "run-operations-retryable"
+            : "run-operations-manual-required",
+        level: execution.status === "completed"
+          ? "info"
+          : execution.status === "retryable"
+            ? "warn"
+            : "error",
+        stage: run.stage,
+        projectKey: run.projectKey,
+        issueIdentifier: run.issueIdentifier,
+        runId: run.id,
+        message: execution.status === "completed"
+          ? `${run.issueIdentifier} 的事项操作已恢复完成`
+          : execution.status === "retryable"
+            ? `${run.issueIdentifier} 的事项操作仍待后续重试`
+            : `${run.issueIdentifier} 的事项操作需要人工处理`,
+        data: {
+          operationStatus: execution.status,
+          operationErrorCode: execution.error?.code || null,
+        },
+      })
+      if (run.operationExecution?.safeTerminal === true) {
+        if (project) {
+          await recordProcessedIssue({
+            linear,
+            project,
+            issue: {
+              id: run.issueId,
+              identifier: run.issueIdentifier,
+            },
+            stage: run.stage,
+            run,
+          })
+        }
+        await cleanupCompletedRunReview(run)
+      }
+    }
   }
 
   async function runProjectCycle({ config, project, linear, stage, issueId, force = false }) {
@@ -622,7 +775,14 @@ export function createScheduler({
         message: `${issue.identifier} 进入阶段一执行`,
         data: { state: issue.state?.name },
       })
-      const result = await executeCodexStage({ config, project, issue, stage: "part1", signal })
+      const result = await executeCodexStage({
+        config,
+        project,
+        linear,
+        issue,
+        stage: "part1",
+        signal,
+      })
       const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "part1", run: result })
       return { issue: issue.identifier, result: finalizedRun.status }
     } catch (error) {
@@ -721,6 +881,7 @@ export function createScheduler({
       const result = await executeCodexStage({
         config,
         project,
+        linear,
         issue,
         stage: "part2",
         signal,
@@ -790,6 +951,7 @@ export function createScheduler({
       const result = await executeCodexStage({
         config,
         project,
+        linear,
         issue,
         stage: "split",
         signal,
@@ -858,6 +1020,7 @@ export function createScheduler({
       const result = await executeCodexStage({
         config,
         project,
+        linear,
         issue,
         stage: "part3",
         signal,
@@ -1026,6 +1189,25 @@ export function createScheduler({
     if (!run?.id || run.status === "already-running" || run.status === "canceled") {
       return run
     }
+    if (
+      run.operationExecution?.required === true &&
+      run.operationExecution?.safeTerminal !== true
+    ) {
+      await logEvent({
+        type: "issue-processed-not-recorded",
+        level: "warn",
+        stage,
+        projectKey: project.key,
+        issueIdentifier: issue.identifier,
+        runId: run.id,
+        message: `${issue.identifier} 的事项操作仍待安全恢复，未记录处理快照`,
+        data: {
+          operationStatus: run.operationExecution?.status || null,
+          retryable: run.operationExecution?.status === "retryable",
+        },
+      })
+      return run
+    }
     if (isCodexStartupFailureRun(run)) {
       await logEvent({
         type: "issue-processed-not-recorded",
@@ -1129,9 +1311,45 @@ export function createScheduler({
     }
   }
 
+  async function executeAgentOperations({ config, project, linear, run, agentResult }) {
+    if (Array.isArray(agentResult?.operations) && agentResult.operations.length === 0) {
+      return {
+        version: 1,
+        status: "completed",
+        safeTerminal: true,
+        operations: [],
+      }
+    }
+    const writer = linear?.operationWriter
+    const platform = agentResult?.target?.platform
+    if (!writer || !platform || linear?.platform !== platform || writer.platform !== platform) {
+      return {
+        version: 1,
+        status: "manual-required",
+        safeTerminal: true,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "事项平台请求不合法。",
+          operation: null,
+          path: "$.target.platform",
+          retryable: false,
+        },
+        operations: [],
+      }
+    }
+    const executor = createIssueOperationExecutor({
+      store,
+      platforms: {
+        [platform]: { reader: linear, writer },
+      },
+    })
+    return executor.execute({ run, project, config, agentResult })
+  }
+
   async function executeCodexStage({
     config,
     project,
+    linear,
     issue,
     stage,
     signal,
@@ -1279,7 +1497,7 @@ export function createScheduler({
         return run
       }
 
-      const succeeded =
+      const agentSucceeded =
         codexResult.status === "succeeded" &&
         codexResult.agentResultValidation?.ok === true
       const startupError = codexResult.started
@@ -1290,7 +1508,7 @@ export function createScheduler({
       active.supervisorPid = codexResult.supervisorPid || active.supervisorPid
       active.codexPid = codexResult.codexPid || active.codexPid
       run = await store.updateRun(run, {
-        status: succeeded ? "succeeded" : "failed",
+        status: agentSucceeded ? "running" : "failed",
         completionSource: "normal",
         exitCode: codexResult.exitCode,
         pid: active.pid,
@@ -1300,30 +1518,65 @@ export function createScheduler({
         startupError,
         agentResult: codexResult.agentResult,
         agentResultValidation: codexResult.agentResultValidation,
-        error: succeeded ? undefined : fallbackError,
+        error: agentSucceeded ? undefined : fallbackError,
         failureKind: codexResult.failureKind,
         failureSummary: codexResult.failureSummary,
         failureAction: codexResult.failureAction,
         retryableFailure: codexResult.retryableFailure,
+        operationExecution: agentSucceeded
+          ? {
+              ...run.operationExecution,
+              status: "pending",
+              safeTerminal: false,
+              startedAt: new Date().toISOString(),
+            }
+          : {
+              ...run.operationExecution,
+              status: "not-executable",
+              safeTerminal: true,
+              finishedAt: new Date().toISOString(),
+            },
       })
+      if (agentSucceeded) {
+        const operationExecution = await executeAgentOperations({
+          config,
+          project,
+          linear,
+          run,
+          agentResult: codexResult.agentResult,
+        })
+        run = await store.updateRun(
+          run,
+          operationExecutionRunPatch(operationExecution, run.operationExecution),
+        )
+      }
+      const succeeded = run.status === "succeeded"
+      const retryingOperations = run.operationExecution?.status === "retryable"
       await logEvent({
-        type: succeeded ? "run-succeeded" : "run-failed",
-        level: succeeded ? "info" : "error",
+        type: succeeded
+          ? "run-succeeded"
+          : retryingOperations
+            ? "run-operation-retryable"
+            : "run-failed",
+        level: succeeded ? "info" : retryingOperations ? "warn" : "error",
         stage,
         projectKey: project.key,
         issueIdentifier: issue.identifier,
         runId: run.id,
         message: succeeded
           ? `${issue.identifier} ${stageLabel(stage)} 成功`
-          : `${issue.identifier} ${stageLabel(stage)} ${startupError ? `启动失败: ${startupError}` : `失败: ${fallbackError}`}`,
+          : retryingOperations
+            ? `${issue.identifier} ${stageLabel(stage)} 的事项操作将在后续扫描恢复`
+            : `${issue.identifier} ${stageLabel(stage)} ${startupError ? `启动失败: ${startupError}` : `失败: ${run.error || fallbackError}`}`,
         data: {
           exitCode: codexResult.exitCode,
           runDir: run.dir,
           codexStarted: codexResult.started,
           startupError,
-          failureKind: codexResult.failureKind,
-          retryableFailure: codexResult.retryableFailure,
-          action: codexResult.failureAction,
+          failureKind: run.failureKind,
+          retryableFailure: run.retryableFailure,
+          action: run.failureAction,
+          operationStatus: run.operationExecution?.status || null,
           agentResultErrorCode:
             codexResult.agentResultValidation?.error?.code || null,
         },
@@ -1620,6 +1873,10 @@ export function createScheduler({
       if (run.status !== "running") {
         continue
       }
+      if (operationExecutionNeedsRecovery(run)) {
+        active.push(run)
+        continue
+      }
       if (activeRunsById.has(run.id) || isWithinStartupGrace(run)) {
         active.push(run)
         continue
@@ -1628,7 +1885,10 @@ export function createScheduler({
         active.push(run)
         continue
       }
-      await markRunLost(run)
+      const reconciled = await markRunLost(run)
+      if (operationExecutionNeedsRecovery(reconciled)) {
+        active.push(reconciled)
+      }
     }
     return active
   }
@@ -1639,18 +1899,42 @@ export function createScheduler({
       detail?.final || "",
       detail?.agentResultContext || run.agentResultContext,
     )
-    const next = await store.updateRun(run, completionPatch)
+    const validated = completionPatch.agentResultValidation?.ok === true
+    const requiresOperationExecution = run.operationExecution?.required === true
+    const next = await store.updateRun(run, {
+      ...completionPatch,
+      ...(requiresOperationExecution
+        ? {
+            status: validated ? "running" : completionPatch.status,
+            operationExecution: validated
+              ? {
+                  ...run.operationExecution,
+                  status: "pending",
+                  safeTerminal: false,
+                }
+              : {
+                  ...run.operationExecution,
+                  status: "not-executable",
+                  safeTerminal: true,
+                  finishedAt: new Date().toISOString(),
+                },
+          }
+        : {}),
+    })
+    const awaitingOperationRecovery = operationExecutionNeedsRecovery(next)
     const succeeded = next.status === "succeeded"
     await logEvent({
       type: "run-reconciled-missing-process",
-      level: succeeded ? "info" : "warn",
+      level: succeeded || awaitingOperationRecovery ? "info" : "warn",
       stage: run.stage,
       projectKey: run.projectKey,
       issueIdentifier: run.issueIdentifier,
       runId: run.id,
-      message: succeeded
-        ? "运行进程已结束，结构化结果校验通过并标记成功"
-        : next.error,
+      message: awaitingOperationRecovery
+        ? "运行进程已结束，结构化结果校验通过并等待事项操作恢复"
+        : succeeded
+          ? "运行进程已结束，结构化结果校验通过并标记成功"
+          : next.error,
       data: {
         pid: run.pid || null,
         supervisorPid: run.supervisorPid || null,
@@ -1660,6 +1944,7 @@ export function createScheduler({
       },
     })
     await cleanupCompletedRunReview(next)
+    return next
   }
 
   async function getPersistedRun(runId) {
@@ -1734,6 +2019,86 @@ export function lostRunCompletionPatch(finalText, context) {
   }
 }
 
+export function operationExecutionRunPatch(execution, previous = {}) {
+  const now = new Date().toISOString()
+  const operationExecution = {
+    ...previous,
+    ...execution,
+    required: true,
+    updatedAt: now,
+    ...(execution?.safeTerminal ? { finishedAt: now } : {}),
+  }
+  if (execution?.status === "completed") {
+    return {
+      status: "succeeded",
+      operationExecution,
+      error: undefined,
+      failureKind: undefined,
+      failureSummary: undefined,
+      failureAction: undefined,
+      retryableFailure: undefined,
+    }
+  }
+  if (execution?.status === "retryable") {
+    return {
+      status: "running",
+      operationExecution,
+      error: execution.error?.message || "事项平台操作暂时失败。",
+      failureKind: "issue-operation-retryable",
+      failureSummary: "事项平台操作将在后续扫描恢复",
+      failureAction: "保留当前 run 和幂等记录，等待服务自动重试。",
+      retryableFailure: true,
+    }
+  }
+  return {
+    status: "failed",
+    operationExecution,
+    error: execution?.error?.message || "事项平台操作需要人工处理。",
+    failureKind: "issue-operation-manual-required",
+    failureSummary: "事项平台操作需要人工处理",
+    failureAction: "检查 run 中的脱敏操作结果，并在 Linear 中核对目标事项。",
+    retryableFailure: false,
+  }
+}
+
+function operationExecutionNeedsRecovery(run) {
+  return (
+    run?.operationExecution?.required === true &&
+    run.operationExecution.safeTerminal !== true &&
+    run.status !== "canceled" &&
+    run.agentResultValidation?.ok === true &&
+    Boolean(run.agentResult)
+  )
+}
+
+function operationExecutionIsUnfinished(run) {
+  return (
+    run?.operationExecution?.required === true &&
+    run.operationExecution.safeTerminal !== true &&
+    run.status !== "canceled"
+  )
+}
+
+function manualOperationExecution(code) {
+  const messages = {
+    CONFLICT: "事项平台操作发生冲突。",
+    OPERATION_FAILED: "事项平台操作失败。",
+  }
+  return {
+    version: 1,
+    status: "manual-required",
+    safeTerminal: true,
+    error: {
+      code,
+      message: messages[code] || messages.OPERATION_FAILED,
+      operation: null,
+      path: "$",
+      retryable: false,
+    },
+    operations: [],
+  }
+}
+
 async function listCompleteProjectIssues(linear, projectId) {
   const result = await linear.listProjectIssues(projectId)
   rejectIncompleteLinearRead(result)
@@ -1773,7 +2138,12 @@ function getLinear(config) {
   if (!apiKey) {
     return null
   }
-  return createLinearReadAdapter(createLinearClient(apiKey))
+  const client = createLinearClient(apiKey)
+  const reader = createLinearReadAdapter(client)
+  return Object.freeze({
+    ...reader,
+    operationWriter: createLinearWriteAdapter(client),
+  })
 }
 
 function abortRun(controller, reason) {

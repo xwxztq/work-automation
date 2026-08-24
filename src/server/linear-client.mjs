@@ -119,48 +119,6 @@ export function createLinearClient(apiKey) {
     return readIssue(issueId)
   }
 
-  async function getWorkflowStateId(teamId, name) {
-    const states = await listTeamWorkflowStates(teamId)
-    const match = states.find((state) => state.name === name)
-    if (!match) {
-      throw new Error(`未找到团队 ${teamId} 的工作流状态: ${name}`)
-    }
-    return match.id
-  }
-
-  async function updateIssueState(issue, stateName) {
-    const stateId = await getWorkflowStateId(issue.team.id, stateName)
-    const mutation = `
-      mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
-        issueUpdate(id: $id, input: $input) {
-          success
-          issue { id identifier state { id name } }
-        }
-      }
-    `
-    const data = await graphql(mutation, { id: issue.id, input: { stateId } })
-    if (!data.issueUpdate.success) {
-      throw new Error(`无法将 ${issue.identifier} 移动到 ${stateName}`)
-    }
-    return data.issueUpdate.issue
-  }
-
-  async function createComment(issue, body) {
-    const mutation = `
-      mutation CommentCreate($input: CommentCreateInput!) {
-        commentCreate(input: $input) {
-          success
-          comment { id createdAt }
-        }
-      }
-    `
-    const data = await graphql(mutation, { input: { issueId: issue.id, body } })
-    if (!data.commentCreate.success) {
-      throw new Error(`无法评论 ${issue.identifier}`)
-    }
-    return data.commentCreate.comment
-  }
-
   return {
     graphql,
     listProjects,
@@ -171,8 +129,6 @@ export function createLinearClient(apiKey) {
     listTeamWorkflowStates,
     readIssue,
     getIssue,
-    updateIssueState,
-    createComment,
   }
 }
 
