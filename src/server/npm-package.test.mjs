@@ -61,12 +61,19 @@ test("npm publish workflow only releases new versions pushed to main", () => {
 })
 
 test("npm publish workflow uses the pinned OIDC toolchain without publish secrets", () => {
+  const pnpmSetupStep = npmPublishWorkflow
+    .split(/^      - name: /m)
+    .find((step) => step.startsWith("Set up pnpm\n"))
+
+  assert.ok(pnpmSetupStep, "workflow 应包含 pnpm setup 步骤")
   assert.match(npmPublishWorkflow, /uses: actions\/checkout@v6/)
   assert.match(npmPublishWorkflow, /uses: actions\/setup-node@v6/)
   assert.match(npmPublishWorkflow, /node-version: "24\.19\.0"/)
   assert.match(npmPublishWorkflow, /test "\$\(npm --version\)" = "11\.17\.0"/)
-  assert.match(npmPublishWorkflow, /uses: pnpm\/action-setup@v4/)
-  assert.match(npmPublishWorkflow, /version: "11\.2\.2"/)
+  assert.match(pnpmSetupStep, /uses: pnpm\/action-setup@v4/)
+  assert.match(pnpmSetupStep, /^\s+run_install: false$/m)
+  assert.match(packageMetadata.packageManager, /^pnpm@11\.2\.2\+sha512\.[a-f0-9]+$/)
+  assert.doesNotMatch(pnpmSetupStep, /^\s+version:/m)
   assert.doesNotMatch(
     npmPublishWorkflow,
     /NPM_TOKEN|NODE_AUTH_TOKEN|npm password|one-time password|\bOTP\b|\bTOTP\b/i,
