@@ -23,7 +23,30 @@ const ISSUE_STATE_UPDATE_MUTATION = `
   }
 `
 
+const CHILD_ISSUE_CREATE_MUTATION = `
+  mutation LinearWriteChildIssueCreate($input: IssueCreateInput!) {
+    issueCreate(input: $input) {
+      success
+      issue {
+        id
+        identifier
+        title
+        description
+        url
+        priority
+        priorityLabel
+        archivedAt
+        state { id name type archivedAt }
+        team { id key name archivedAt }
+        project { id name url archivedAt }
+        parent { id identifier }
+      }
+    }
+  }
+`
+
 export const LINEAR_WRITE_SUPPORTED_OPERATIONS = Object.freeze([
+  ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE,
   ISSUE_PLATFORM_OPERATION.CREATE_COMMENT,
   ISSUE_PLATFORM_OPERATION.UPDATE_ISSUE_STATE,
 ])
@@ -79,9 +102,53 @@ export function createLinearWriteAdapter(linearClient) {
     }
   }
 
+  async function createChildIssue(request, {
+    childIssueId,
+    teamId,
+    projectId,
+    priority,
+  } = {}) {
+    validateRequest(request, ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE)
+    const normalizedChildIssueId = requireValue(childIssueId, "$.idempotencyKey")
+    const normalizedTeamId = requireValue(teamId, "$.target.issueId")
+    const normalizedProjectId = requireValue(projectId, "$.target.issueId")
+    const normalizedTitle = requireValue(request.payload.title, "$.payload.title")
+    const normalizedDescription = requireText(
+      request.payload.description,
+      "$.payload.description",
+    )
+    const normalizedPriority = requirePriority(priority)
+    try {
+      const data = await linearClient.graphql(CHILD_ISSUE_CREATE_MUTATION, {
+        input: {
+          id: normalizedChildIssueId,
+          parentId: request.target.issueId,
+          teamId: normalizedTeamId,
+          projectId: normalizedProjectId,
+          priority: normalizedPriority,
+          title: normalizedTitle,
+          description: normalizedDescription,
+        },
+      })
+      if (!data?.issueCreate?.success || !data.issueCreate.issue) {
+        throw new IssuePlatformError({
+          code: ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED,
+          operation: ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE,
+        })
+      }
+      return normalizeIssue(data.issueCreate.issue)
+    } catch (error) {
+      throw classifyLinearWriteError(
+        error,
+        ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE,
+      )
+    }
+  }
+
   return Object.freeze({
     platform: LINEAR_ISSUE_PLATFORM,
     supportedOperations: LINEAR_WRITE_SUPPORTED_OPERATIONS,
+    createChildIssue,
     createComment,
     updateIssueState,
   })
@@ -113,6 +180,28 @@ function requireValue(value, path) {
   return normalized
 }
 
+function requirePriority(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 4) {
+    throw new IssuePlatformError({
+      code: ISSUE_PLATFORM_ERROR_CODE.INVALID_REQUEST,
+      operation: ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE,
+      path: "$.payload",
+    })
+  }
+  return value
+}
+
+function requireText(value, path) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new IssuePlatformError({
+      code: ISSUE_PLATFORM_ERROR_CODE.INVALID_REQUEST,
+      operation: ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE,
+      path,
+    })
+  }
+  return value
+}
+
 function normalizeComment(comment) {
   return {
     id: comment.id,
@@ -129,6 +218,49 @@ function normalizeState(state) {
     name: state.name || "",
     type: state.type || "",
     archivedAt: state.archivedAt || null,
+  }
+}
+
+function normalizeIssue(issue) {
+  return {
+    id: issue.id,
+    identifier: issue.identifier || "",
+    target: {
+      platform: LINEAR_ISSUE_PLATFORM,
+      issueId: issue.id,
+    },
+    title: issue.title || "",
+    description: issue.description ?? null,
+    url: issue.url || null,
+    priority: issue.priority ?? null,
+    priorityLabel: issue.priorityLabel || "",
+    archivedAt: issue.archivedAt || null,
+    state: normalizeState(issue.state),
+    team: issue.team
+      ? {
+          id: issue.team.id,
+          key: issue.team.key || "",
+          name: issue.team.name || "",
+          archivedAt: issue.team.archivedAt || null,
+        }
+      : null,
+    project: issue.project
+      ? {
+          id: issue.project.id,
+          name: issue.project.name || "",
+          url: issue.project.url || null,
+          archivedAt: issue.project.archivedAt || null,
+        }
+      : null,
+    parent: issue.parent
+      ? { id: issue.parent.id, identifier: issue.parent.identifier || "" }
+      : null,
+    parentIssueId: issue.parent?.id || null,
+    comments: [],
+    relations: [],
+    attachments: [],
+    labels: [],
+    complete: true,
   }
 }
 

@@ -57,7 +57,7 @@ Agent 最终输出必须是单个 JSON 文档，不能带 Markdown 代码块或�
 | issue.read | 读取目标事项 | 可选 include，值只允许 comments、attachments、relations |
 | comment.create | 新增评论 | 必填非空 body |
 | issue.state.update | 更新状态 | 必填非空 state；适配器负责映射平台状态字段 |
-| issue.child.create | 在目标事项下创建子事项 | 必填 title，可选 description |
+| issue.child.create | 在目标事项下创建子事项 | 必填 title；split 运行时还要求非空 description |
 | attachment.upload | 把本地文件附加到目标事项 | 必填 filePath，可选 filename、contentType、title |
 
 操作 payload 只描述业务意图。平台 SDK 类型、专属状态 ID、上传会话、认证头和 MCP 配置都留在适配器或执行器内部，不属于 Agent 输出。
@@ -112,11 +112,11 @@ src/server/agent-result-protocol.mjs 提供两个无副作用入口：
 
 Codex 子进程使用受控环境变量集合，并通过 `--ignore-user-config` 阻止加载用户级 MCP 配置。Linear API key、配置的自定义 Linear 凭据变量、Linear MCP token 和未授权环境变量不会传入 supervisor 或 Codex；Codex 自身认证、PATH、临时目录、locale、代理和自定义 CA 等必要变量仍可用。
 
-当前生产路径注册 `comment.create` 和 `issue.state.update`。执行器重新读取目标事项和项目，核对 run 绑定的项目、事项、团队、阶段输入状态和允许的目标状态；整个列表存在未注册操作或非法流转时，不调用任何 Linear mutation。阶段一不允许自动请求从 `Ready for Codex` 进入 `On Schedule`。
+当前生产路径注册 `issue.child.create`、`comment.create` 和 `issue.state.update`。执行器重新读取目标事项和项目，核对 run 绑定的项目、事项、团队、阶段输入状态和允许的目标状态；整个列表存在未注册操作或非法流转时，不调用任何 Linear mutation。阶段一不允许自动请求从 `Ready for Codex` 进入 `On Schedule`。子事项批次只允许出现在 split 阶段，所有创建操作必须排在评论和状态操作之前，覆盖评论必须与每个子事项的 idempotencyKey 一一对应，批次目标状态固定为配置的 `In Progress`。
 
-每项操作以 platform、projectKey、目标 issue、操作类型和 idempotencyKey 组成持久化作用域，记录在 `.linear-automation/issue-operations`。所有 intent 和顺序在第一项 mutation 前落盘；评论同时预分配 UUID v4。重放或服务重启时，执行器先用完整事项快照核对已生效操作，只恢复尚未确认的操作。评论按预分配 ID 和正文核对，状态按目标 state ID 和名称核对。
+每项操作以 platform、projectKey、目标 issue、操作类型和 idempotencyKey 组成持久化作用域，记录在 `.linear-automation/issue-operations`。所有 intent 和顺序在第一项 mutation 前落盘；评论和子事项同时预分配 UUID v4。子事项 intent 还记录父事项、团队、项目、优先级及规范化请求指纹。重放或服务重启时，执行器先用完整事项快照核对已生效操作，只恢复尚未确认的操作。评论按预分配 ID 和正文核对，状态按目标 state ID 和名称核对；子事项按预分配 ID 读取，并逐项核对 parent、team、project、priority、title 和 description。执行结果为已核对的子事项返回并持久化真实 issue ID，部分批次失败时保留前面各项的 verified 结果。
 
-速率限制、瞬时网络和分页失败进入可恢复状态，不记录 processed issue 快照，也不重新运行 Codex。权限、归档、目标冲突、非法流转、已返回成功但写后复查未生效，以及无法判断副作用的失败进入人工处理终态。公开 run 和 event 只保存固定错误码与脱敏消息，不包含凭据、请求头或 provider 原始响应。
+速率限制、瞬时网络和分页失败进入可恢复状态，不记录 processed issue 快照，也不重新运行 Codex。子事项写入响应丢失时，恢复路径先按预分配 ID 查询，已存在且字段一致则直接标记 verified；不存在时仍使用同一个 ID 安全重试。权限、归档、目标冲突、非法流转、写后字段不一致，以及无法判断副作用的失败进入人工处理终态。公开 run 和 event 只保存固定错误码与脱敏消息，不包含凭据、请求头或 provider 原始响应。
 
 ## 事项平台接口
 
@@ -155,7 +155,7 @@ src/server/issue-platform.mjs 定义五种固定操作的通用接口：
       payload
     }
 
-读取结果统一为 IssuePlatformIssue，评论、状态、子事项和附件分别返回协议中用 JSDoc 定义的通用对象。平台 SDK 客户端、凭据、原始响应和专属字段由闭包或适配器内部持有。Linear 当前通过 `linear-write-adapter.mjs` 注册评论和状态处理器；子事项与附件处理器注册前，执行器会拒绝包含它们的整个操作列表。
+读取结果统一为 IssuePlatformIssue，评论、状态、子事项和附件分别返回协议中用 JSDoc 定义的通用对象。平台 SDK 客户端、凭据、原始响应和专属字段由闭包或适配器内部持有。Linear 当前通过 `linear-write-adapter.mjs` 注册子事项、评论和状态处理器；附件处理器注册前，执行器会拒绝包含该操作的整个操作列表。
 
 平台错误统一为：
 

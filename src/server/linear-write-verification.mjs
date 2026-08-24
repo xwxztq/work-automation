@@ -23,5 +23,27 @@ export function verifyLinearOperation({ operation, intent, issue } = {}) {
     }
     return { status: "verified", resourceId }
   }
+  if (operation?.type === "issue.child.create") {
+    const resourceId = String(intent?.childIssueId || "").trim()
+    if (!issue) {
+      return { status: "not-applied", resourceId }
+    }
+    if (String(issue.id || "").trim() !== resourceId) {
+      return { status: "conflict", resourceId }
+    }
+    const matches =
+      resourceId &&
+      issue.parentIssueId === intent?.parentIssueId &&
+      issue.team?.id === intent?.teamId &&
+      issue.project?.id === intent?.projectId &&
+      Number.isInteger(issue.priority) &&
+      issue.priority === intent?.priority &&
+      issue.title === operation.payload?.title &&
+      issue.description === operation.payload?.description
+    return {
+      status: matches ? "verified" : "conflict",
+      resourceId,
+    }
+  }
   return { status: "unsupported", resourceId: null }
 }

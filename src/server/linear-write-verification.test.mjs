@@ -72,3 +72,43 @@ test("verifies a state update by stable ID and name", () => {
     { status: "conflict", resourceId: "state-testing" },
   )
 })
+
+test("verifies a child issue against its persisted ID and inherited parent fields", () => {
+  const operation = {
+    type: "issue.child.create",
+    payload: { title: "Child scope", description: "Bound implementation scope" },
+  }
+  const intent = {
+    childIssueId: "child-stable-id",
+    parentIssueId: "issue-1175",
+    teamId: "team-liv",
+    projectId: "project-work-automation",
+    priority: 2,
+  }
+  const issue = {
+    id: "child-stable-id",
+    parentIssueId: "issue-1175",
+    team: { id: "team-liv" },
+    project: { id: "project-work-automation" },
+    priority: 2,
+    title: "Child scope",
+    description: "Bound implementation scope",
+  }
+
+  assert.deepEqual(
+    verifyLinearOperation({ operation, intent, issue }),
+    { status: "verified", resourceId: "child-stable-id" },
+  )
+  assert.deepEqual(
+    verifyLinearOperation({ operation, intent, issue: null }),
+    { status: "not-applied", resourceId: "child-stable-id" },
+  )
+  assert.deepEqual(
+    verifyLinearOperation({
+      operation,
+      intent,
+      issue: { ...issue, project: { id: "other-project" } },
+    }),
+    { status: "conflict", resourceId: "child-stable-id" },
+  )
+})

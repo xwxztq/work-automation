@@ -11,7 +11,7 @@
 - **阶段二**：扫描 `On Schedule`，Codex 实现代码、测试并提交，再输出完成或阻塞操作；按 Linear 优先级（Urgent → Low）排序执行。
 - **阶段三**：扫描 `Testing`，Codex 做 Auto Review、生成产物，并输出附件、评论和状态操作。
 
-服务端读取候选事项并提供不可变快照，启动独立 Codex supervisor，再按 [Agent 结构化结果协议](docs/agent-result-protocol.md) 校验和保存 `final.txt`。Codex 子进程不接收 Linear API key，也不加载用户级 Linear MCP 配置。校验通过后，服务端会受控执行 `comment.create` 和 `issue.state.update`，并在写入前检查 run、项目、事项、团队、阶段和状态流转，写入后重新读取 Linear 核对稳定 ID。`issue.child.create` 和 `attachment.upload` 尚未注册执行器；结果中出现这两类操作时，整组 operations 会在任何 Linear mutation 前失败关闭。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
+服务端读取候选事项并提供不可变快照，启动独立 Codex supervisor，再按 [Agent 结构化结果协议](docs/agent-result-protocol.md) 校验和保存 `final.txt`。Codex 子进程不接收 Linear API key，也不加载用户级 Linear MCP 配置。校验通过后，服务端会受控执行 `issue.child.create`、`comment.create` 和 `issue.state.update`，并在写入前检查 run、项目、事项、团队、阶段和状态流转，写入后重新读取 Linear 核对稳定 ID。子事项只能由 split 阶段创建，固定挂在当前 target 下，并继承执行前读取的团队、项目和优先级。`attachment.upload` 尚未注册执行器；结果中出现该操作时，整组 operations 会在任何 Linear mutation 前失败关闭。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
 
 Linear 读取由服务端适配器使用集中保管的凭据完成。项目事项、评论、关系、项目团队和工作流状态按游标读到末页，再映射为平台无关快照；空集合标记为完整结果，分页中断、权限不足、目标不存在、归档、速率限制和瞬时网络失败会阻止使用部分数据启动 Codex。
 
@@ -19,7 +19,7 @@ Linear 读取由服务端适配器使用集中保管的凭据完成。项目事�
 
 - 状态流转不全自动：`Ready for Codex → On Schedule`、`Too Large → Needs Splitting` 需人工移动；不会自动移到 `Done`。
 - 已处理 issue 的快照 MD5 存在 `.linear-automation/processed-issues.json`，无变化的 issue 自动跳过；手动指定 issue 不受跳过影响，但仍检查状态边界。
-- 运行日志在 `.linear-automation/runs`，逐操作幂等记录在 `.linear-automation/issue-operations`，全局事件日志在 `.linear-automation/events.jsonl`。评论 UUID 会在 mutation 前落盘；服务重启后先按完整 Linear 快照恢复未完成操作，不会重新创建已确认评论或重复执行已生效状态。
+- 运行日志在 `.linear-automation/runs`，逐操作幂等记录在 `.linear-automation/issue-operations`，全局事件日志在 `.linear-automation/events.jsonl`。评论和子事项 UUID 会在 mutation 前落盘；子事项记录还包含规范化请求指纹。服务重启后先按完整 Linear 快照恢复未完成操作，不会重新创建已确认评论、子事项或重复执行已生效状态。
 - 只有 operations 全部完成，或进入不会自动重试的人工处理终态后，服务才记录 processed issue 快照。速率限制、瞬时网络和分页失败保留原 run 等待后续扫描恢复，不会重新启动 Codex。
 
 ## Auto Review 协议
