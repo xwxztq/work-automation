@@ -95,7 +95,6 @@ export function buildRunPromptContext(rootDir, run) {
   }
   const reviewDir = path.join(run.dir, "review")
   return {
-    AUTOMATION_ROOT_DIR: rootDir,
     CURRENT_RUN_ID: run.id,
     CURRENT_RUN_DIR: run.dir,
     CURRENT_RUN_DIR_RELATIVE: toPortableRelativePath(rootDir, run.dir),

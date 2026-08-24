@@ -12,7 +12,6 @@
 - 通过状态: {{STATUS_READY_FOR_REVIEW}}
 - 退回状态: {{STATUS_SCHEDULE}}
 - 阻塞状态: {{STATUS_BLOCKED}}
-- Work Automation 根目录: {{AUTOMATION_ROOT_DIR}}
 - 当前 run ID: {{CURRENT_RUN_ID}}
 - 当前 run 目录: {{CURRENT_RUN_DIR}}
 - 当前 review 目录: {{CURRENT_REVIEW_DIR}}

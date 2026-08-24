@@ -1243,6 +1243,7 @@ export function createScheduler({
         project,
         stage,
         run,
+        runtimeRoot: rootDir,
         prompt,
         store,
         signal: runController.signal,

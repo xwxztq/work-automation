@@ -32,6 +32,7 @@ test("buildRunPromptContext exposes absolute and relative part3 paths", () => {
     ".linear-automation/runs/run-123/review",
   )
   assert.match(context.CURRENT_REVIEW_DIR || "", /run-123\/review$/)
+  assert.equal(context.AUTOMATION_ROOT_DIR, undefined)
 })
 
 test("buildIssueReviewPromptContext extracts latest implementation comment and ignores automation followups", () => {
@@ -255,6 +256,7 @@ test("part3 prompt keeps inline evidence and queues attachment operations", asyn
   assert.match(prompt, /不能只给路径/u)
   assert.match(prompt, /attachment\.upload/u)
   assert.match(prompt, /不要伪造链接或声称上传成功/u)
+  assert.doesNotMatch(prompt, /Work Automation 根目录/u)
 })
 
 test("split prompt queues child creation and forbids fabricated child IDs", async () => {

@@ -23,7 +23,7 @@ Linear 读取由服务端适配器使用集中保管的凭据完成。项目事�
 
 ## Auto Review 协议
 
-阶段三的输入、判定、基线和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。`part3Sandbox` 默认 `danger-full-access`，以便跨仓库把产物写回当前 run 目录。提示词模板在 `prompts/part1.global.md`、`split.global.md`、`part2.global.md`、`part3.global.md`。
+阶段三的输入、判定、基线和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。阶段三只读业务仓库，并由受控 permission profile 单独开放当前 run 和 review 目录；不再使用 `danger-full-access`。提示词模板在 `prompts/part1.global.md`、`split.global.md`、`part2.global.md`、`part3.global.md`。
 
 ## npm 安装（推荐）
 
@@ -84,7 +84,7 @@ workflow 固定使用 Node 24.19.0、npm 11.17.0 和仓库声明的 pnpm 11.2.2�
 
 2. 在 `.env.local` 填写 `LINEAR_API_KEY`（不要写入 `config.local.json`；服务按 `.env.local` → `.env` 顺序加载，不覆盖已有环境变量）。
 
-3. 确认 Codex CLI 支持 `exec --ignore-user-config`、`--output-schema` 和 `--output-last-message`。自动化运行不会加载用户 `config.toml`，不需要配置 Linear MCP。
+3. 确认 Codex CLI 版本不低于 0.138.0，并支持 `sandbox --permission-profile`、`exec --ignore-user-config`、`--output-schema` 和 `--output-last-message`。自动化运行不会加载用户 `config.toml`，不需要配置 Linear MCP；不支持 permission profile 时会失败关闭，不会退回无文件边界的执行方式。
 
 4. 在 Linear 工作流中确认以下状态名，并与 `config.local.json` 的 `statuses` 保持一致：
    `Todo`、`Needs Clarification`、`Too Large`、`Needs Splitting`、`Blocked`、`Ready for Codex`、`On Schedule`、`In Progress`、`Testing`、`Ready for Review`。
@@ -139,6 +139,6 @@ bin/wauto uninstall
 
 ## 配置
 
-界面可配置：服务 ID、监听地址、端口、轮询间隔、Linear 密钥环境变量名（真实密钥只在 env 中）、Codex 命令与 sandbox（阶段一/拆分 `read-only`，阶段二/三 `danger-full-access`）、工作流状态名、各阶段成功/失败通知（系统通知 + 可选 Webhook，支持 `{IssueID}` 等 URL 模板变量）、项目与提示词。
+界面可配置：服务 ID、监听地址、端口、轮询间隔、Linear 密钥环境变量名（真实密钥只在 env 中）、Codex 命令与阶段权限（阶段一/拆分 `read-only`，阶段二/三 `workspace-write`）、工作流状态名、各阶段成功/失败通知（系统通知 + 可选 Webhook，支持 `{IssueID}` 等 URL 模板变量）、项目与提示词。服务会把旧配置中的 `danger-full-access` 收敛为对应阶段的安全权限。Codex 及其命令由进程外层 permission profile 统一约束：默认拒绝全盘读取，只开放业务仓库、必要工具链、临时 Codex HOME 和当前 run；临时 HOME 只复制 Codex 自身认证文件，结束后删除。阶段二可写业务工作区，阶段三只可写当前 review 目录，工作区内的 `.env` 文件始终不可读。macOS 不支持在外层 Seatbelt 中再次应用内层 Seatbelt，因此 `codex exec` 使用官方为外部沙箱准备的 bypass 参数；文件权限仍由外层 profile 强制执行。
 
 执行事件在全局日志页查看，提示词在设置页维护。`config.local.json`、`.env.local`、`.env` 已被 gitignore，接口不返回密钥明文。
