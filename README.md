@@ -13,6 +13,8 @@
 
 服务端读取候选事项并提供不可变快照，启动独立 Codex supervisor，再按 [Agent 结构化结果协议](docs/agent-result-protocol.md) 校验和保存 `final.txt`。Codex 子进程不接收 Linear API key，也不加载用户级 Linear MCP 配置。当前版本尚不执行结果中的 operations；评论、状态、子事项和附件需要后续受控执行器接入。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
 
+Linear 读取由服务端适配器使用集中保管的凭据完成。项目事项、评论、关系、项目团队和工作流状态按游标读到末页，再映射为平台无关快照；空集合标记为完整结果，分页中断、权限不足、目标不存在、归档、速率限制和瞬时网络失败会阻止使用部分数据启动 Codex。
+
 其他行为要点：
 
 - 状态流转不全自动：`Ready for Codex → On Schedule`、`Too Large → Needs Splitting` 需人工移动；不会自动移到 `Done`。

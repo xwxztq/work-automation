@@ -5,6 +5,7 @@ import {
   ISSUE_PLATFORM_ERROR_CODE,
   ISSUE_PLATFORM_OPERATION,
   IssuePlatformError,
+  defineIssueReadAdapter,
   defineIssuePlatform,
   normalizeIssuePlatformError,
 } from "./issue-platform.mjs"
@@ -38,6 +39,31 @@ test("defines a platform-independent adapter with bound methods", async () => {
     "uploadAttachment",
   ])
   assert.equal(Object.isFrozen(platform), true)
+})
+
+test("defines a platform-independent read adapter for queue and health data", async () => {
+  const readAdapter = defineIssueReadAdapter({
+    platform: "primary-issues",
+    prefix: "bound",
+    async readIssue() { return this.prefix },
+    async readProject() {},
+    async listProjectIssues() {},
+    async listProjectWorkflowStates() {},
+    async listProjectsWorkflowStates() {},
+    async listTeamWorkflowStates() {},
+  })
+
+  assert.equal(await readAdapter.readIssue("issue-1"), "bound")
+  assert.deepEqual(Object.keys(readAdapter), [
+    "platform",
+    "readIssue",
+    "readProject",
+    "listProjectIssues",
+    "listProjectWorkflowStates",
+    "listProjectsWorkflowStates",
+    "listTeamWorkflowStates",
+  ])
+  assert.equal(Object.isFrozen(readAdapter), true)
 })
 
 test("rejects adapters that omit a required operation", () => {
@@ -81,6 +107,33 @@ test("defines a safe public message for every platform error code", () => {
     assert.equal(Boolean(error.message), true)
     assert.equal(JSON.stringify(error).includes(privateValue), false)
   }
+})
+
+test("keeps archived targets and interrupted pagination distinguishable", () => {
+  assert.deepEqual(
+    new IssuePlatformError({ code: ISSUE_PLATFORM_ERROR_CODE.ARCHIVED }).toJSON(),
+    {
+      code: "ARCHIVED",
+      message: "事项平台目标已归档。",
+      operation: null,
+      path: "$",
+      retryable: false,
+    },
+  )
+  assert.deepEqual(
+    new IssuePlatformError({
+      code: ISSUE_PLATFORM_ERROR_CODE.PAGINATION_INTERRUPTED,
+      operation: ISSUE_PLATFORM_OPERATION.READ_ISSUE,
+      retryable: true,
+    }).toJSON(),
+    {
+      code: "PAGINATION_INTERRUPTED",
+      message: "事项平台分页读取未完成。",
+      operation: "issue.read",
+      path: "$",
+      retryable: true,
+    },
+  )
 })
 
 test("uses code-owned public messages instead of adapter diagnostics", () => {

@@ -205,7 +205,7 @@ async function handleApi(req, res, url, context) {
       return
     }
     const linear = createLinearClient(apiKey)
-    const preview = await linear.listProjectIssues(project.linearProjectId, 100)
+    const preview = await linear.listProjectIssues(project.linearProjectId)
     const counts = {}
     for (const issue of preview.issues) {
       const status = issue.state?.name || "未知"

@@ -1,4 +1,11 @@
 import { createLinearClient } from "./linear-client.mjs"
+import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
+import {
+  ISSUE_PLATFORM_ERROR_CODE,
+  ISSUE_PLATFORM_OPERATION,
+  IssuePlatformError,
+  normalizeIssuePlatformError,
+} from "./issue-platform.mjs"
 
 export const DEFAULT_STATUS_HEALTH_CACHE_TTL_MS = 60_000
 
@@ -89,6 +96,7 @@ export async function checkLinearStatusHealth(config, options = {}) {
       checkedAt,
       requiredStatuses,
       errors: [],
+      readErrors: [],
       projects: [],
     }
   }
@@ -100,18 +108,31 @@ export async function checkLinearStatusHealth(config, options = {}) {
       checkedAt,
       requiredStatuses,
       errors: [`未设置 ${apiKeyEnv}，无法检查 Linear 工作流状态。`],
+      readErrors: [],
       projects: projects.map((project) => emptyProjectHealth(project)),
     }
   }
 
   const projectResults = await checkLinearProjectsStatusHealth(config, projects, linear)
   const errors = projectResults.flatMap((project) => project.errors)
+  const readErrors = projectResults
+    .filter((project) => project.readError)
+    .map((project) => ({
+      projectKey: project.projectKey,
+      ...project.readError,
+    }))
   return {
     ok: errors.length === 0 && projectResults.every((project) => project.ok),
-    unavailable: false,
+    unavailable: readErrors.some((error) => [
+      ISSUE_PLATFORM_ERROR_CODE.PERMISSION_DENIED,
+      ISSUE_PLATFORM_ERROR_CODE.RATE_LIMITED,
+      ISSUE_PLATFORM_ERROR_CODE.UNAVAILABLE,
+      ISSUE_PLATFORM_ERROR_CODE.PAGINATION_INTERRUPTED,
+    ].includes(error.code)),
     checkedAt,
     requiredStatuses,
     errors,
+    readErrors,
     projects: projectResults,
   }
 }
@@ -123,11 +144,12 @@ export async function checkLinearProjectStatusHealth(config, project, linear) {
     const result = await linear.listProjectWorkflowStates(project.linearProjectId)
     return projectHealthFromWorkflowStateResult(config, project, result)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const readError = normalizeStatusHealthReadError(error)
     return {
       ...base,
       ok: false,
-      errors: [`${projectLabel(project)} 状态检查失败: ${message}`],
+      readError,
+      errors: [`${projectLabel(project)} 状态检查失败: ${readError.message}`],
     }
   }
 }
@@ -181,20 +203,36 @@ async function checkLinearProjectsStatusHealth(config, projects, linear) {
         }
       }
       if (result.error) {
+        const readError = normalizeStatusHealthReadError(result.error)
         return {
           ...emptyProjectHealth(project),
           ok: false,
-          errors: [`${projectLabel(project)} 状态检查失败: ${result.error}`],
+          readError,
+          errors: [`${projectLabel(project)} 状态检查失败: ${readError.message}`],
+        }
+      }
+      if (result.complete === false) {
+        const readError = new IssuePlatformError({
+          code: ISSUE_PLATFORM_ERROR_CODE.PAGINATION_INTERRUPTED,
+          operation: ISSUE_PLATFORM_OPERATION.READ_ISSUE,
+          retryable: true,
+        }).toJSON()
+        return {
+          ...emptyProjectHealth(project),
+          ok: false,
+          readError,
+          errors: [`${projectLabel(project)} 状态检查失败: Linear 读取不完整，${readError.message}`],
         }
       }
       return projectHealthFromWorkflowStateResult(config, project, result)
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const readError = normalizeStatusHealthReadError(error)
     return projects.map((project) => ({
       ...emptyProjectHealth(project),
       ok: false,
-      errors: [`${projectLabel(project)} 状态检查失败: ${message}`],
+      readError,
+      errors: [`${projectLabel(project)} 状态检查失败: ${readError.message}`],
     }))
   }
 }
@@ -241,12 +279,17 @@ function projectStatusHealthDetails(projectHealth) {
   return [...(projectHealth.errors || []), ...missing].join("；")
 }
 
-function createLinearFromOptions({ linear, apiKey, apiKeyEnv }) {
+function createLinearFromOptions({ linear, linearClient, apiKey, apiKeyEnv }) {
   if (linear) {
     return linear
   }
+  if (linearClient) {
+    return createLinearReadAdapter(linearClient)
+  }
   const resolvedApiKey = apiKey || process.env[apiKeyEnv]
-  return resolvedApiKey ? createLinearClient(resolvedApiKey) : null
+  return resolvedApiKey
+    ? createLinearReadAdapter(createLinearClient(resolvedApiKey))
+    : null
 }
 
 function statusHealthCacheKey(config, options = {}) {
@@ -260,7 +303,12 @@ function statusHealthCacheKey(config, options = {}) {
     .sort((a, b) => `${a.key}:${a.linearProjectId}`.localeCompare(`${b.key}:${b.linearProjectId}`))
   return JSON.stringify({
     apiKeyEnv,
-    apiKeyAvailable: Boolean(options.linear || options.apiKey || process.env[apiKeyEnv]),
+    apiKeyAvailable: Boolean(
+      options.linear ||
+      options.linearClient ||
+      options.apiKey ||
+      process.env[apiKeyEnv],
+    ),
     projects,
     statuses: configuredRequiredStatuses(config),
   })
@@ -276,7 +324,26 @@ function emptyProjectHealth(project) {
     ok: false,
     teams: [],
     errors: [],
+    readError: null,
   }
+}
+
+function normalizeStatusHealthReadError(error) {
+  if (error instanceof IssuePlatformError) {
+    return error.toJSON()
+  }
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    return new IssuePlatformError({
+      code: error.code,
+      operation: error.operation || ISSUE_PLATFORM_OPERATION.READ_ISSUE,
+      path: error.path,
+      retryable: error.retryable,
+    }).toJSON()
+  }
+  return normalizeIssuePlatformError(error, {
+    code: ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED,
+    operation: ISSUE_PLATFORM_OPERATION.READ_ISSUE,
+  })
 }
 
 function projectLabel(project) {

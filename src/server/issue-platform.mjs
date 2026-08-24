@@ -18,13 +18,24 @@ export const ISSUE_PLATFORM_METHOD_BY_OPERATION = Object.freeze({
   [ISSUE_PLATFORM_OPERATION.UPLOAD_ATTACHMENT]: "uploadAttachment",
 })
 
+export const ISSUE_READ_ADAPTER_METHODS = Object.freeze([
+  "readIssue",
+  "readProject",
+  "listProjectIssues",
+  "listProjectWorkflowStates",
+  "listProjectsWorkflowStates",
+  "listTeamWorkflowStates",
+])
+
 export const ISSUE_PLATFORM_ERROR_CODE = Object.freeze({
   INVALID_REQUEST: "INVALID_REQUEST",
   NOT_FOUND: "NOT_FOUND",
+  ARCHIVED: "ARCHIVED",
   PERMISSION_DENIED: "PERMISSION_DENIED",
   CONFLICT: "CONFLICT",
   RATE_LIMITED: "RATE_LIMITED",
   UNAVAILABLE: "UNAVAILABLE",
+  PAGINATION_INTERRUPTED: "PAGINATION_INTERRUPTED",
   OPERATION_FAILED: "OPERATION_FAILED",
 })
 
@@ -38,10 +49,12 @@ const OPERATION_SET = new Set(ISSUE_PLATFORM_OPERATIONS)
 const ERROR_MESSAGE_BY_CODE = Object.freeze({
   [ISSUE_PLATFORM_ERROR_CODE.INVALID_REQUEST]: "事项平台请求不合法。",
   [ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND]: "事项平台目标不存在。",
+  [ISSUE_PLATFORM_ERROR_CODE.ARCHIVED]: "事项平台目标已归档。",
   [ISSUE_PLATFORM_ERROR_CODE.PERMISSION_DENIED]: "当前身份不能执行该事项平台操作。",
   [ISSUE_PLATFORM_ERROR_CODE.CONFLICT]: "事项平台操作发生冲突。",
   [ISSUE_PLATFORM_ERROR_CODE.RATE_LIMITED]: "事项平台请求受到速率限制。",
   [ISSUE_PLATFORM_ERROR_CODE.UNAVAILABLE]: "事项平台暂时不可用。",
+  [ISSUE_PLATFORM_ERROR_CODE.PAGINATION_INTERRUPTED]: "事项平台分页读取未完成。",
   [ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED]: "事项平台操作失败。",
 })
 const ERROR_PATH_PATTERNS = Object.freeze([
@@ -61,7 +74,10 @@ const ERROR_PATH_PATTERNS = Object.freeze([
 
 /**
  * @typedef {object} IssuePlatformState
+ * @property {string} id Opaque stable workflow-state identifier.
  * @property {string} name Platform-independent workflow state name.
+ * @property {string} type Platform-independent lifecycle category.
+ * @property {string|null} archivedAt ISO timestamp when archived.
  */
 
 /**
@@ -69,6 +85,35 @@ const ERROR_PATH_PATTERNS = Object.freeze([
  * @property {string} id Opaque comment identifier.
  * @property {string} body Comment Markdown.
  * @property {string} createdAt ISO timestamp.
+ * @property {string|null} updatedAt ISO timestamp.
+ * @property {string|null} archivedAt ISO timestamp when archived.
+ */
+
+/**
+ * @typedef {object} IssuePlatformRelation
+ * @property {string} id Opaque stable relation identifier.
+ * @property {string} type Relation kind supplied by the platform.
+ * @property {"incoming"|"outgoing"} direction Direction relative to the read issue.
+ * @property {{id: string, identifier: string, title: string, url: string|null, target: IssuePlatformTarget}} issue
+ */
+
+/**
+ * @typedef {object} IssuePlatformTeam
+ * @property {string} id Opaque stable team identifier.
+ * @property {string} key Human-readable team key.
+ * @property {string} name Team name.
+ * @property {string|null} archivedAt ISO timestamp when archived.
+ * @property {IssuePlatformState[]} [workflowStates] Complete workflow states when requested.
+ */
+
+/**
+ * @typedef {object} IssuePlatformProject
+ * @property {string} id Opaque stable project identifier.
+ * @property {string} name Project name.
+ * @property {string|null} url Platform URL.
+ * @property {string|null} archivedAt ISO timestamp when archived.
+ * @property {IssuePlatformTeam[]} [teams] Complete project teams when requested.
+ * @property {true} [complete] True only after every requested page has been read.
  */
 
 /**
@@ -82,13 +127,45 @@ const ERROR_PATH_PATTERNS = Object.freeze([
  * @typedef {object} IssuePlatformIssue
  * @property {string} id Opaque issue identifier.
  * @property {string} identifier Human-readable identifier, when available.
+ * @property {IssuePlatformTarget} target Stable adapter binding for later writes.
  * @property {string} title Issue title.
  * @property {string|null} description Issue Markdown, when available.
  * @property {IssuePlatformState} state Normalized workflow state.
+ * @property {IssuePlatformTeam|null} team Normalized owning team.
+ * @property {IssuePlatformProject|null} project Normalized project.
  * @property {string|null} parentIssueId Opaque parent identifier.
  * @property {Array<{name: string}>} labels Normalized labels.
  * @property {IssuePlatformComment[]} comments Normalized comments when requested.
+ * @property {IssuePlatformRelation[]} relations Normalized relations when requested.
  * @property {IssuePlatformAttachment[]} attachments Normalized attachments when requested.
+ * @property {true} complete True only after every requested page has been read.
+ */
+
+/**
+ * @typedef {object} IssuePlatformProjectIssues
+ * @property {IssuePlatformProject} project
+ * @property {IssuePlatformIssue[]} issues
+ * @property {true} complete True only after every issue and requested nested page is complete.
+ */
+
+/**
+ * @typedef {object} IssuePlatformProjectWorkflowStates
+ * @property {string} requestedProjectId Caller-supplied stable lookup value.
+ * @property {IssuePlatformProject} project
+ * @property {IssuePlatformTeam[]} teams
+ * @property {boolean} complete True only after every team and workflow-state page is complete.
+ * @property {{code: string, message: string, operation: string|null, path: string, retryable: boolean}} [error]
+ */
+
+/**
+ * @typedef {object} IssueReadAdapter
+ * @property {string} platform Stable adapter registry key.
+ * @property {(issueId: string) => Promise<IssuePlatformIssue>} readIssue
+ * @property {(projectId: string) => Promise<IssuePlatformProject>} readProject
+ * @property {(projectId: string) => Promise<IssuePlatformProjectIssues>} listProjectIssues
+ * @property {(projectId: string) => Promise<IssuePlatformProjectWorkflowStates>} listProjectWorkflowStates
+ * @property {(projectIds: string[]) => Promise<IssuePlatformProjectWorkflowStates[]>} listProjectsWorkflowStates
+ * @property {(teamId: string) => Promise<IssuePlatformState[]>} listTeamWorkflowStates
  */
 
 /**
@@ -163,6 +240,29 @@ export function defineIssuePlatform(adapter) {
     normalized[methodName] = adapter[methodName].bind(adapter)
   }
 
+  return Object.freeze(normalized)
+}
+
+/**
+ * Validate and narrow a read adapter used by queue discovery and status health.
+ * Successful collection results must be complete; adapters fail closed instead of
+ * returning provider connection objects or partial pages.
+ *
+ * @param {IssueReadAdapter} adapter
+ * @returns {Readonly<IssueReadAdapter>}
+ */
+export function defineIssueReadAdapter(adapter) {
+  if (!isRecord(adapter) || !isIssuePlatformId(adapter.platform)) {
+    throw new TypeError("事项读取适配器缺少合法的 platform 标识。")
+  }
+
+  const normalized = { platform: adapter.platform }
+  for (const methodName of ISSUE_READ_ADAPTER_METHODS) {
+    if (typeof adapter[methodName] !== "function") {
+      throw new TypeError(`事项读取适配器缺少方法: ${methodName}`)
+    }
+    normalized[methodName] = adapter[methodName].bind(adapter)
+  }
   return Object.freeze(normalized)
 }
 

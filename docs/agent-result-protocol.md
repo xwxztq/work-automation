@@ -116,6 +116,22 @@ Codex 子进程使用受控环境变量集合，并通过 `--ignore-user-config`
 
 ## 事项平台接口
 
+服务读侧使用 `defineIssueReadAdapter` 约束统一接口：
+
+    const readAdapter = defineIssueReadAdapter({
+      platform: "primary-issues",
+      readIssue,
+      readProject,
+      listProjectIssues,
+      listProjectWorkflowStates,
+      listProjectsWorkflowStates,
+      listTeamWorkflowStates,
+    })
+
+`IssuePlatformIssue`、`IssuePlatformProject`、`IssuePlatformTeam`、`IssuePlatformState`、`IssuePlatformComment` 和 `IssuePlatformRelation` 只保留平台无关字段及 opaque 稳定 ID。事项包含 `target.platform` 与 `target.issueId`，供后续写入执行器绑定同一目标；关系同时保留相对当前事项的 `incoming` 或 `outgoing` 方向和对端事项 target。
+
+项目事项、评论、关系、项目团队和工作流状态必须读完所有游标页后才返回。成功集合显式包含 `complete: true`，因此 `issues: []` 或 `teams: []` 表示完整的空结果；缺失或重复游标、后续页面失败及无效连接数据不会返回部分数组。队列扫描和状态健康检查必须拒绝 `complete: false` 的兼容输入。
+
 src/server/issue-platform.mjs 定义五个固定方法：
 
     const adapter = defineIssuePlatform({
@@ -147,7 +163,7 @@ src/server/issue-platform.mjs 定义五个固定方法：
       "retryable": false
     }
 
-可用错误码为 INVALID_REQUEST、NOT_FOUND、PERMISSION_DENIED、CONFLICT、RATE_LIMITED、UNAVAILABLE 和 OPERATION_FAILED。公开 message 由错误码决定，不接受适配器传入的 provider 诊断文本；具体响应和排障信息只能留在适配器内部日志中。公开 path 只保留 target、idempotencyKey 和已定义 payload 字段，其他路径统一收敛为 `$`。未映射异常经过 normalizeIssuePlatformError 时也只返回对应错误码的固定信息。错误对象没有凭据、请求头、MCP 配置或原始 cause 字段。
+可用错误码为 INVALID_REQUEST、NOT_FOUND、ARCHIVED、PERMISSION_DENIED、CONFLICT、RATE_LIMITED、UNAVAILABLE、PAGINATION_INTERRUPTED 和 OPERATION_FAILED。`ARCHIVED` 区分已归档目标与不存在目标，`PAGINATION_INTERRUPTED` 表示读取结果不完整；速率限制、瞬时网络失败和分页中断可以通过 `retryable` 决定是否重试。公开 message 由错误码决定，不接受适配器传入的 provider 诊断文本；具体响应和排障信息只能留在适配器内部日志中。公开 path 只保留 target、idempotencyKey 和已定义 payload 字段，其他路径统一收敛为 `$`。未映射异常经过 normalizeIssuePlatformError 时也只返回对应错误码的固定信息。错误对象没有凭据、请求头、MCP 配置或原始 cause 字段。
 
 ## 兼容规则
 

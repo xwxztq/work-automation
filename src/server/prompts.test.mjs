@@ -159,6 +159,48 @@ test("issue snapshot keeps service context but removes user email fields", () =>
   assert.doesNotMatch(JSON.stringify(snapshot), /example\.test/u)
 })
 
+test("issue snapshot includes normalized relation context for every stage", () => {
+  const snapshot = buildIssueSnapshot({
+    id: "issue-1",
+    identifier: "LIV-1",
+    relations: [
+      {
+        id: "relation-1",
+        type: "blocks",
+        direction: "incoming",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        updatedAt: "2026-08-24T01:00:00.000Z",
+        issue: {
+          id: "issue-2",
+          identifier: "LIV-2",
+          title: "前置事项",
+          url: "https://linear.example/LIV-2",
+          target: { platform: "primary-issues", issueId: "issue-2" },
+          email: "should-not-leak@example.test",
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(snapshot.relations, [
+    {
+      id: "relation-1",
+      type: "blocks",
+      direction: "incoming",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      updatedAt: "2026-08-24T01:00:00.000Z",
+      issue: {
+        id: "issue-2",
+        identifier: "LIV-2",
+        title: "前置事项",
+        url: "https://linear.example/LIV-2",
+        target: { platform: "primary-issues", issueId: "issue-2" },
+      },
+    },
+  ])
+  assert.doesNotMatch(JSON.stringify(snapshot), /should-not-leak/u)
+})
+
 test("all stages use the same immutable v1 binding and produce parser-valid no-op results", () => {
   for (const stage of ["part1", "split", "part2", "part3"]) {
     const context = createAgentResultContext({

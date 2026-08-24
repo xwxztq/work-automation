@@ -191,6 +191,23 @@ export function buildIssueSnapshot(issue) {
           user: selectFields(comment?.user, ["name"]),
         }))
       : [],
+    relations: Array.isArray(issue?.relations)
+      ? issue.relations.map((relation) => ({
+          ...selectFields(relation, [
+            "id",
+            "type",
+            "direction",
+            "createdAt",
+            "updatedAt",
+          ]),
+          issue: relation?.issue
+            ? {
+                ...selectFields(relation.issue, ["id", "identifier", "title", "url"]),
+                target: selectFields(relation.issue.target, ["platform", "issueId"]),
+              }
+            : null,
+        }))
+      : [],
     attachments: Array.isArray(issue?.attachments)
       ? issue.attachments.map((attachment) =>
           selectFields(attachment, ["id", "title", "url"]),

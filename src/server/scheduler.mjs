@@ -6,6 +6,7 @@ import {
 } from "./agent-result-runtime.mjs"
 import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
+import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import { isCodexLinearAuthFailureRun } from "./linear-auth-diagnostics.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 import { sendRunWebhook } from "./webhook-notifier.mjs"
@@ -412,7 +413,7 @@ export function createScheduler({
   async function resolveManualIssueStage({ config, project, linear, projectSummary, issueId, force = false }) {
     let issue
     try {
-      issue = await linear.getIssue(issueId)
+      issue = await readCompleteIssue(linear, issueId)
     } catch (error) {
       projectSummary.skipped.push(`${issueId}: 未找到手动指定 issue`)
       await logEvent({
@@ -432,7 +433,7 @@ export function createScheduler({
 
     let linearProject
     try {
-      ;({ project: linearProject } = await linear.listProjectIssues(project.linearProjectId, 1))
+      linearProject = await readCompleteProject(linear, project.linearProjectId)
     } catch (error) {
       projectSummary.skipped.push(`${project.key}: 无法读取 Linear 项目`)
       await logEvent({
@@ -522,7 +523,7 @@ export function createScheduler({
   }
 
   async function runProjectPart1({ config, project, linear, projectSummary, issueId, force = false, signal }) {
-    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const { issues } = await listCompleteProjectIssues(linear, project.linearProjectId)
     const eligibleStatuses = part1EligibleStatuses(config)
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
@@ -585,7 +586,7 @@ export function createScheduler({
     }
 
     try {
-      const issue = await linear.getIssue(issueIdentifier)
+      const issue = await readCompleteIssue(linear, issueIdentifier)
       if (!force && !eligibleStatuses.has(issue.state?.name)) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是阶段一队列状态`)
         await logEvent({
@@ -639,7 +640,7 @@ export function createScheduler({
   }
 
   async function runProjectPart2({ config, project, linear, projectSummary, issueId, force = false, signal }) {
-    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const { issues } = await listCompleteProjectIssues(linear, project.linearProjectId)
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
       : issues.filter((issue) => issue.state?.name === config.statuses.schedule)
@@ -674,7 +675,7 @@ export function createScheduler({
         break
       }
 
-      const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
+      const issue = await readCompleteIssue(linear, issueRef.identifier || issueRef.id)
       if (!force && issue.state?.name !== config.statuses.schedule) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.schedule}`)
         await logEvent({
@@ -731,7 +732,7 @@ export function createScheduler({
   }
 
   async function runProjectSplit({ config, project, linear, projectSummary, issueId, force = false, signal }) {
-    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const { issues } = await listCompleteProjectIssues(linear, project.linearProjectId)
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
       : issues.filter((issue) => issue.state?.name === config.statuses.needsSplitting)
@@ -761,7 +762,7 @@ export function createScheduler({
         break
       }
 
-      const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
+      const issue = await readCompleteIssue(linear, issueRef.identifier || issueRef.id)
       if (!force && issue.state?.name !== config.statuses.needsSplitting) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.needsSplitting}`)
         await logEvent({
@@ -799,7 +800,7 @@ export function createScheduler({
   }
 
   async function runProjectPart3({ config, project, linear, projectSummary, issueId, force = false, signal }) {
-    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const { issues } = await listCompleteProjectIssues(linear, project.linearProjectId)
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
       : issues.filter((issue) => issue.state?.name === config.statuses.testing)
@@ -829,7 +830,7 @@ export function createScheduler({
         break
       }
 
-      const issue = await linear.getIssue(issueRef.identifier || issueRef.id)
+      const issue = await readCompleteIssue(linear, issueRef.identifier || issueRef.id)
       if (!force && issue.state?.name !== config.statuses.testing) {
         projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.testing}`)
         await logEvent({
@@ -867,7 +868,7 @@ export function createScheduler({
   }
 
   async function countActivePart2(linear, project, config) {
-    const { issues } = await linear.listProjectIssues(project.linearProjectId)
+    const { issues } = await listCompleteProjectIssues(linear, project.linearProjectId)
     return activePart2StatsFromIssues(issues, project, config)
   }
 
@@ -1064,7 +1065,7 @@ export function createScheduler({
     let latestIssue = issue
     let refreshErrorMessage = null
     try {
-      latestIssue = await linear.getIssue(issue.identifier || issue.id)
+      latestIssue = await readCompleteIssue(linear, issue.identifier || issue.id)
     } catch (error) {
       refreshErrorMessage = error instanceof Error ? error.message : String(error)
       await logEvent({
@@ -1732,13 +1733,46 @@ export function lostRunCompletionPatch(finalText, context) {
   }
 }
 
+async function listCompleteProjectIssues(linear, projectId) {
+  const result = await linear.listProjectIssues(projectId)
+  rejectIncompleteLinearRead(result)
+  if (!result || !Array.isArray(result.issues)) {
+    throw new Error("Linear 项目事项读取结果无效。")
+  }
+  return result
+}
+
+async function readCompleteIssue(linear, issueId) {
+  const issue = await linear.readIssue(issueId)
+  rejectIncompleteLinearRead(issue)
+  if (!issue || typeof issue !== "object") {
+    throw new Error("Linear 事项读取结果无效。")
+  }
+  return issue
+}
+
+async function readCompleteProject(linear, projectId) {
+  const project = await linear.readProject(projectId)
+  rejectIncompleteLinearRead(project)
+  if (!project || typeof project !== "object") {
+    throw new Error("Linear 项目读取结果无效。")
+  }
+  return project
+}
+
+function rejectIncompleteLinearRead(result) {
+  if (result?.complete === false) {
+    throw new Error("Linear 读取不完整：分页读取未完成，拒绝使用部分数据。")
+  }
+}
+
 function getLinear(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   const apiKey = process.env[apiKeyEnv]
   if (!apiKey) {
     return null
   }
-  return createLinearClient(apiKey)
+  return createLinearReadAdapter(createLinearClient(apiKey))
 }
 
 function abortRun(controller, reason) {

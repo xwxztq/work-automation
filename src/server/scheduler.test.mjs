@@ -110,6 +110,56 @@ test("blocks a scan globally when Linear status health is not ok", async () => {
   assert.equal(events.filter((event) => event.type === "linear-status-health-blocked").length, 1)
 })
 
+test("does not refresh or start Codex from an incomplete queue result", async () => {
+  let readIssueCount = 0
+  let codexRunCount = 0
+  const scheduler = createScheduler({
+    rootDir: process.cwd(),
+    configProvider: async () => baseConfig,
+    store: {
+      async appendEvent() {},
+      async listRuns() {
+        return []
+      },
+    },
+    linearProvider: () => ({
+      async listProjectIssues() {
+        return {
+          project: { id: "project-1", name: "work-automation" },
+          issues: [{
+            id: "issue-1",
+            identifier: "LIV-1",
+            state: { name: "On Schedule" },
+            comments: [],
+          }],
+          complete: false,
+        }
+      },
+      async readIssue() {
+        readIssueCount += 1
+        throw new Error("不应刷新不完整队列中的事项")
+      },
+    }),
+    linearStatusHealthChecker: {
+      async check() {
+        return { ok: true, projects: [] }
+      },
+    },
+    codexRunner: async () => {
+      codexRunCount += 1
+    },
+  })
+
+  const summary = await scheduler.runOnce("part2", { projectKey: "workautomation" })
+
+  assert.equal(readIssueCount, 0)
+  assert.equal(codexRunCount, 0)
+  assert.match(
+    summary.projects[0].error || summary.projects[0].skipped[0],
+    /读取不完整/u,
+  )
+})
+
 test("invalid structured results fail without calling any Linear write method", async (t) => {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-scheduler-"))
   t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
@@ -143,7 +193,7 @@ test("invalid structured results fail without calling any Linear write method", 
         issues: [issue],
       }
     },
-    async getIssue() {
+    async readIssue() {
       return issue
     },
     async createComment() {
