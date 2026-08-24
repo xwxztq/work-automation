@@ -1,7 +1,15 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 
-import { summarizeCodexRun } from "./codex-activity.mjs"
+import {
+  createCodexActivityPayload,
+  createCodexActivityReader,
+  summarizeCodexRun,
+} from "./codex-activity.mjs"
+import { createRunStore } from "./run-store.mjs"
 
 const baseRun = {
   id: "run-1",
@@ -218,4 +226,153 @@ test("failed and canceled statuses use failure motion", () => {
   assert.equal(failed.activityMotion, "failure")
   assert.equal(canceled.activityKind, "canceled")
   assert.equal(canceled.activityMotion, "failure")
+})
+
+test("activity polling reads a bounded tail once and then parses only appended stdout bytes", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-activity-incremental-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+
+  const store = createRunStore(rootDir)
+  const runs = []
+  const activeRuns = []
+  for (let index = 0; index < 3; index += 1) {
+    let run = await store.createRun({
+      projectKey: `project-${index}`,
+      stage: "part2",
+      issue: { id: `issue-${index}`, identifier: `LIV-${index}`, title: `Run ${index}` },
+    })
+    run = await store.updateRun(run, { codexStarted: true, codexPid: 4000 + index })
+    runs.push(run)
+    activeRuns.push({
+      runId: run.id,
+      projectKey: run.projectKey,
+      stage: run.stage,
+      startedAt: run.createdAt,
+      codexPid: run.codexPid,
+      issue: { id: run.issueId, identifier: run.issueIdentifier, title: run.issueTitle },
+    })
+  }
+
+  const oldLine = `${JSON.stringify({
+    type: "item.completed",
+    item: { id: "old-message", type: "agent_message", text: "historical output" },
+  })}\n`
+  const commandLine = `${JSON.stringify({
+    type: "item.started",
+    item: {
+      id: "active-command",
+      type: "command_execution",
+      command: "/bin/zsh -lc 'pnpm test'",
+      status: "in_progress",
+    },
+  })}\n`
+  const repeatCount = Math.ceil((2 * 1024 * 1024) / Buffer.byteLength(oldLine))
+  const largeStdout = oldLine.repeat(repeatCount) + commandLine
+  await fs.writeFile(runs[0].stdoutPath, largeStdout)
+  await fs.writeFile(runs[1].stdoutPath, commandLine)
+  await fs.writeFile(runs[2].stdoutPath, commandLine)
+
+  const scheduler = {
+    async status() {
+      return { activeRuns }
+    },
+  }
+  const readLimitBytes = 64 * 1024
+  const activityReader = createCodexActivityReader({ readLimitBytes })
+
+  const first = await createCodexActivityPayload({ scheduler, store, activityReader })
+  const firstStats = activityReader.inspect(runs[0].id)
+  assert.equal(first.agents.length, 3)
+  assert.equal(first.agents[0].activityKind, "command")
+  assert.equal(first.agents[0].activityTool, "test")
+  assert.ok(Buffer.byteLength(largeStdout) >= 2 * 1024 * 1024)
+  assert.ok(firstStats.lastBytesRead <= readLimitBytes)
+  assert.equal(firstStats.offset, Buffer.byteLength(largeStdout))
+  assert.equal(firstStats.parsedOffset, firstStats.offset)
+
+  await createCodexActivityPayload({ scheduler, store, activityReader })
+  const unchangedStats = activityReader.inspect(runs[0].id)
+  assert.equal(unchangedStats.lastBytesRead, 0)
+  assert.equal(unchangedStats.totalBytesRead, firstStats.totalBytesRead)
+
+  const toolEvent = `${JSON.stringify({
+    type: "item.started",
+    item: {
+      id: "active-tool",
+      type: "mcp_tool_call",
+      server: "linear",
+      tool: "get_issue",
+      status: "in_progress",
+    },
+  })}\n`
+  const splitAt = Math.floor(toolEvent.length / 2)
+  const firstHalf = toolEvent.slice(0, splitAt)
+  const secondHalf = toolEvent.slice(splitAt)
+  await fs.appendFile(runs[0].stdoutPath, firstHalf)
+
+  const partial = await createCodexActivityPayload({ scheduler, store, activityReader })
+  const partialStats = activityReader.inspect(runs[0].id)
+  assert.equal(partial.agents[0].activityKind, "command")
+  assert.equal(partialStats.lastBytesRead, Buffer.byteLength(firstHalf))
+  assert.equal(partialStats.pendingBytes, Buffer.byteLength(firstHalf))
+
+  await fs.appendFile(runs[0].stdoutPath, secondHalf)
+  const appended = await createCodexActivityPayload({ scheduler, store, activityReader })
+  const appendedStats = activityReader.inspect(runs[0].id)
+  assert.equal(appended.agents[0].activityKind, "tool")
+  assert.equal(appended.agents[0].detail, "linear.get_issue")
+  assert.equal(appendedStats.lastBytesRead, Buffer.byteLength(secondHalf))
+  assert.equal(appendedStats.pendingBytes, 0)
+  assert.equal(appendedStats.offset, firstStats.offset + Buffer.byteLength(toolEvent))
+})
+
+test("activity reader resets after stdout truncation and recovers after service restart", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-activity-reset-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+
+  const store = createRunStore(rootDir)
+  let run = await store.createRun({
+    projectKey: "project",
+    stage: "part2",
+    issue: { id: "issue", identifier: "LIV-1", title: "Reset" },
+  })
+  run = await store.updateRun(run, { codexStarted: true, codexPid: 4000 })
+  const activeRun = {
+    runId: run.id,
+    projectKey: run.projectKey,
+    stage: run.stage,
+    startedAt: run.createdAt,
+    codexPid: run.codexPid,
+    issue: { id: run.issueId, identifier: run.issueIdentifier, title: run.issueTitle },
+  }
+  const scheduler = { async status() { return { activeRuns: [activeRun] } } }
+  const reader = createCodexActivityReader({ readLimitBytes: 4096 })
+  await fs.writeFile(run.stdoutPath, `${JSON.stringify({
+    type: "item.started",
+    item: { id: "old", type: "command_execution", command: `pnpm build ${"x".repeat(2000)}`, status: "in_progress" },
+  })}\n`)
+  const original = await createCodexActivityPayload({ scheduler, store, activityReader: reader })
+  assert.equal(original.agents[0].activityKind, "command")
+
+  const replacement = `${JSON.stringify({
+    type: "item.started",
+    item: { id: "new", type: "web_search", query: "latest docs", status: "in_progress" },
+  })}\n`
+  await fs.writeFile(run.stdoutPath, replacement)
+  const reset = await createCodexActivityPayload({ scheduler, store, activityReader: reader })
+  assert.equal(reset.agents[0].activityKind, "searching")
+  assert.match(reset.agents[0].detail, /latest docs/)
+  assert.equal(reader.inspect(run.id).resetCount, 1)
+
+  const restartedReader = createCodexActivityReader({ readLimitBytes: 4096 })
+  const restarted = await createCodexActivityPayload({
+    scheduler,
+    store,
+    activityReader: restartedReader,
+  })
+  assert.equal(restarted.agents[0].activityKind, "searching")
+  assert.equal(restartedReader.inspect(run.id).resetCount, 0)
+
+  restartedReader.retain([])
+  assert.equal(restartedReader.inspect(run.id), null)
 })

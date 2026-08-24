@@ -3,22 +3,20 @@ import path from "node:path"
 
 const RECENT_EVENT_IDLE_MS = 12_000
 const DETAIL_LIMIT = 96
+const ACTIVITY_STDOUT_READ_LIMIT_BYTES = 256 * 1024
+const ACTIVITY_CACHE_LIMIT = 128
+const MAX_PENDING_LINE_BYTES = 256 * 1024
 
-export async function createCodexActivityPayload({ scheduler, store, projectKey }) {
+export async function createCodexActivityPayload({ scheduler, store, projectKey, activityReader }) {
   const status = await scheduler.status()
   const activeRuns = status.activeRuns.filter((run) => !projectKey || run.projectKey === projectKey)
-  const agents = []
-
-  for (const activeRun of activeRuns) {
-    const run = await store.getRun(activeRun.runId)
-    const summary = run || fallbackRunFromActive(activeRun)
-    agents.push(
-      summarizeCodexRun(summary, {
-        activeRun,
-        stdoutMtimeMs: await readMtimeMs(summary.stdoutPath),
-      }),
-    )
-  }
+  const reader = activityReader || createCodexActivityReader()
+  const agents = await Promise.all(activeRuns.map(async (activeRun) => {
+    const persisted = await readActivityRun(store, activeRun.runId)
+    const run = persisted || fallbackRunFromActive(activeRun)
+    return reader.summarize(run, { activeRun })
+  }))
+  reader.retain(status.activeRuns.map((run) => run.runId))
 
   return {
     generatedAt: new Date().toISOString(),
@@ -27,6 +25,153 @@ export async function createCodexActivityPayload({ scheduler, store, projectKey 
 }
 
 export function summarizeCodexRun(run, fsInfo = {}) {
+  const activityState = createActivityState()
+  for (const event of parseJsonl(String(run.stdout || ""))) {
+    applyActivityEvent(activityState, event)
+  }
+  return summarizeCodexRunFromState(run, activityState, {
+    ...fsInfo,
+    stdoutObserved: Boolean(run.stdout),
+  })
+}
+
+export function createCodexActivityReader({
+  fileSystem = fs,
+  readLimitBytes = ACTIVITY_STDOUT_READ_LIMIT_BYTES,
+  cacheLimit = ACTIVITY_CACHE_LIMIT,
+} = {}) {
+  const entries = new Map()
+  const readsInFlight = new Map()
+
+  async function summarize(run, fsInfo = {}) {
+    if (run.status !== "running" || !run.stdoutPath) {
+      return summarizeCodexRun(run, fsInfo)
+    }
+    const entry = await updateRunActivity(run)
+    return summarizeCodexRunFromState(run, entry?.activityState || createActivityState(), {
+      ...fsInfo,
+      stdoutMtimeMs: entry?.mtimeMs ?? null,
+      stdoutObserved: Boolean(entry?.stdoutObserved),
+    })
+  }
+
+  async function updateRunActivity(run) {
+    const runId = String(run.id || "")
+    if (!runId || !run.stdoutPath) {
+      return null
+    }
+    const existingRead = readsInFlight.get(runId)
+    if (existingRead) {
+      return existingRead
+    }
+
+    const request = readRunActivity(runId, run.stdoutPath).finally(() => {
+      if (readsInFlight.get(runId) === request) {
+        readsInFlight.delete(runId)
+      }
+    })
+    readsInFlight.set(runId, request)
+    return request
+  }
+
+  async function readRunActivity(runId, stdoutPath) {
+    let handle
+    try {
+      handle = await fileSystem.open(stdoutPath, "r")
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        entries.delete(runId)
+        return null
+      }
+      throw error
+    }
+
+    try {
+      const stat = await handle.stat()
+      let entry = entries.get(runId)
+      const shouldReset =
+        !entry ||
+        entry.stdoutPath !== stdoutPath ||
+        entry.dev !== stat.dev ||
+        entry.ino !== stat.ino ||
+        stat.size < entry.offset ||
+        (stat.size === entry.offset && stat.mtimeMs !== entry.mtimeMs)
+
+      if (shouldReset || stat.size - (entry?.offset || 0) > readLimitBytes) {
+        entry = createReaderEntry(runId, stdoutPath, stat, entry)
+        const start = Math.max(0, stat.size - readLimitBytes)
+        const chunk = await readFileRange(handle, start, stat.size - start)
+        entry.offset = start + chunk.length
+        entry.lastBytesRead = chunk.length
+        entry.totalBytesRead += chunk.length
+        consumeInitialChunk(entry, chunk, start)
+      } else if (stat.size > entry.offset) {
+        const start = entry.offset
+        const chunk = await readFileRange(handle, start, stat.size - start)
+        entry.offset = start + chunk.length
+        entry.lastBytesRead = chunk.length
+        entry.totalBytesRead += chunk.length
+        consumeActivityChunk(entry, chunk, start)
+      } else {
+        entry.lastBytesRead = 0
+        entry.lastParsedBytes = 0
+      }
+
+      entry.dev = stat.dev
+      entry.ino = stat.ino
+      entry.mtimeMs = stat.mtimeMs
+      entry.stdoutObserved = entry.offset > 0
+      entry.lastAccessedAt = Date.now()
+      entries.delete(runId)
+      entries.set(runId, entry)
+      trimEntries()
+      return entry
+    } finally {
+      await handle.close()
+    }
+  }
+
+  function retain(runIds) {
+    const retained = new Set(runIds.map(String))
+    for (const runId of entries.keys()) {
+      if (!retained.has(runId)) {
+        entries.delete(runId)
+      }
+    }
+    trimEntries()
+  }
+
+  function inspect(runId) {
+    const entry = entries.get(String(runId))
+    if (!entry) {
+      return null
+    }
+    return {
+      offset: entry.offset,
+      parsedOffset: entry.parsedOffset,
+      pendingBytes: entry.pending.length,
+      lastBytesRead: entry.lastBytesRead,
+      totalBytesRead: entry.totalBytesRead,
+      lastParsedBytes: entry.lastParsedBytes,
+      resetCount: entry.resetCount,
+      stdoutObserved: entry.stdoutObserved,
+    }
+  }
+
+  function trimEntries() {
+    while (entries.size > cacheLimit) {
+      entries.delete(entries.keys().next().value)
+    }
+  }
+
+  return {
+    summarize,
+    retain,
+    inspect,
+  }
+}
+
+function summarizeCodexRunFromState(run, activityState, fsInfo = {}) {
   const base = {
     runId: String(run.id || fsInfo.activeRun?.runId || ""),
     projectKey: String(run.projectKey || fsInfo.activeRun?.projectKey || ""),
@@ -59,104 +204,115 @@ export function summarizeCodexRun(run, fsInfo = {}) {
       tool: "other",
     })
   }
-  if (run.codexStarted === false || (!base.codexPid && !run.stdout)) {
+  if (run.codexStarted === false || (!base.codexPid && !fsInfo.stdoutObserved)) {
     return withActivity(base, "booting", "启动中", cleanDetail(run.startupError || "等待 Codex 子进程"), {
       motion: "waiting",
       tool: "other",
     })
   }
 
-  const activity = inferActivityFromStdout(String(run.stdout || ""), base.updatedAt)
+  const activity = inferActivityFromState(activityState, base.updatedAt)
   return withActivity(base, activity.kind, activity.label, activity.detail, {
     motion: activity.motion,
     tool: activity.tool,
   })
 }
 
-function inferActivityFromStdout(stdout, updatedAt) {
-  const activeItems = new Map()
-  let latestActivity = null
-  let latestError = null
-  let latestMessage = null
+function createActivityState() {
+  return {
+    activeItems: new Map(),
+    latestActivity: null,
+    latestError: null,
+    latestMessage: null,
+    eventSequence: 0,
+  }
+}
 
-  for (const event of parseJsonl(stdout)) {
-    if (event.type === "error") {
-      latestError = event
-      latestActivity = {
-        kind: "waiting",
-        label: "等待恢复",
-        detail: cleanDetail(event.message || "Codex 连接暂时不可用"),
-        motion: "waiting",
-        tool: "other",
-      }
-      continue
+function applyActivityEvent(state, event) {
+  state.eventSequence += 1
+  if (event.type === "error") {
+    state.latestError = event
+    state.latestActivity = {
+      kind: "waiting",
+      label: "等待恢复",
+      detail: cleanDetail(event.message || "Codex 连接暂时不可用"),
+      motion: "waiting",
+      tool: "other",
     }
-
-    const item = event.item
-    if (!item || typeof item !== "object") {
-      if (event.type === "turn.started") {
-        latestActivity = {
-          kind: "thinking",
-          label: "思考中",
-          detail: "新回合已开始",
-          motion: "reading",
-          tool: "other",
-        }
-      }
-      continue
-    }
-
-    const id = item.id || `${event.type}:${activeItems.size}`
-    const itemActivity = activityFromItem(item)
-    if (!itemActivity) {
-      continue
-    }
-
-    if (item.type === "agent_message") {
-      latestMessage = item
-    }
-
-    if (event.type === "item.started") {
-      activeItems.set(id, itemActivity)
-      latestActivity = itemActivity
-      continue
-    }
-
-    if (event.type === "item.completed") {
-      activeItems.delete(id)
-      latestActivity = itemActivity
-      continue
-    }
-
-    if (event.type === "item.updated") {
-      latestActivity = itemActivity
-    }
+    return
   }
 
-  const active = [...activeItems.values()].at(-1)
+  const item = event.item
+  if (!item || typeof item !== "object") {
+    if (event.type === "turn.started") {
+      state.latestActivity = {
+        kind: "thinking",
+        label: "思考中",
+        detail: "新回合已开始",
+        motion: "reading",
+        tool: "other",
+      }
+    }
+    return
+  }
+
+  const id = item.id || `${event.type}:${state.eventSequence}`
+  const itemActivity = activityFromItem(item)
+  if (!itemActivity) {
+    return
+  }
+
+  if (item.type === "agent_message") {
+    state.latestMessage = item
+  }
+
+  if (event.type === "item.started") {
+    state.activeItems.set(id, itemActivity)
+    state.latestActivity = itemActivity
+    return
+  }
+
+  if (event.type === "item.completed") {
+    state.activeItems.delete(id)
+    state.latestActivity = itemActivity
+    return
+  }
+
+  if (event.type === "item.updated") {
+    if (item.status === "in_progress" || item.status === "running") {
+      state.activeItems.set(id, itemActivity)
+    } else if (item.status === "completed" || item.status === "failed") {
+      state.activeItems.delete(id)
+    }
+    state.latestActivity = itemActivity
+  }
+}
+
+function inferActivityFromState(state, updatedAt) {
+  const active = [...state.activeItems.values()].at(-1)
   if (active) {
     return active
   }
 
-  if (latestActivity && isRecent(updatedAt)) {
-    return latestActivity
+  if (state.latestActivity && isRecent(updatedAt)) {
+    return state.latestActivity
   }
 
-  if (latestError && isRecent(updatedAt, RECENT_EVENT_IDLE_MS * 3)) {
+  if (state.latestError && isRecent(updatedAt, RECENT_EVENT_IDLE_MS * 3)) {
     return {
       kind: "waiting",
       label: "等待恢复",
-      detail: cleanDetail(latestError.message || "Codex 连接暂时不可用"),
+      detail: cleanDetail(state.latestError.message || "Codex 连接暂时不可用"),
       motion: "waiting",
       tool: "other",
     }
   }
 
-  if (latestMessage) {
+  if (state.latestMessage) {
     return {
       kind: "thinking",
       label: "整理输出",
-      detail: cleanDetail(latestMessage.text || "Codex 正在汇总结果"),
+      detail: cleanDetail(state.latestMessage.text || "Codex 正在汇总结果"),
       motion: "reading",
       tool: "other",
     }
@@ -247,6 +403,108 @@ function parseJsonl(text) {
     }
   }
   return events
+}
+
+function createReaderEntry(runId, stdoutPath, stat, previous) {
+  return {
+    runId,
+    stdoutPath,
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
+    offset: 0,
+    parsedOffset: 0,
+    pending: Buffer.alloc(0),
+    skipUntilNewline: false,
+    activityState: createActivityState(),
+    stdoutObserved: false,
+    lastBytesRead: 0,
+    totalBytesRead: previous?.totalBytesRead || 0,
+    lastParsedBytes: 0,
+    resetCount: previous ? previous.resetCount + 1 : 0,
+    lastAccessedAt: Date.now(),
+  }
+}
+
+async function readFileRange(handle, position, length) {
+  if (length <= 0) {
+    return Buffer.alloc(0)
+  }
+  const buffer = Buffer.allocUnsafe(length)
+  const { bytesRead } = await handle.read(buffer, 0, length, position)
+  return buffer.subarray(0, bytesRead)
+}
+
+function consumeInitialChunk(entry, chunk, start) {
+  entry.lastParsedBytes = 0
+  if (start === 0) {
+    consumeActivityChunk(entry, chunk, start)
+    return
+  }
+
+  const firstNewline = chunk.indexOf(0x0a)
+  if (firstNewline < 0) {
+    entry.pending = Buffer.alloc(0)
+    entry.parsedOffset = entry.offset
+    entry.skipUntilNewline = true
+    return
+  }
+
+  const dataStart = start + firstNewline + 1
+  consumeActivityChunk(entry, chunk.subarray(firstNewline + 1), dataStart)
+}
+
+function consumeActivityChunk(entry, chunk, start) {
+  entry.lastParsedBytes = 0
+  let data = chunk
+  let dataStart = start
+
+  if (entry.skipUntilNewline) {
+    const firstNewline = data.indexOf(0x0a)
+    if (firstNewline < 0) {
+      entry.parsedOffset = start + data.length
+      return
+    }
+    dataStart += firstNewline + 1
+    data = data.subarray(firstNewline + 1)
+    entry.skipUntilNewline = false
+  }
+
+  const combined = entry.pending.length > 0
+    ? Buffer.concat([entry.pending, data])
+    : data
+  const combinedStart = dataStart - entry.pending.length
+  let lineStart = 0
+
+  for (let index = 0; index < combined.length; index += 1) {
+    if (combined[index] !== 0x0a) {
+      continue
+    }
+    const line = combined.subarray(lineStart, index)
+    entry.lastParsedBytes += index - lineStart + 1
+    applyJsonlLine(entry.activityState, line)
+    lineStart = index + 1
+  }
+
+  entry.pending = Buffer.from(combined.subarray(lineStart))
+  entry.parsedOffset = combinedStart + lineStart
+  if (entry.pending.length > MAX_PENDING_LINE_BYTES) {
+    entry.pending = Buffer.alloc(0)
+    entry.parsedOffset = entry.offset
+    entry.skipUntilNewline = true
+  }
+}
+
+function applyJsonlLine(activityState, line) {
+  const trimmed = line.toString("utf8").trim()
+  if (!trimmed) {
+    return
+  }
+  try {
+    applyActivityEvent(activityState, JSON.parse(trimmed))
+  } catch {
+    // A complete malformed line is ignored; subsequent JSONL events remain readable.
+  }
 }
 
 function summarizeCommand(command) {
@@ -379,14 +637,27 @@ function isRecent(updatedAt, thresholdMs = RECENT_EVENT_IDLE_MS) {
   return Number.isFinite(timestamp) && Date.now() - timestamp < thresholdMs
 }
 
-async function readMtimeMs(filePath) {
-  if (!filePath) {
-    return null
+async function readActivityRun(store, runId) {
+  const run = typeof store.getRunMetadata === "function"
+    ? await store.getRunMetadata(runId)
+    : await store.getRun(runId)
+  if (!run || run.status !== "succeeded" || run.final !== undefined || !run.finalPath) {
+    return run
   }
+  return {
+    ...run,
+    final: await readOptionalText(run.finalPath),
+  }
+}
+
+async function readOptionalText(filePath) {
   try {
-    return (await fs.stat(filePath)).mtimeMs
-  } catch {
-    return null
+    return await fs.readFile(filePath, "utf8")
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return ""
+    }
+    throw error
   }
 }
 

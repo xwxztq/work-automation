@@ -8,7 +8,7 @@ import {
   saveConfig,
   validateConfig,
 } from "./config.mjs"
-import { createCodexActivityPayload } from "./codex-activity.mjs"
+import { createCodexActivityPayload, createCodexActivityReader } from "./codex-activity.mjs"
 import {
   createDirectoryPicker,
   DirectoryPickerUnavailableError,
@@ -26,6 +26,7 @@ export function createHttpApi({
   dev = false,
   directoryPicker = createDirectoryPicker(),
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
+  codexActivityReader = createCodexActivityReader(),
 }) {
   return http.createServer(async (req, res) => {
     try {
@@ -39,6 +40,7 @@ export function createHttpApi({
           setupManager,
           directoryPicker,
           linearStatusHealthChecker,
+          codexActivityReader,
         })
         return
       }
@@ -66,6 +68,7 @@ async function handleApi(req, res, url, context) {
     setupManager,
     directoryPicker,
     linearStatusHealthChecker,
+    codexActivityReader,
   } = context
   const method = req.method || "GET"
   const parts = url.pathname.split("/").filter(Boolean)
@@ -312,6 +315,7 @@ async function handleApi(req, res, url, context) {
       await createCodexActivityPayload({
         scheduler,
         store,
+        activityReader: codexActivityReader,
         projectKey: url.searchParams.get("projectKey") || undefined,
       }),
     )

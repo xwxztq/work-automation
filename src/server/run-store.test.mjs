@@ -70,3 +70,32 @@ test("preserves supervisor metadata when the scheduler updates a stale run objec
   assert.equal(updated.supervisorPid, 1234)
   assert.deepEqual(updated.reviewCleanup.removedEntries, ["_work"])
 })
+
+test("reads run metadata without hydrating stdout, stderr, prompt, or final artifacts", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-run-metadata-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+
+  const store = createRunStore(rootDir)
+  const run = await store.createRun({
+    projectKey: "project",
+    stage: "part2",
+    issue: { id: "issue-3", identifier: "LIV-3", title: "Metadata" },
+  })
+  await fs.writeFile(run.stdoutPath, "stdout")
+  await fs.writeFile(run.stderrPath, "stderr")
+  await fs.writeFile(run.promptPath, "prompt")
+  await fs.writeFile(run.finalPath, "final")
+
+  const metadata = await store.getRunMetadata(run.id)
+  const detail = await store.getRun(run.id)
+
+  assert.equal(metadata.id, run.id)
+  assert.equal("stdout" in metadata, false)
+  assert.equal("stderr" in metadata, false)
+  assert.equal("prompt" in metadata, false)
+  assert.equal("final" in metadata, false)
+  assert.equal(detail.stdout, "stdout")
+  assert.equal(detail.stderr, "stderr")
+  assert.equal(detail.prompt, "prompt")
+  assert.equal(detail.final, "final")
+})

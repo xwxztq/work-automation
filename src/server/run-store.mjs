@@ -173,9 +173,13 @@ export function createRunStore(rootDir) {
     runsCache = null
   }
 
-  async function getRun(id) {
+  async function getRunMetadata(id) {
     const metadataPath = path.join(runsDir, id, "run.json")
-    const run = await readJsonFile(metadataPath, null)
+    return readJsonFile(metadataPath, null)
+  }
+
+  async function getRun(id) {
+    const run = await getRunMetadata(id)
     if (!run) {
       return null
     }
@@ -202,6 +206,7 @@ export function createRunStore(rootDir) {
     setProcessedIssue,
     listRuns,
     listRunsWithTotal,
+    getRunMetadata,
     getRun,
   }
 

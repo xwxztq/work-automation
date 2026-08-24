@@ -111,6 +111,73 @@ test("daemon start is blocked until first-run setup is ready", async () => {
   assert.equal(schedulerStarted, false)
 })
 
+test("activity API reads only metadata for runs in the requested project", async () => {
+  const metadataReads = []
+  const summarizedRuns = []
+  const retainedRuns = []
+
+  await withServer(
+    {
+      scheduler: {
+        async status() {
+          return {
+            activeRuns: [
+              { runId: "run-alpha", projectKey: "alpha", stage: "part2", startedAt: "2026-01-01T00:00:00.000Z" },
+              { runId: "run-beta", projectKey: "beta", stage: "part2", startedAt: "2026-01-01T00:00:01.000Z" },
+            ],
+          }
+        },
+      },
+      store: {
+        async getRunMetadata(runId) {
+          metadataReads.push(runId)
+          return {
+            id: runId,
+            projectKey: runId === "run-alpha" ? "alpha" : "beta",
+            stage: "part2",
+            status: "running",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }
+        },
+        async getRun() {
+          throw new Error("activity endpoint must not hydrate full run artifacts")
+        },
+      },
+      codexActivityReader: {
+        async summarize(run) {
+          summarizedRuns.push(run.id)
+          return {
+            runId: run.id,
+            projectKey: run.projectKey,
+            stage: run.stage,
+            startedAt: run.createdAt,
+            status: run.status,
+            updatedAt: run.createdAt,
+            activityKind: "waiting",
+            activityMotion: "waiting",
+            activityTool: "other",
+            activityLabel: "等待输出",
+            detail: "",
+          }
+        },
+        retain(runIds) {
+          retainedRuns.push([...runIds])
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/codex/activity?projectKey=alpha`)
+      assert.equal(response.status, 200)
+      const payload = await response.json()
+      assert.deepEqual(payload.agents.map((agent) => agent.runId), ["run-alpha"])
+    },
+  )
+
+  assert.deepEqual(metadataReads, ["run-alpha"])
+  assert.deepEqual(summarizedRuns, ["run-alpha"])
+  assert.deepEqual(retainedRuns, [["run-alpha", "run-beta"]])
+})
+
 test("directory picker API exposes capability and successful selection", async () => {
   let pickCalls = 0
   await withServer(

@@ -26,6 +26,10 @@ import { toast } from "sonner"
 
 import { api } from "@/app/api"
 import {
+  createCodexActivityLoader,
+  getCodexActivityScope,
+} from "@/app/codex-activity"
+import {
   getInitialProjectNameSource,
   getLinearProjectSelectionUpdate,
   getProjectNameInputUpdate,
@@ -224,9 +228,7 @@ function emptyCodexActivity(): CodexActivityPayload {
   }
 }
 
-async function loadCodexActivity(projectKey?: string) {
-  return api.getCodexActivity(projectKey).catch(() => emptyCodexActivity())
-}
+const loadCodexActivity = createCodexActivityLoader(api.getCodexActivity, emptyCodexActivity)
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(() => (
@@ -332,22 +334,22 @@ function App() {
   }, [config, prompts, selectedProjectKey, setupStatus?.ready, view])
 
   useEffect(() => {
-    if (!setupStatus?.ready || !config || view !== "project") {
+    if (!setupStatus?.ready || !config) {
       return
     }
-    if (!selectedProjectKey) {
+    const activityScope = getCodexActivityScope(view, selectedProjectKey)
+    if (activityScope?.kind === "global") {
+      void loadCodexActivity().then(setGlobalCodexActivity)
+      return
+    }
+    if (activityScope?.kind === "project") {
+      void loadCodexActivity(activityScope.projectKey).then(setCodexActivity)
+      return
+    }
+    if (view === "project") {
       setCodexActivity({ generatedAt: "", agents: [] })
-      return
     }
-    void loadCodexActivity(selectedProjectKey).then(setCodexActivity)
   }, [config, selectedProjectKey, setupStatus?.ready, view])
-
-  useEffect(() => {
-    if (!setupStatus?.ready || !config || view !== "activity") return
-    void refreshGlobalActivity(true)
-    // The view/config transition is the trigger; polling handles later refreshes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, setupStatus?.ready, view])
 
   useEffect(() => {
     if (!prompts) return
@@ -551,14 +553,12 @@ function App() {
       nextRuns,
       nextGlobalRuns,
       nextDaemon,
-      nextCodexActivity,
       nextLinearStatusHealth,
       nextEvents,
     ] = await Promise.all([
       api.getRuns(nextProjectKey || undefined),
       api.getRuns(),
       api.getDaemonStatus(),
-      loadCodexActivity(nextProjectKey || undefined),
       api.getLinearStatusHealth(),
       includeEvents ? api.getEvents() : Promise.resolve(null),
     ])
@@ -568,7 +568,6 @@ function App() {
     processRunNotifications(nextGlobalRuns.runs, nextConfig)
     setRunTotalCount(nextRuns.totalCount)
     setDaemon(nextDaemon)
-    setCodexActivity(nextCodexActivity)
     setLinearStatusHealth(nextLinearStatusHealth)
     if (nextEvents) {
       setEvents(nextEvents.events)
