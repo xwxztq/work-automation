@@ -9,6 +9,11 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const packageMetadata = JSON.parse(
   await fs.readFile(path.join(projectRoot, "package.json"), "utf8"),
 )
+const npmPublishWorkflow = await fs.readFile(
+  path.join(projectRoot, ".github", "workflows", "publish-npm.yml"),
+  "utf8",
+)
+const readme = await fs.readFile(path.join(projectRoot, "README.md"), "utf8")
 
 test("npm manifest publishes only the prebuilt runtime", () => {
   assert.equal(packageMetadata.name, "@xwxztq/work-automation")
@@ -36,4 +41,38 @@ test("npm command exposes help and package version without starting the service"
   assert.match(help.stdout, /wauto serve/)
   assert.equal(version.status, 0, version.stderr)
   assert.equal(version.stdout.trim(), `${packageMetadata.name} ${packageMetadata.version}`)
+})
+
+test("npm publish workflow only releases new versions pushed to main", () => {
+  assert.match(npmPublishWorkflow, /^on:\n  push:\n    branches:\n      - main$/m)
+  assert.doesNotMatch(
+    npmPublishWorkflow,
+    /^\s{0,2}(pull_request|workflow_dispatch|schedule):/m,
+  )
+  assert.match(npmPublishWorkflow, /^permissions:\n  contents: read\n  id-token: write$/m)
+  assert.match(npmPublishWorkflow, /^concurrency:\n  group: npm-publish-/m)
+  assert.match(npmPublishWorkflow, /npm view "\$package_spec" version --json/)
+  assert.match(npmPublishWorkflow, /::notice title=Publish skipped/)
+  assert.match(npmPublishWorkflow, /steps\.registry\.outputs\.exists == 'false'/)
+  assert.match(npmPublishWorkflow, /pnpm install --frozen-lockfile/)
+  assert.match(npmPublishWorkflow, /run: pnpm test/)
+  assert.match(npmPublishWorkflow, /run: pnpm build/)
+  assert.match(npmPublishWorkflow, /run: npm publish --access public/)
+})
+
+test("npm publish workflow uses the pinned OIDC toolchain without publish secrets", () => {
+  assert.match(npmPublishWorkflow, /uses: actions\/checkout@v6/)
+  assert.match(npmPublishWorkflow, /uses: actions\/setup-node@v6/)
+  assert.match(npmPublishWorkflow, /node-version: "24\.19\.0"/)
+  assert.match(npmPublishWorkflow, /test "\$\(npm --version\)" = "11\.17\.0"/)
+  assert.match(npmPublishWorkflow, /uses: pnpm\/action-setup@v4/)
+  assert.match(npmPublishWorkflow, /version: "11\.2\.2"/)
+  assert.doesNotMatch(
+    npmPublishWorkflow,
+    /NPM_TOKEN|NODE_AUTH_TOKEN|npm password|one-time password|\bOTP\b|\bTOTP\b/i,
+  )
+
+  assert.match(readme, /Trusted publishing/)
+  assert.match(readme, /Workflow filename：`publish-npm\.yml`/)
+  assert.match(readme, /不读取 `NPM_TOKEN`、npm 密码或一次性验证码/)
 })

@@ -56,6 +56,20 @@ npm run npm:pack
 
 产物写入 `artifacts/npm`。打包前会重新构建前端，npm 发布清单只保留 `dist`、服务端运行文件、提示词、文档和 `https-proxy-agent` 运行依赖。实际发布前应更新 `package.json` 版本并检查 npm scope 权限。
 
+### 从 main 自动发布 npm 包
+
+`.github/workflows/publish-npm.yml` 只监听 `main` 分支的 push，不响应其他分支或 pull request。`package.json` 的版本号是发布开关：合入 `main` 前必须更新为 npm Registry 中尚未使用的版本。workflow 会先查询 `@xwxztq/work-automation@<version>`；版本已存在时记录跳过原因并成功结束，版本不存在时才安装锁定依赖、运行测试和构建、检查包内容并公开发布。并发运行会串行处理，后执行的相同版本会在查询阶段跳过。
+
+首次发布新版本前，按照 [npm Trusted Publishing 文档](https://docs.npmjs.com/trusted-publishers/) 在 npm 包的 **Settings → Trusted publishing** 中新增 GitHub Actions 发布者：
+
+- Organization or user：`xwxztq`
+- Repository：`work-automation`
+- Workflow filename：`publish-npm.yml`（只填文件名）
+- Environment name：留空
+- Allowed actions：`npm publish`
+
+workflow 固定使用 Node 24.19.0、npm 11.17.0 和仓库声明的 pnpm 11.2.2。发布鉴权来自 GitHub-hosted runner 的 `id-token: write` 权限和 npm Trusted Publishing 的短期 OIDC 凭据，不读取 `NPM_TOKEN`、npm 密码或一次性验证码。npm 账户可以继续启用二次验证；首次 OIDC 发布成功后，可在 Publishing access 中选择要求二次验证并禁用传统 token。若每个版本都必须人工批准，应改用 npm staged publishing，并把 Trusted Publisher 的权限和 workflow 命令一起改为 `npm stage publish`，不能继续使用这里的直接发布命令。
+
 ## 从源码运行
 
 1. 安装依赖并准备本地配置：
