@@ -196,6 +196,14 @@ export type LinearProjectListResponse = {
   projects: LinearProjectOption[]
 }
 
+export type DirectoryPickerCapability = {
+  available: boolean
+}
+
+export type DirectoryPickerResult =
+  | { status: "selected"; path: string }
+  | { status: "canceled" }
+
 export type RunDetail = RunSummary & {
   stdout: string
   stderr: string

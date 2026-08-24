@@ -3,6 +3,8 @@ import type {
   CodexActivityPayload,
   ConfigValidationResult,
   DaemonStatus,
+  DirectoryPickerCapability,
+  DirectoryPickerResult,
   ExecutionEvent,
   LinearProjectListResponse,
   LinearStatusHealthResult,
@@ -41,6 +43,10 @@ export const api = {
   getConfig: () => request<AppConfig>("/api/config"),
   saveConfig: (config: AppConfig) =>
     request<AppConfig>("/api/config", { method: "PUT", body: JSON.stringify(config) }),
+  getDirectoryPickerCapability: () =>
+    request<DirectoryPickerCapability>("/api/directory-picker"),
+  pickDirectory: () =>
+    request<DirectoryPickerResult>("/api/directory-picker", { method: "POST" }),
   validateConfig: () =>
     request<ConfigValidationResult>("/api/config/validate", {
       method: "POST",

@@ -75,6 +75,8 @@ npm run npm:pack
 
 5. 在界面或 `config.local.json` 中添加项目，必填字段：`repoName`、`linearProjectId`（Linear 项目 UUID）、`path`（仓库绝对路径）、`codexCwd`（默认同 `path`）、`branchOrScopePrefix`、`defaultTests`、`extraRules`（只写执行约束，不写密钥）。
 
+   项目编辑器中的仓库路径始终可以手工填写。macOS 会使用系统目录选择窗口；Linux 仅在图形会话中且 `PATH` 内存在 `zenity` 或 `kdialog` 时显示“选择”按钮。选择的是运行 WorkAutomation 服务的机器上的目录。能力不可用或选择器启动失败时按钮会隐藏，页面不显示错误，失败详情只写入浏览器控制台。
+
 6. 校验并启动：
 
    ```bash
@@ -93,7 +95,7 @@ npm run npm:pack
 
 ### 无需 Node 的 macOS 原生包（备用）
 
-原生包适合不希望单独安装 Node 的用户，不要求预装 Node、pnpm 或 Docker。构建命令会下载与构建机 Node 版本一致的官方 macOS 运行时，按照 Node 发布页的 `SHASUMS256.txt` 校验后放入发布包：
+原生包适合不希望单独安装 Node 的用户，不要求预装 Node 或 pnpm。构建命令会下载与构建机 Node 版本一致的官方 macOS 运行时，按照 Node 发布页的 `SHASUMS256.txt` 校验后放入发布包：
 
 ```bash
 pnpm native:bundle:macos
@@ -118,15 +120,6 @@ bin/wauto uninstall
 `uninstall` 只移除 LaunchAgent 注册，保留用户数据和已安装程序。阶段一尚未包含 Apple Developer ID 签名、公证、自动更新以及 Windows/Linux 安装器，因此当前产物适合内部测试，不应直接作为公开下载版本。
 
 只做本机构建链路冒烟时，可运行 `pnpm native:bundle:macos:local`。它复制本机 Node 及所需运行库，不具备跨机器可移植性。
-
-### Docker
-
-```bash
-./docker.sh up        # 构建并后台启动（restart: unless-stopped）
-./docker.sh status / logs / restart / rebuild / down
-```
-
-容器复用仓库的 `config.local.json`、`prompts/`、`.linear-automation/`，挂载 `~/.codex`、`~/.gitconfig` 和项目目录（默认整个 `$HOME`，可用 `DEVELOPER_ROOT` 缩小范围；项目在 `$HOME` 外时必须显式指定）。容器内四阶段统一使用 `danger-full-access`，宿主机配置不受影响；Linear API key 通过 env 注入，不写入镜像。可用 `WORK_AUTOMATION_PORT` 改宿主机端口，`LOCAL_UID` / `LOCAL_GID` 适配非默认用户。需要 Xcode、macOS GUI 或其他语言工具链的项目请直接在宿主机运行。
 
 ## 配置
 

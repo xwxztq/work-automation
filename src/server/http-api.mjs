@@ -9,6 +9,10 @@ import {
   validateConfig,
 } from "./config.mjs"
 import { createCodexActivityPayload } from "./codex-activity.mjs"
+import {
+  createDirectoryPicker,
+  DirectoryPickerUnavailableError,
+} from "./directory-picker.mjs"
 import { readAllPrompts, readPrompt, writePrompt } from "./prompts.mjs"
 import { createLinearStatusHealthChecker } from "./status-health.mjs"
 
@@ -20,6 +24,7 @@ export function createHttpApi({
   store,
   setupManager = null,
   dev = false,
+  directoryPicker = createDirectoryPicker(),
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
 }) {
   return http.createServer(async (req, res) => {
@@ -32,6 +37,7 @@ export function createHttpApi({
           scheduler,
           store,
           setupManager,
+          directoryPicker,
           linearStatusHealthChecker,
         })
         return
@@ -58,6 +64,7 @@ async function handleApi(req, res, url, context) {
     scheduler,
     store,
     setupManager,
+    directoryPicker,
     linearStatusHealthChecker,
   } = context
   const method = req.method || "GET"
@@ -105,6 +112,22 @@ async function handleApi(req, res, url, context) {
       sendJson(res, 200, redactConfig(saved))
     } catch (error) {
       sendJson(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return
+  }
+
+  if (method === "GET" && url.pathname === "/api/directory-picker") {
+    sendJson(res, 200, await directoryPicker.getCapability())
+    return
+  }
+
+  if (method === "POST" && url.pathname === "/api/directory-picker") {
+    try {
+      sendJson(res, 200, await directoryPicker.pickDirectory())
+    } catch (error) {
+      sendJson(res, error instanceof DirectoryPickerUnavailableError ? 409 : 500, {
         error: error instanceof Error ? error.message : String(error),
       })
     }

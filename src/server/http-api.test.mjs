@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
+import { DirectoryPickerUnavailableError } from "./directory-picker.mjs"
 import { createHttpApi } from "./http-api.mjs"
 
 async function withServer(options, run) {
@@ -108,6 +109,81 @@ test("daemon start is blocked until first-run setup is ready", async () => {
     },
   )
   assert.equal(schedulerStarted, false)
+})
+
+test("directory picker API exposes capability and successful selection", async () => {
+  let pickCalls = 0
+  await withServer(
+    {
+      directoryPicker: {
+        async getCapability() {
+          return { available: true }
+        },
+        async pickDirectory() {
+          pickCalls += 1
+          return { status: "selected", path: "/Users/example/Projects/demo" }
+        },
+      },
+    },
+    async (baseUrl) => {
+      const capability = await fetch(`${baseUrl}/api/directory-picker`)
+      assert.equal(capability.status, 200)
+      assert.deepEqual(await capability.json(), { available: true })
+
+      const selection = await fetch(`${baseUrl}/api/directory-picker`, { method: "POST" })
+      assert.equal(selection.status, 200)
+      assert.deepEqual(await selection.json(), {
+        status: "selected",
+        path: "/Users/example/Projects/demo",
+      })
+    },
+  )
+  assert.equal(pickCalls, 1)
+})
+
+test("directory picker API preserves cancellation and distinguishes unavailable from failure", async () => {
+  for (const scenario of [
+    {
+      expectedStatus: 200,
+      pickDirectory: async () => ({ status: "canceled" }),
+      expectedBody: { status: "canceled" },
+    },
+    {
+      expectedStatus: 409,
+      pickDirectory: async () => {
+        throw new DirectoryPickerUnavailableError()
+      },
+      expectedError: /不支持交互式目录选择/,
+    },
+    {
+      expectedStatus: 500,
+      pickDirectory: async () => {
+        throw new Error("selector failed")
+      },
+      expectedError: /selector failed/,
+    },
+  ]) {
+    await withServer(
+      {
+        directoryPicker: {
+          async getCapability() {
+            return { available: true }
+          },
+          pickDirectory: scenario.pickDirectory,
+        },
+      },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/directory-picker`, { method: "POST" })
+        assert.equal(response.status, scenario.expectedStatus)
+        const body = await response.json()
+        if (scenario.expectedBody) {
+          assert.deepEqual(body, scenario.expectedBody)
+        } else {
+          assert.match(body.error, scenario.expectedError)
+        }
+      },
+    )
+  }
 })
 
 test("production static server decodes encoded asset paths", async (t) => {

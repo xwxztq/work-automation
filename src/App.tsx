@@ -2476,6 +2476,8 @@ function ProjectEditor({
   const [linearProjectOptions, setLinearProjectOptions] = useState<LinearProjectOption[]>([])
   const [linearProjectLoading, setLinearProjectLoading] = useState(false)
   const [linearProjectError, setLinearProjectError] = useState<string | null>(null)
+  const [directoryPickerAvailable, setDirectoryPickerAvailable] = useState(false)
+  const [directoryPickerBusy, setDirectoryPickerBusy] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(editing)
   const [projectNameSource, setProjectNameSource] = useState<ProjectNameSource>(
     getInitialProjectNameSource(editing),
@@ -2506,6 +2508,32 @@ function ProjectEditor({
     setProjectNameSource(getInitialProjectNameSource(editing))
     void loadLinearProjects()
   }, [open, editing, loadLinearProjects])
+
+  useEffect(() => {
+    let active = true
+    if (!open) {
+      setDirectoryPickerAvailable(false)
+      setDirectoryPickerBusy(false)
+      return () => {
+        active = false
+      }
+    }
+
+    setDirectoryPickerAvailable(false)
+    void api.getDirectoryPickerCapability()
+      .then((capability) => {
+        if (active) {
+          setDirectoryPickerAvailable(capability.available)
+        }
+      })
+      .catch((error) => {
+        console.error("目录选择能力检测失败，已保留手工输入。", error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [open])
 
   const filteredLinearProjects = useMemo(() => {
     const query = linearProjectFilter.trim().toLowerCase()
@@ -2544,6 +2572,21 @@ function ProjectEditor({
       ...(shouldSyncCodexCwd ? { codexCwd: nextPath } : {}),
       ...getProjectNamePatchForPath(nextPath, projectNameSource),
     })
+  }
+
+  async function selectDirectory() {
+    setDirectoryPickerBusy(true)
+    try {
+      const result = await api.pickDirectory()
+      if (result.status === "selected") {
+        handlePathChange(result.path)
+      }
+    } catch (error) {
+      console.error("目录选择失败，已隐藏选择入口。", error)
+      setDirectoryPickerAvailable(false)
+    } finally {
+      setDirectoryPickerBusy(false)
+    }
   }
 
   function handleRepoNameChange(nextName: string) {
@@ -2622,12 +2665,29 @@ function ProjectEditor({
               </button>
             </Field>
             <Field label="仓库路径" description={projectFieldDescriptions.path}>
-              <Input
-                className="font-mono"
-                placeholder="/Users/you/Projects/my-repo"
-                value={project.path}
-                onChange={(event) => handlePathChange(event.target.value)}
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  className="min-w-0 flex-1 font-mono"
+                  placeholder="/Users/you/Projects/my-repo"
+                  value={project.path}
+                  onChange={(event) => handlePathChange(event.target.value)}
+                />
+                {directoryPickerAvailable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void selectDirectory()}
+                    disabled={busy || directoryPickerBusy}
+                  >
+                    {directoryPickerBusy ? (
+                      <RefreshCcw className="animate-spin" />
+                    ) : (
+                      <FolderGit2 />
+                    )}
+                    选择
+                  </Button>
+                )}
+              </div>
             </Field>
             <Field
               label="仓库名称"
