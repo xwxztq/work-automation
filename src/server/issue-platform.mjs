@@ -35,8 +35,23 @@ export const ISSUE_PLATFORM_ERROR_CODES = Object.freeze(
 const PLATFORM_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u
 const ERROR_CODE_SET = new Set(ISSUE_PLATFORM_ERROR_CODES)
 const OPERATION_SET = new Set(ISSUE_PLATFORM_OPERATIONS)
-const DEFAULT_ERROR_MESSAGE = "事项平台操作失败。"
-const ERROR_PATH_PATTERN = /^\$(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\[\d+\])*$/
+const ERROR_MESSAGE_BY_CODE = Object.freeze({
+  [ISSUE_PLATFORM_ERROR_CODE.INVALID_REQUEST]: "事项平台请求不合法。",
+  [ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND]: "事项平台目标不存在。",
+  [ISSUE_PLATFORM_ERROR_CODE.PERMISSION_DENIED]: "当前身份不能执行该事项平台操作。",
+  [ISSUE_PLATFORM_ERROR_CODE.CONFLICT]: "事项平台操作发生冲突。",
+  [ISSUE_PLATFORM_ERROR_CODE.RATE_LIMITED]: "事项平台请求受到速率限制。",
+  [ISSUE_PLATFORM_ERROR_CODE.UNAVAILABLE]: "事项平台暂时不可用。",
+  [ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED]: "事项平台操作失败。",
+})
+const ERROR_PATH_PATTERNS = Object.freeze([
+  /^\$$/u,
+  /^\$\.target(?:\.(?:platform|issueId))?$/u,
+  /^\$\.idempotencyKey$/u,
+  /^\$\.payload$/u,
+  /^\$\.payload\.(?:body|state|title|description|filePath|filename|contentType)$/u,
+  /^\$\.payload\.include(?:\[\d+\])?$/u,
+])
 
 /**
  * @typedef {object} IssuePlatformTarget
@@ -158,16 +173,16 @@ export function isIssuePlatformId(value) {
 export class IssuePlatformError extends Error {
   constructor({
     code = ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED,
-    message = DEFAULT_ERROR_MESSAGE,
     operation = null,
     path = "$",
     retryable = false,
   } = {}) {
-    super(sanitizeDiagnosticMessage(message))
-    this.name = "IssuePlatformError"
-    this.code = ERROR_CODE_SET.has(code)
+    const normalizedCode = ERROR_CODE_SET.has(code)
       ? code
       : ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED
+    super(ERROR_MESSAGE_BY_CODE[normalizedCode])
+    this.name = "IssuePlatformError"
+    this.code = normalizedCode
     this.operation = OPERATION_SET.has(operation) ? operation : null
     this.path = normalizeErrorPath(path)
     this.retryable = Boolean(retryable)
@@ -192,7 +207,6 @@ export function normalizeIssuePlatformError(error, defaults = {}) {
   if (error instanceof IssuePlatformError) {
     return new IssuePlatformError({
       code: error.code,
-      message: error.message,
       operation: error.operation || defaults.operation,
       path: error.path,
       retryable: error.retryable,
@@ -203,30 +217,20 @@ export function normalizeIssuePlatformError(error, defaults = {}) {
     code: ERROR_CODE_SET.has(defaults.code)
       ? defaults.code
       : ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED,
-    message: DEFAULT_ERROR_MESSAGE,
     operation: defaults.operation,
     path: defaults.path,
     retryable: defaults.retryable,
   }).toJSON()
 }
 
-function sanitizeDiagnosticMessage(value) {
-  const message = String(value || DEFAULT_ERROR_MESSAGE).trim() || DEFAULT_ERROR_MESSAGE
-  return message
-    .slice(0, 1000)
-    .replace(/\bBearer\s+[^\s,;]+/giu, "Bearer [REDACTED]")
-    .replace(
-      /\b(authorization|credential|access[_-]?token|token|password|secret)\s*[:=]\s*[^\s,;]+/giu,
-      "$1=[REDACTED]",
-    )
-}
-
 function normalizeErrorPath(value) {
-  const path = String(value || "$").trim()
-  if (!path || path.length > 256 || !ERROR_PATH_PATTERN.test(path)) {
+  if (typeof value !== "string") {
     return "$"
   }
-  return path
+  const path = value.trim()
+  return path.length <= 256 && ERROR_PATH_PATTERNS.some((pattern) => pattern.test(path))
+    ? path
+    : "$"
 }
 
 function isRecord(value) {

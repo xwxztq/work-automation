@@ -55,7 +55,7 @@ test("rejects non-string and provider-shaped adapter identifiers", () => {
   )
 })
 
-test("serializes stable platform errors and redacts credential-shaped text", () => {
+test("serializes stable platform errors without adapter diagnostics", () => {
   const error = new IssuePlatformError({
     code: ISSUE_PLATFORM_ERROR_CODE.PERMISSION_DENIED,
     operation: ISSUE_PLATFORM_OPERATION.CREATE_COMMENT,
@@ -66,9 +66,59 @@ test("serializes stable platform errors and redacts credential-shaped text", () 
   const serialized = error.toJSON()
 
   assert.equal(serialized.code, "PERMISSION_DENIED")
+  assert.equal(serialized.message, "当前身份不能执行该事项平台操作。")
   assert.equal(serialized.operation, "comment.create")
   assert.equal(serialized.retryable, false)
   assert.doesNotMatch(JSON.stringify(serialized), /top-secret-value/u)
+})
+
+test("defines a safe public message for every platform error code", () => {
+  const privateValue = "LINEAR_API_KEY=all-codes-private-value-001"
+
+  for (const code of Object.values(ISSUE_PLATFORM_ERROR_CODE)) {
+    const error = new IssuePlatformError({ code, message: privateValue })
+
+    assert.equal(Boolean(error.message), true)
+    assert.equal(JSON.stringify(error).includes(privateValue), false)
+  }
+})
+
+test("uses code-owned public messages instead of adapter diagnostics", () => {
+  const diagnostics = [
+    {
+      message: "LINEAR_API_KEY=linear-private-value-001",
+      forbidden: ["LINEAR_API_KEY", "linear-private-value-001"],
+    },
+    {
+      message: "apiKey: api-private-value-002",
+      forbidden: ["apiKey", "api-private-value-002"],
+    },
+    {
+      message: "api_key='api-private-value-003'",
+      forbidden: ["api_key", "api-private-value-003"],
+    },
+    {
+      message: 'provider response: {"client_secret":"oauth-private-value-004"}',
+      forbidden: ["client_secret", "oauth-private-value-004"],
+    },
+  ]
+
+  for (const { message, forbidden } of diagnostics) {
+    const error = new IssuePlatformError({
+      code: ISSUE_PLATFORM_ERROR_CODE.PERMISSION_DENIED,
+      message,
+    })
+    const publicRepresentations = [
+      JSON.stringify(error),
+      String(error),
+      error.stack || "",
+    ].join("\n")
+
+    assert.equal(error.message, "当前身份不能执行该事项平台操作。")
+    for (const fragment of forbidden) {
+      assert.equal(publicRepresentations.includes(fragment), false)
+    }
+  }
 })
 
 test("does not expose raw provider errors across the adapter boundary", () => {
@@ -83,7 +133,7 @@ test("does not expose raw provider errors across the adapter boundary", () => {
 
   assert.deepEqual(normalized, {
     code: "UNAVAILABLE",
-    message: "事项平台操作失败。",
+    message: "事项平台暂时不可用。",
     operation: "issue.read",
     path: "$",
     retryable: true,
@@ -98,4 +148,31 @@ test("drops non-JSON paths from public platform errors", () => {
 
   assert.equal(error.toJSON().path, "$")
   assert.doesNotMatch(JSON.stringify(error), /private-path-value/u)
+})
+
+test("only retains paths from the platform-independent request contract", () => {
+  for (const path of [
+    "$",
+    "$.target",
+    "$.target.issueId",
+    "$.idempotencyKey",
+    "$.payload",
+    "$.payload.body",
+    "$.payload.include[0]",
+  ]) {
+    assert.equal(new IssuePlatformError({ path }).toJSON().path, path)
+  }
+
+  for (const path of [
+    "$.LINEAR_API_KEY",
+    "$.apiKey",
+    "$.api_key",
+    "$.client_secret",
+    "$.payload.client_secret",
+  ]) {
+    const serialized = JSON.stringify(new IssuePlatformError({ path }))
+
+    assert.equal(JSON.parse(serialized).path, "$")
+    assert.equal(serialized.includes(path.slice(2)), false)
+  }
 })

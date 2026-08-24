@@ -91,7 +91,7 @@ src/server/agent-result-protocol.mjs 提供两个无副作用入口：
       }
     }
 
-校验错误不会包含原始 JSON、实际字段值、provider response 或异常 cause。稳定错误码包括：
+校验错误不会包含原始 JSON、实际字段值、provider response 或异常 cause。`UNKNOWN_FIELD` 的 path 只定位到包含未知字段的协议对象，不回显输入控制的字段名；extensions 校验错误同样不会把扩展 key 写入 path。稳定错误码包括：
 
 - INVALID_JSON、MISSING_FIELD、INVALID_FIELD、UNKNOWN_FIELD
 - UNKNOWN_VERSION、UNKNOWN_STAGE
@@ -135,7 +135,7 @@ src/server/issue-platform.mjs 定义五个固定方法：
       "retryable": false
     }
 
-可用错误码为 INVALID_REQUEST、NOT_FOUND、PERMISSION_DENIED、CONFLICT、RATE_LIMITED、UNAVAILABLE 和 OPERATION_FAILED。适配器应把 provider error 映射成 IssuePlatformError；未映射异常经过 normalizeIssuePlatformError 时只返回通用信息，不回显原始响应。错误对象没有凭据、请求头、MCP 配置或原始 cause 字段。
+可用错误码为 INVALID_REQUEST、NOT_FOUND、PERMISSION_DENIED、CONFLICT、RATE_LIMITED、UNAVAILABLE 和 OPERATION_FAILED。公开 message 由错误码决定，不接受适配器传入的 provider 诊断文本；具体响应和排障信息只能留在适配器内部日志中。公开 path 只保留 target、idempotencyKey 和已定义 payload 字段，其他路径统一收敛为 `$`。未映射异常经过 normalizeIssuePlatformError 时也只返回对应错误码的固定信息。错误对象没有凭据、请求头、MCP 配置或原始 cause 字段。
 
 ## 兼容规则
 

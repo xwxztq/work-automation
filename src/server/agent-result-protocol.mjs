@@ -36,7 +36,7 @@ export const ISSUE_READ_INCLUDE = Object.freeze(["comments", "attachments", "rel
 const STAGE_SET = new Set(AGENT_RESULT_STAGES)
 const OPERATION_SET = new Set(ISSUE_PLATFORM_OPERATIONS)
 const READ_INCLUDE_SET = new Set(ISSUE_READ_INCLUDE)
-const IDEMPOTENCY_KEY_PATTERN = /^[a-z0-9][a-z0-9._:/-]{7,127}$/iu
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{7,127}$/u
 const MAX_EXTENSION_DEPTH = 32
 
 const ROOT_FIELDS = new Set([
@@ -687,7 +687,7 @@ function normalizeJsonValue(value, path, ancestors, depth) {
 
   const entries = []
   for (const [key, itemValue] of Object.entries(value)) {
-    const item = normalizeJsonValue(itemValue, appendPath(path, key), ancestors, depth + 1)
+    const item = normalizeJsonValue(itemValue, path, ancestors, depth + 1)
     if (!item.ok) return item
     entries.push([key, item.value])
   }
@@ -700,18 +700,12 @@ function findUnknownField(value, allowedFields, path) {
     if (!allowedFields.has(field)) {
       return invalid(
         AGENT_RESULT_ERROR_CODE.UNKNOWN_FIELD,
-        appendPath(path, field),
+        path,
         "字段不属于当前协议版本。",
       )
     }
   }
   return null
-}
-
-function appendPath(path, field) {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(field)
-    ? path + "." + field
-    : path + "[" + JSON.stringify(field) + "]"
 }
 
 function isRecord(value) {

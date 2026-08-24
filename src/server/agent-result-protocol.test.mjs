@@ -316,6 +316,25 @@ test("rejects invalid and duplicate idempotency keys", () => {
   )
 })
 
+test("accepts ASCII idempotency keys and rejects Unicode case-folding lookalikes", () => {
+  for (const key of ["Kaaaaaaa", "SAAAAAAA", "issue-1171:ASCII:001"]) {
+    const input = envelope()
+    input.operations[0].idempotencyKey = key
+
+    assert.equal(validateAgentResult(input, validationContext()).ok, true)
+  }
+
+  for (const key of ["Kaaaaaaa", "ſaaaaaaa"]) {
+    const input = envelope()
+    input.operations[0].idempotencyKey = key
+
+    const result = validateAgentResult(input, validationContext())
+
+    assert.equal(result.error?.code, AGENT_RESULT_ERROR_CODE.INVALID_IDEMPOTENCY_KEY)
+    assert.equal(result.error?.path, "$.operations[0].idempotencyKey")
+  }
+})
+
 test("accepts explicit v1 extensions and rejects undeclared fields", () => {
   const compatible = envelope({
     extensions: { producer: { build: 7 } },
@@ -340,7 +359,41 @@ test("accepts explicit v1 extensions and rejects undeclared fields", () => {
   const incompatible = envelope({ unexpected: true })
   const rejected = validateAgentResult(incompatible, validationContext())
   assert.equal(rejected.error?.code, AGENT_RESULT_ERROR_CODE.UNKNOWN_FIELD)
-  assert.equal(rejected.error?.path, "$.unexpected")
+  assert.equal(rejected.error?.path, "$")
+})
+
+test("does not include input-controlled field names in validation errors", () => {
+  const rootField = "LINEAR_API_KEY_private-field-123"
+  const rootInput = envelope()
+  rootInput[rootField] = true
+
+  const rootResult = validateAgentResult(rootInput, validationContext())
+
+  assert.equal(rootResult.error?.code, AGENT_RESULT_ERROR_CODE.UNKNOWN_FIELD)
+  assert.equal(rootResult.error?.path, "$")
+  assert.equal(JSON.stringify(rootResult).includes(rootField), false)
+
+  const payloadField = "client_secret_private-field-456"
+  const payloadInput = envelope()
+  payloadInput.operations[0].payload[payloadField] = true
+
+  const payloadResult = validateAgentResult(payloadInput, validationContext())
+
+  assert.equal(payloadResult.error?.code, AGENT_RESULT_ERROR_CODE.UNKNOWN_FIELD)
+  assert.equal(payloadResult.error?.path, "$.operations[0].payload")
+  assert.equal(JSON.stringify(payloadResult).includes(payloadField), false)
+})
+
+test("does not include extension keys in validation error paths", () => {
+  const privateField = "api_key_private-field-789"
+  const extensions = {}
+  extensions[privateField] = extensions
+
+  const result = validateAgentResult(envelope({ extensions }), validationContext())
+
+  assert.equal(result.error?.code, AGENT_RESULT_ERROR_CODE.INVALID_FIELD)
+  assert.equal(result.error?.path, "$.extensions")
+  assert.equal(JSON.stringify(result).includes(privateField), false)
 })
 
 test("rejects extensions that exceed the compatibility depth limit", () => {
