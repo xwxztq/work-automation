@@ -1,3 +1,5 @@
+import { verifyLinearCommentImages } from "./linear-comment-images.mjs"
+import { RUN_IMAGE_LIMITS, imageError } from "./run-images.mjs"
 import {
   ISSUE_PLATFORM_ERROR_CODE,
   ISSUE_PLATFORM_OPERATION,
@@ -59,14 +61,13 @@ export function createLinearWriteAdapter(linearClient) {
   async function createComment(request, { commentId } = {}) {
     validateRequest(request, ISSUE_PLATFORM_OPERATION.CREATE_COMMENT)
     const normalizedCommentId = requireValue(commentId, "$.idempotencyKey")
+    const variables = { input: {
+      id: normalizedCommentId, issueId: request.target.issueId, body: request.payload.body,
+    } }
+    if (request.payload.body.length > RUN_IMAGE_LIMITS.bodyCharacters) throw imageError()
+    if (Buffer.byteLength(JSON.stringify({ query: COMMENT_CREATE_MUTATION, variables })) > RUN_IMAGE_LIMITS.requestBytes) throw imageError()
     try {
-      const data = await linearClient.graphql(COMMENT_CREATE_MUTATION, {
-        input: {
-          id: normalizedCommentId,
-          issueId: request.target.issueId,
-          body: request.payload.body,
-        },
-      })
+      const data = await linearClient.graphql(COMMENT_CREATE_MUTATION, variables)
       if (!data?.commentCreate?.success || !data.commentCreate.comment) {
         throw new IssuePlatformError({
           code: ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED,
@@ -150,6 +151,7 @@ export function createLinearWriteAdapter(linearClient) {
     supportedOperations: LINEAR_WRITE_SUPPORTED_OPERATIONS,
     createChildIssue,
     createComment,
+    verifyCommentImages: (request) => verifyLinearCommentImages({ ...request, readImage: linearClient.readImage }),
     updateIssueState,
   })
 }

@@ -4,7 +4,7 @@ import {
   isIssuePlatformId,
 } from "./issue-platform.mjs"
 
-export const AGENT_RESULT_SCHEMA_VERSION = "1"
+export const AGENT_RESULT_SCHEMA_VERSION = "2"
 export const AGENT_RESULT_STAGES = Object.freeze(["part1", "split", "part2", "part3"])
 export const AGENT_RESULT_OPERATION = ISSUE_PLATFORM_OPERATION
 
@@ -157,6 +157,7 @@ function normalizeContext(context) {
   }
 
   return valid({
+    schemaVersion: context.schemaVersion,
     stage: context.stage,
     projectKey: context.projectKey.trim(),
     parentIssueId:
@@ -184,7 +185,7 @@ function normalizeEnvelope(value, context) {
   const unknownRootField = findUnknownField(value, ROOT_FIELDS, "$")
   if (unknownRootField) return unknownRootField
 
-  if (value.schemaVersion !== AGENT_RESULT_SCHEMA_VERSION) {
+  if (!["1", AGENT_RESULT_SCHEMA_VERSION].includes(value.schemaVersion)) {
     return invalid(
       AGENT_RESULT_ERROR_CODE.UNKNOWN_VERSION,
       "$.schemaVersion",
@@ -192,6 +193,9 @@ function normalizeEnvelope(value, context) {
     )
   }
 
+  if (context.schemaVersion && value.schemaVersion !== context.schemaVersion) {
+    return invalid(AGENT_RESULT_ERROR_CODE.UNKNOWN_VERSION, "$.schemaVersion", "结果版本与本次运行绑定不一致。")
+  }
   const run = normalizeRun(value.run, context)
   if (!run.ok) return run
   const target = normalizeTarget(value.target, context.target)
@@ -200,13 +204,15 @@ function normalizeEnvelope(value, context) {
     value.operations,
     new Set(run.value.allowedOperations),
     context.allowedOperationSet,
+    value.schemaVersion,
+    context.stage,
   )
   if (!operations.ok) return operations
   const extensions = normalizeOptionalExtensions(value, "extensions", "$.extensions")
   if (!extensions.ok) return extensions
 
   return valid({
-    schemaVersion: AGENT_RESULT_SCHEMA_VERSION,
+    schemaVersion: value.schemaVersion,
     run: run.value,
     target: target.value,
     operations: operations.value,
@@ -375,7 +381,7 @@ function normalizeAllowedOperations(value, path, grantedOperationSet = null) {
   return valid(normalized)
 }
 
-function normalizeOperations(value, declaredOperationSet, grantedOperationSet) {
+function normalizeOperations(value, declaredOperationSet, grantedOperationSet, version, stage) {
   if (!Array.isArray(value)) {
     return invalid(
       AGENT_RESULT_ERROR_CODE.INVALID_FIELD,
@@ -393,6 +399,8 @@ function normalizeOperations(value, declaredOperationSet, grantedOperationSet) {
       declaredOperationSet,
       grantedOperationSet,
       idempotencyKeys,
+      version,
+      stage,
     )
     if (!result.ok) return result
     normalized.push(result.value)
@@ -406,6 +414,8 @@ function normalizeOperation(
   declaredOperationSet,
   grantedOperationSet,
   idempotencyKeys,
+  version,
+  stage,
 ) {
   const path = "$.operations[" + index + "]"
   if (!isRecord(value)) {
@@ -454,7 +464,7 @@ function normalizeOperation(
   }
   idempotencyKeys.add(value.idempotencyKey)
 
-  const payload = normalizePayload(value.type, value.payload, path + ".payload")
+  const payload = normalizePayload(value.type, value.payload, path + ".payload", version, stage)
   if (!payload.ok) return payload
   const extensions = normalizeOptionalExtensions(value, "extensions", path + ".extensions")
   if (!extensions.ok) return extensions
@@ -467,7 +477,7 @@ function normalizeOperation(
   })
 }
 
-function normalizePayload(operation, value, path) {
+function normalizePayload(operation, value, path, version, stage) {
   if (!isRecord(value)) {
     return invalid(
       AGENT_RESULT_ERROR_CODE.INVALID_FIELD,
@@ -480,7 +490,7 @@ function normalizePayload(operation, value, path) {
     return normalizeReadPayload(value, path)
   }
   if (operation === ISSUE_PLATFORM_OPERATION.CREATE_COMMENT) {
-    return normalizeCommentPayload(value, path)
+    return normalizeCommentPayload(value, path, version, stage)
   }
   if (operation === ISSUE_PLATFORM_OPERATION.UPDATE_ISSUE_STATE) {
     return normalizeStatePayload(value, path)
@@ -523,8 +533,8 @@ function normalizeReadPayload(value, path) {
   return withPayloadExtensions(value, path, { include: [...include] })
 }
 
-function normalizeCommentPayload(value, path) {
-  const unknownField = findUnknownField(value, new Set(["body", "extensions"]), path)
+function normalizeCommentPayload(value, path, version, stage) {
+  const unknownField = findUnknownField(value, new Set(version === "2" ? ["body", "images", "extensions"] : ["body", "extensions"]), path)
   if (unknownField) return unknownField
   if (!hasOwn(value, "body")) return missing(path + ".body")
   if (typeof value.body !== "string" || !value.body.trim()) {
@@ -534,7 +544,32 @@ function normalizeCommentPayload(value, path) {
       "评论正文不能为空。",
     )
   }
-  return withPayloadExtensions(value, path, { body: value.body })
+  if (version === "2" && /!\[|<img\b|(?:^|[\s(="'])data\s*:/iu.test(value.body)) {
+    return invalid(AGENT_RESULT_ERROR_CODE.INVALID_FIELD, path + ".body", "图片必须通过 images 声明，不能在正文嵌入图片或 data URI。")
+  }
+  const images = []
+  if (hasOwn(value, "images")) {
+    if (stage !== "part3") {
+      return invalid(AGENT_RESULT_ERROR_CODE.OPERATION_NOT_ALLOWED, path + ".images", "只有阶段三可以声明评论图片。")
+    }
+    if (!Array.isArray(value.images) || value.images.length > 4) {
+      return invalid(AGENT_RESULT_ERROR_CODE.INVALID_FIELD, path + ".images", "评论图片必须是最多四项的数组。")
+    }
+    for (const image of value.images) {
+      if (!isRecord(image)) return invalid(AGENT_RESULT_ERROR_CODE.INVALID_FIELD, path + ".images", "图片声明必须是对象。")
+      const unknown = findUnknownField(image, new Set(["filePath", "caption"]), path + ".images")
+      if (unknown) return unknown
+      if (!isNonEmptyString(image.filePath) || image.filePath.length > 1024 ||
+          (hasOwn(image, "caption") && (typeof image.caption !== "string" || image.caption.length > 200 || /[\r\n]/u.test(image.caption)))) {
+        return invalid(AGENT_RESULT_ERROR_CODE.INVALID_FIELD, path + ".images", "图片路径或说明不合法。")
+      }
+      images.push({ filePath: image.filePath, ...(hasOwn(image, "caption") ? { caption: image.caption } : {}) })
+    }
+  }
+  return withPayloadExtensions(value, path, {
+    body: value.body,
+    ...(hasOwn(value, "images") ? { images } : {}),
+  })
 }
 
 function normalizeStatePayload(value, path) {

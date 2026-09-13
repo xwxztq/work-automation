@@ -202,7 +202,7 @@ test("issue snapshot includes normalized relation context for every stage", () =
   assert.doesNotMatch(JSON.stringify(snapshot), /should-not-leak/u)
 })
 
-test("all stages use the same immutable v1 binding and produce parser-valid no-op results", () => {
+test("all stages use the same immutable v2 binding and produce parser-valid no-op results", () => {
   for (const stage of ["part1", "split", "part2", "part3"]) {
     const context = createAgentResultContext({
       stage,
@@ -219,7 +219,7 @@ test("all stages use the same immutable v1 binding and produce parser-valid no-o
       title: "Structured result",
     })
     const finalText = JSON.stringify({
-      schemaVersion: "1",
+      schemaVersion: "2",
       run: {
         stage: context.stage,
         projectKey: context.projectKey,
@@ -230,7 +230,7 @@ test("all stages use the same immutable v1 binding and produce parser-valid no-o
       operations: [],
     })
 
-    assert.match(section, /"schemaVersion": "1"/u)
+    assert.match(section, /"schemaVersion": "2"/u)
     assert.match(section, /"platform": "primary-issues"/u)
     assert.match(section, /不得调用 Linear API、Linear MCP、Linear skill/u)
     assert.equal(parseAgentResult(finalText, context).ok, true)
@@ -250,11 +250,12 @@ test("global prompts request structured operations instead of direct Linear writ
   }
 })
 
-test("part3 prompt keeps inline evidence and queues attachment operations", async () => {
+test("part3 prompt keeps inline evidence and declares controlled comment images", async () => {
   const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part3")
 
   assert.match(prompt, /不能只给路径/u)
-  assert.match(prompt, /attachment\.upload/u)
+  assert.match(prompt, /comment\.create\.payload\.images/u)
+  assert.match(prompt, /不生成 `attachment\.upload`/u)
   assert.match(prompt, /不要伪造链接或声称上传成功/u)
   assert.doesNotMatch(prompt, /Work Automation 根目录/u)
 })

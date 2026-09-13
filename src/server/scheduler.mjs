@@ -88,6 +88,8 @@ export function createScheduler({
   async function cleanupCompletedRunReview(run) {
     if (
       !run?.cleanupReviewTempOnCompletion ||
+      (run.agentResult?.operations?.some((item) => item.payload?.images?.length) &&
+        run.operationExecution?.status !== "completed") ||
       (
         run.status !== "canceled" &&
         run.operationExecution?.required === true &&

@@ -62,7 +62,7 @@ const ERROR_PATH_PATTERNS = Object.freeze([
   /^\$\.target(?:\.(?:platform|issueId))?$/u,
   /^\$\.idempotencyKey$/u,
   /^\$\.payload$/u,
-  /^\$\.payload\.(?:body|state|title|description|filePath|filename|contentType)$/u,
+  /^\$\.payload\.(?:body|state|title|description|filePath|filename|contentType|images)$/u,
   /^\$\.payload\.include(?:\[\d+\])?$/u,
 ])
 
@@ -182,7 +182,7 @@ const ERROR_PATH_PATTERNS = Object.freeze([
 
 /**
  * @typedef {IssuePlatformRequestBase & {
- *   payload: {body: string}
+ *   payload: {body: string, images?: Array<{filePath: string, caption?: string}>}
  * }} CreateCommentRequest
  */
 

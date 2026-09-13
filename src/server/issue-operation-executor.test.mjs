@@ -652,7 +652,7 @@ async function createFixture(t, {
 
 function resultFor(fixture, operations) {
   return {
-    schemaVersion: "1",
+    schemaVersion: "2",
     run: {
       stage: fixture.run.agentResultContext.stage,
       projectKey: fixture.run.agentResultContext.projectKey,
@@ -693,3 +693,126 @@ function workflowStates() {
     { id: "state-ready-review", name: "Ready for Review", type: "completed", archivedAt: null },
   ]
 }
+
+async function imageFixture(t, options = {}) {
+  const { PNG } = await import("pngjs")
+  const { createLinearWriteAdapter } = await import("./linear-write-adapter.mjs")
+  const f = await createFixture(t, { stage: "part3", stateName: "Testing", ...options })
+  const bytes = PNG.sync.write({ width: 3, height: 2, data: Buffer.alloc(24, 255) })
+  await fs.writeFile(path.join(f.run.dir, "image.png"), bytes)
+  let readFailures = options.imageReadFailures || 0
+  const adapter = createLinearWriteAdapter({
+    async graphql(_query, { input }) {
+      f.mutations.push("comment.create")
+      const body = input.body.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/gu, "https://uploads.linear.app/workspace/image/test.png")
+      const comment = { id: input.id, body: options.missingImage ? "missing image" : body }
+      f.issue.comments.push(comment)
+      if (options.responseLost) throw Object.assign(new Error("network timeout"), { code: "ETIMEDOUT" })
+      return { commentCreate: { success: true, comment } }
+    },
+    async readImage() {
+      if (readFailures-- > 0) throw new IssuePlatformError({ code: "RATE_LIMITED", retryable: true })
+      return options.wrongImage ? Buffer.from("wrong image") : bytes
+    },
+  })
+  Object.assign(f.platforms["primary-issues"].writer, {
+    createComment: adapter.createComment,
+    verifyCommentImages: adapter.verifyCommentImages,
+  })
+  f.agentResult = {
+    ...resultFor(f, [
+      operation("comment.create", "liv-1176:image-comment", { body: "检查通过。", images: [{ filePath: "image.png", caption: "场景" }] }),
+      operation("issue.state.update", "liv-1176:image-state", { state: "Ready for Review" }),
+    ]),
+    schemaVersion: "2",
+  }
+  f.execute = (executor = f.executor) => executor.execute({ run: f.run, project: f.project, config: { statuses }, agentResult: f.agentResult })
+  return f
+}
+
+test("image batch validates every file before even an earlier text mutation", async (t) => {
+  const f = await imageFixture(t)
+  f.agentResult.operations.unshift(operation("comment.create", "liv-1176:earlier-text", { body: "earlier" }))
+  f.agentResult.operations[1].payload.images[0].filePath = "../outside.png"
+  const result = await f.execute()
+  assert.equal(result.status, "manual-required")
+  assert.deepEqual(f.mutations, [])
+})
+
+test("image batch detects files changing after intents persist before any mutation", async (t) => {
+  const f = await imageFixture(t, { checkpoint: async (name, { run }) => {
+    if (name === "after-intents-persisted") await fs.writeFile(path.join(run.dir, "image.png"), "changed")
+  } })
+  assert.equal((await f.execute()).error.code, "CONFLICT")
+  assert.deepEqual(f.mutations, [])
+})
+
+for (const mode of ["normal", "responseLost", "imageReadFailures", "stateFailures"]) {
+  test(`image comments recover ${mode} without repeating commentCreate`, async (t) => {
+    const f = await imageFixture(t, { [mode]: 1 })
+    const first = await f.execute()
+    assert.equal(first.status, ["imageReadFailures", "stateFailures"].includes(mode) ? "retryable" : "completed")
+    await fs.unlink(path.join(f.run.dir, "image.png"))
+    const restarted = createIssueOperationExecutor({ store: createRunStore(f.rootDir), platforms: f.platforms })
+    const replay = await f.execute(restarted)
+    assert.equal(replay.status, "completed")
+    assert.equal(f.mutations.filter(x => x === "comment.create").length, 1)
+    assert.equal(f.issue.comments.length, 1)
+    const record = await f.store.getIssueOperation({ platform: "primary-issues", projectKey: "work-automation", issueId: f.run.issueId, type: "comment.create", idempotencyKey: "liv-1176:image-comment" })
+    assert.equal(record.intent.images[0].size > 0, true)
+    assert.match(record.intent.requestFingerprint, /^[a-f0-9]{64}$/u)
+    assert.equal(record.verification.references.length, 1)
+  })
+}
+
+test("image comment recovers crash after provider write before local success record", async (t) => {
+  const f = await imageFixture(t, { checkpoint(name) {
+    if (name === "after-provider-write") throw new Error("image process crash")
+  } })
+  await assert.rejects(f.execute(), /image process crash/u)
+  const restarted = createIssueOperationExecutor({ store: createRunStore(f.rootDir), platforms: f.platforms })
+  assert.equal((await f.execute(restarted)).status, "completed")
+  assert.equal(f.mutations.filter(x => x === "comment.create").length, 1)
+})
+
+for (const mode of ["missingImage", "wrongImage"]) {
+  test(`image ${mode} retains UUID for manual review without repeating writes`, async (t) => {
+    const f = await imageFixture(t, { [mode]: true })
+    assert.equal((await f.execute()).status, "manual-required")
+    assert.equal((await f.execute()).status, "manual-required")
+    assert.deepEqual(f.mutations, ["comment.create"])
+  })
+}
+
+test("replayed image declarations, order and content cannot change under the same key", async (t) => {
+  const f = await imageFixture(t)
+  assert.equal((await f.execute()).status, "completed")
+  f.agentResult.operations[0].payload.images[0].caption = "changed"
+  assert.equal((await f.execute()).error.code, "CONFLICT")
+  f.agentResult.operations[0].payload.images[0].caption = "场景"
+  await fs.writeFile(path.join(f.run.dir, "image.png"), "changed")
+  assert.equal((await f.execute()).error.code, "CONFLICT")
+  assert.equal(f.mutations.filter(x => x === "comment.create").length, 1)
+})
+
+test("restores a persisted legacy v1 part3 run without changing attachment semantics", async (t) => {
+  const f = await createFixture(t, { stage: "part3", stateName: "Testing" })
+  const legacyContext = { ...f.run.agentResultContext, allowedOperations: ["attachment.upload", "comment.create", "issue.state.update"] }
+  delete legacyContext.schemaVersion
+  await f.store.updateRun(f.run, { agentResultContext: legacyContext })
+  const run = await f.store.getRunMetadata(f.run.id)
+  const result = {
+    schemaVersion: "1",
+    run: { stage: "part3", projectKey: run.projectKey, parentIssueId: null, allowedOperations: legacyContext.allowedOperations },
+    target: legacyContext.target,
+    operations: [operation("comment.create", "legacy-v1:review-comment", { body: "旧运行的纯文本审查。" })],
+  }
+  const restarted = createIssueOperationExecutor({ store: createRunStore(f.rootDir), platforms: f.platforms })
+  const request = { run, project: f.project, config: { statuses }, agentResult: result }
+  assert.equal((await restarted.execute(request)).status, "completed")
+  assert.equal((await restarted.execute(request)).status, "completed")
+  assert.deepEqual(f.mutations, ["comment.create"])
+  result.operations.push(operation("attachment.upload", "legacy-v1:attachment", { filePath: "old.png" }))
+  assert.equal((await restarted.execute(request)).status, "manual-required")
+  assert.deepEqual(f.mutations, ["comment.create"])
+})

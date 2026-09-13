@@ -304,7 +304,7 @@ test("executes validated operations before completing and recording the issue", 
         codexPid: 101,
         error: null,
         agentResult,
-        agentResultValidation: { ok: true, schemaVersion: "1" },
+        agentResultValidation: { ok: true, schemaVersion: "2" },
       }
     },
   })
@@ -344,7 +344,7 @@ test("recovers validated operations from a supervisor-completed run after restar
     completionSource: "reconciled",
     agentResultContext,
     agentResult,
-    agentResultValidation: { ok: true, schemaVersion: "1" },
+    agentResultValidation: { ok: true, schemaVersion: "2" },
   })
   let codexRunCount = 0
   const scheduler = createScheduler({
@@ -448,7 +448,7 @@ test("keeps retryable writes unprocessed and resumes them without rerunning Code
         codexPid: 101,
         error: null,
         agentResult,
-        agentResultValidation: { ok: true, schemaVersion: "1" },
+        agentResultValidation: { ok: true, schemaVersion: "2" },
       }
     },
   })
@@ -506,7 +506,7 @@ test("does not create a second run while operation recovery is still retryable",
         codexPid: 101,
         error: null,
         agentResult,
-        agentResultValidation: { ok: true, schemaVersion: "1" },
+        agentResultValidation: { ok: true, schemaVersion: "2" },
       }
     },
   })
@@ -601,7 +601,7 @@ test("lost runs only succeed when their final artifact passes the bound parser",
     issue: { id: "issue-1172" },
   })
   const value = {
-    schemaVersion: "1",
+    schemaVersion: "2",
     run: {
       stage: context.stage,
       projectKey: context.projectKey,
@@ -751,7 +751,7 @@ async function createOperationSchedulerFixture(t, { stateFailures = 0 } = {}) {
 
 function completedAgentResult(context, suffix) {
   return {
-    schemaVersion: "1",
+    schemaVersion: "2",
     run: {
       stage: context.stage,
       projectKey: context.projectKey,
@@ -772,4 +772,40 @@ function completedAgentResult(context, suffix) {
       },
     ],
   }
+}
+
+for (const validImage of [false, true]) {
+  test(`image recovery ${validImage ? "cleans temporary work after verification" : "preserves temporary evidence for manual handling"}`, async (t) => {
+    const { PNG } = await import("pngjs")
+    const { verifyLinearCommentImages } = await import("./linear-comment-images.mjs")
+    const fixture = await createOperationSchedulerFixture(t)
+    fixture.issue.state = { id: "state-testing", name: "Testing", type: "completed", archivedAt: null }
+    fixture.linear.operationWriter.verifyCommentImages = verifyLinearCommentImages
+    let run = await fixture.store.createRun({ projectKey: "work-automation", stage: "part3", issue: fixture.issue })
+    const context = createAgentResultContext({ stage: "part3", projectKey: "work-automation", issue: fixture.issue })
+    const temp = path.join(run.dir, "review", "_work")
+    await fs.mkdir(temp, { recursive: true })
+    await fs.writeFile(path.join(temp, "image.png"), validImage ? PNG.sync.write({ width: 2, height: 2, data: Buffer.alloc(16, 255) }) : Buffer.from("not an image"))
+    const agentResult = {
+      schemaVersion: "2",
+      run: { stage: context.stage, projectKey: context.projectKey, parentIssueId: null, allowedOperations: context.allowedOperations },
+      target: context.target,
+      operations: [{ type: "comment.create", idempotencyKey: "liv-1176:cleanup-comment", payload: { body: "Codex Auto Review Complete", images: [{ filePath: "review/_work/image.png" }] } }],
+    }
+    run = await fixture.store.updateRun(run, {
+      status: "succeeded", completionSource: "reconciled", cleanupReviewTempOnCompletion: true,
+      agentResultContext: context, agentResult, agentResultValidation: { ok: true, schemaVersion: "2" },
+    })
+    const scheduler = createScheduler({
+      rootDir: fixture.rootDir, store: fixture.store, configProvider: async () => fixture.config,
+      linearProvider: () => fixture.linear,
+      linearStatusHealthChecker: { async check() { return { ok: true, projects: [] } } },
+      codexRunner: async () => { throw new Error("不应启动新 Agent") },
+    })
+    await scheduler.runOnce("part3")
+    const finalRun = await fixture.store.getRunMetadata(run.id)
+    assert.equal(finalRun.operationExecution.status, validImage ? "completed" : "manual-required")
+    if (validImage) await assert.rejects(fs.lstat(temp), { code: "ENOENT" })
+    else assert.equal((await fs.lstat(temp)).isDirectory(), true)
+  })
 }

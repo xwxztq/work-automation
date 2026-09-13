@@ -4,7 +4,6 @@ import test from "node:test"
 import {
   AGENT_RESULT_ERROR_CODE,
   AGENT_RESULT_OPERATION,
-  AGENT_RESULT_SCHEMA_VERSION,
   parseAgentResult,
   validateAgentResult,
 } from "./agent-result-protocol.mjs"
@@ -34,7 +33,7 @@ function validationContext(overrides = {}) {
 
 function envelope(overrides = {}) {
   return {
-    schemaVersion: AGENT_RESULT_SCHEMA_VERSION,
+    schemaVersion: "1",
     run: {
       stage: "part2",
       projectKey: "work-automation",

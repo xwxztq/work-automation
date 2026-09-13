@@ -45,7 +45,9 @@
     "native:bundle:macos:local": "npm run build && node scripts/build-native-runtime.mjs --platform darwin --local-node"
   },
   "dependencies": {
-    "https-proxy-agent": "^7.0.6"
+    "https-proxy-agent": "^7.0.6",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0"
   },
   "devDependencies": {
     "@fontsource-variable/geist": "^5.2.9",

@@ -22,7 +22,6 @@ export const AGENT_RESULT_ALLOWED_OPERATIONS_BY_STAGE = Object.freeze({
     AGENT_RESULT_OPERATION.UPDATE_ISSUE_STATE,
   ]),
   part3: Object.freeze([
-    AGENT_RESULT_OPERATION.UPLOAD_ATTACHMENT,
     AGENT_RESULT_OPERATION.CREATE_COMMENT,
     AGENT_RESULT_OPERATION.UPDATE_ISSUE_STATE,
   ]),
@@ -30,6 +29,7 @@ export const AGENT_RESULT_ALLOWED_OPERATIONS_BY_STAGE = Object.freeze({
 
 export function createAgentResultContext({ stage, projectKey, issue }) {
   const context = {
+    schemaVersion: AGENT_RESULT_SCHEMA_VERSION,
     stage,
     projectKey: String(projectKey || "").trim(),
     parentIssueId: resolveParentIssueId(issue),
@@ -59,6 +59,7 @@ export function createAgentResultContext({ stage, projectKey, issue }) {
     throw new Error(formatAgentResultError(normalized.error))
   }
   return {
+    schemaVersion: AGENT_RESULT_SCHEMA_VERSION,
     stage: normalized.value.run.stage,
     projectKey: normalized.value.run.projectKey,
     parentIssueId: normalized.value.run.parentIssueId,
@@ -136,7 +137,7 @@ export function buildAgentResultOutputSchema(context) {
   }
 
   const operationSchemas = normalizedContext.allowedOperations.map((operation) =>
-    operationSchema(operation),
+    operationSchema(operation, normalizedContext.stage),
   )
   return {
     type: "object",
@@ -201,7 +202,7 @@ function sameOperations(left, right) {
   )
 }
 
-function operationSchema(operation) {
+function operationSchema(operation, stage) {
   return {
     type: "object",
     additionalProperties: false,
@@ -209,12 +210,12 @@ function operationSchema(operation) {
     properties: {
       type: singletonStringSchema(operation),
       idempotencyKey: { type: "string" },
-      payload: payloadSchema(operation),
+      payload: payloadSchema(operation, stage),
     },
   }
 }
 
-function payloadSchema(operation) {
+function payloadSchema(operation, stage) {
   if (operation === AGENT_RESULT_OPERATION.READ_ISSUE) {
     return objectSchema(
       {
@@ -230,7 +231,12 @@ function payloadSchema(operation) {
     )
   }
   if (operation === AGENT_RESULT_OPERATION.CREATE_COMMENT) {
-    return objectSchema({ body: { type: "string" } }, ["body"])
+    return stage === "part3"
+      ? objectSchema({ body: { type: "string" }, images: {
+          type: "array", maxItems: 4,
+          items: objectSchema({ filePath: { type: "string" }, caption: { type: "string" } }, ["filePath", "caption"]),
+        } }, ["body", "images"])
+      : objectSchema({ body: { type: "string" } }, ["body"])
   }
   if (operation === AGENT_RESULT_OPERATION.UPDATE_ISSUE_STATE) {
     return objectSchema({ state: { type: "string" } }, ["state"])

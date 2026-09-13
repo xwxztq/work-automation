@@ -434,7 +434,7 @@ function splitResult(fixture, children = [
     },
   }))
   return {
-    schemaVersion: "1",
+    schemaVersion: "2",
     run: {
       stage: fixture.run.agentResultContext.stage,
       projectKey: fixture.run.agentResultContext.projectKey,

@@ -5,6 +5,8 @@ export function verifyLinearOperation({ operation, intent, issue } = {}) {
     if (!comment) {
       return { status: "not-applied", resourceId }
     }
+    if (comment.archivedAt) return { status: "conflict", resourceId }
+    if (intent.images?.length) return { status: "images-required", resourceId, comment }
     if (comment.body !== operation.payload?.body) {
       return { status: "conflict", resourceId }
     }

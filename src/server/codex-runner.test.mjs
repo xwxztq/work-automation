@@ -357,7 +357,7 @@ test("runner and supervisor keep Linear credentials out of a fake Codex process"
     issue,
   })
   const finalValue = {
-    schemaVersion: "1",
+    schemaVersion: "2",
     run: {
       stage: agentResultContext.stage,
       projectKey: agentResultContext.projectKey,
@@ -553,7 +553,7 @@ test("real macOS sandbox denies the Codex process access to service credentials 
     issue,
   })
   const finalValue = {
-    schemaVersion: "1",
+    schemaVersion: "2",
     run: {
       stage: agentResultContext.stage,
       projectKey: agentResultContext.projectKey,

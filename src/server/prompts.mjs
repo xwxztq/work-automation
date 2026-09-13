@@ -152,7 +152,8 @@ export function buildAgentResultPromptSection(context, issue) {
 - 最终输出必须是单个 JSON 文档，不得带 Markdown 代码块或说明文字。
 - 最终 JSON 必须原样复制 binding 中的 schemaVersion、run 和 target；run.allowedOperations 也必须保持原顺序与完整内容。
 - operations 只能使用 run.allowedOperations 中的类型；每项使用 8 至 128 字符且在本结果内唯一的 idempotencyKey。
-- 每项 operation 只包含 type、idempotencyKey 和 payload。comment.create 的 payload 必须包含 body，issue.state.update 必须包含 state，issue.child.create 必须包含 title 和 description，attachment.upload 必须包含 filePath 和 title。
+- 每项 operation 只包含 type、idempotencyKey 和 payload。comment.create 的 payload 必须包含 body；阶段三另带有序 images 数组，每项包含 run 相对 filePath 和 caption，没有图片时 images 为 []。其他阶段不得声明 images。issue.state.update 必须包含 state，issue.child.create 必须包含 title 和 description。attachment.upload 不可执行。
+- 图片只用 images 声明，不在 body 内嵌图片 Markdown、HTML 或 data URI。仅支持 PNG/JPEG，单文件最多 64 KiB，每 run 最多 4 张、总计 256 KiB；编码后评论不得超过 100000 字符，长正文或多图需要减少图片体积。
 - 不需要平台操作时输出空 operations 数组。不要声称操作已经在平台执行。
 
 运行绑定 binding:

@@ -1,4 +1,5 @@
 import https from "node:https"
+import { readLinearImage } from "./linear-comment-images.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import { createProxyAgent, resolveProxyUrl } from "./proxy.mjs"
 
@@ -120,6 +121,7 @@ export function createLinearClient(apiKey) {
   }
 
   return {
+    readImage: (url, maxBytes) => readLinearImage(url, apiKey, maxBytes),
     graphql,
     listProjects,
     listProjectIssues,

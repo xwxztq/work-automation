@@ -8,6 +8,7 @@ import {
   IssuePlatformError,
   normalizeIssuePlatformError,
 } from "./issue-platform.mjs"
+import { prepareRunImages, recheckRunImages } from "./run-images.mjs"
 import { verifyLinearOperation } from "./linear-write-verification.mjs"
 
 export const ISSUE_OPERATION_EXECUTION_VERSION = 1
@@ -209,6 +210,8 @@ async function buildPreflight({ run, project, config, result, reader, store }) {
     }
   }
 
+  await prepareRunImages(run, operationInputs)
+
   const currentIsStageInput = policy.inputs.has(currentState.name)
   const currentIsRecoveredTarget = operationInputs.some((input) => {
     const state = stateIntents.get(input.operation.idempotencyKey)
@@ -242,7 +245,7 @@ async function executePreparedOperations({
   const prepared = []
   for (const input of preflight.operationInputs) {
     const intent = input.operation.type === ISSUE_PLATFORM_OPERATION.CREATE_COMMENT
-      ? { commentId: randomUUID() }
+      ? { commentId: randomUUID(), ...input.imageIntent }
       : input.operation.type === ISSUE_PLATFORM_OPERATION.UPDATE_ISSUE_STATE
         ? { state: preflight.stateIntents.get(input.operation.idempotencyKey) }
         : input.operation.type === ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE
@@ -263,6 +266,12 @@ async function executePreparedOperations({
   }
   await checkpoint?.("after-intents-persisted", { run, operations: prepared })
 
+  try {
+    await recheckRunImages(run, prepared)
+  } catch (error) {
+    return executionFailure(error)
+  }
+
   let issue = preflight.issue
   for (const input of prepared) {
     let record = input.record
@@ -282,11 +291,15 @@ async function executePreparedOperations({
         ? retryableFailure(childExecution.error, prepared.map(operationResult))
         : manualRequired(childExecution.error, prepared.map(operationResult))
     }
-    const before = verifyLinearOperation({
+    const before = await verifyOperation({
+      writer: platform.writer,
       operation: input.operation,
       intent: record.intent,
       issue,
     })
+    if (before.status === "read-failed") {
+      return persistVerificationReadFailure(input, before.error, prepared, store)
+    }
     if (before.status === "verified") {
       record = await store.updateIssueOperation(input.scope, {
         status: "verified",
@@ -296,7 +309,11 @@ async function executePreparedOperations({
       input.record = record
       continue
     }
-    if (before.status === "conflict" || ["provider-succeeded", "verified"].includes(record.status)) {
+    if (before.status === "conflict" || ["provider-succeeded", "verified"].includes(record.status) ||
+        (record.intent.images?.length && record.attempts > 0)) {
+      if (record.intent.images?.length && before.status === "not-applied") {
+        before.reason = "图片评论已尝试写入但无法按稳定 ID 找回；为避免重复创建，需要人工检查。"
+      }
       record = await store.updateIssueOperation(input.scope, {
         status: "manual-required",
         verification: failedVerification(before),
@@ -334,6 +351,7 @@ async function executePreparedOperations({
         error,
         input,
         reader: platform.reader,
+        writer: platform.writer,
         store,
       })
       input.record = failure.record
@@ -362,6 +380,7 @@ async function executePreparedOperations({
           record.intent.childIssueId ||
           null,
         completedAt: new Date().toISOString(),
+        ...(record.intent.images?.length ? { body: providerResult?.body || "" } : {}),
       },
       error: undefined,
     })
@@ -390,11 +409,15 @@ async function executePreparedOperations({
         : manualRequired(readError, prepared.map(operationResult))
     }
 
-    const after = verifyLinearOperation({
+    const after = await verifyOperation({
+      writer: platform.writer,
       operation: input.operation,
       intent: record.intent,
       issue: refreshed,
     })
+    if (after.status === "read-failed") {
+      return persistVerificationReadFailure(input, after.error, prepared, store)
+    }
     if (after.status !== "verified") {
       const error = platformError(
         after.status === "conflict"
@@ -644,7 +667,7 @@ async function recoverAfterChildWriteFailure({ error, input, reader, store }) {
   return { status, record, error: writeError }
 }
 
-async function recoverAfterWriteFailure({ error, input, reader, store }) {
+async function recoverAfterWriteFailure({ error, input, reader, writer, store }) {
   const writeError = normalizeIssuePlatformError(error, {
     code: ISSUE_PLATFORM_ERROR_CODE.OPERATION_FAILED,
     operation: input.operation.type,
@@ -653,11 +676,13 @@ async function recoverAfterWriteFailure({ error, input, reader, store }) {
   try {
     const refreshed = await reader.readIssue(input.scope.issueId)
     rejectIncomplete(refreshed)
-    const verification = verifyLinearOperation({
+    const verification = await verifyOperation({
+      writer,
       operation: input.operation,
       intent: input.record.intent,
       issue: refreshed,
     })
+    if (verification.status === "read-failed") throw new IssuePlatformError(verification.error)
     if (verification.status === "verified") {
       const record = await store.updateIssueOperation(input.scope, {
         status: "verified",
@@ -719,7 +744,7 @@ function callWriter(writer, input, intent) {
     payload: operation.payload,
   }
   if (operation.type === ISSUE_PLATFORM_OPERATION.CREATE_COMMENT) {
-    return writer.createComment(request, { commentId: intent.commentId })
+    return writer.createComment({ ...request, payload: { body: input.imageBody ?? request.payload.body } }, { commentId: intent.commentId })
   }
   if (operation.type === ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE) {
     return writer.createChildIssue(request, {
@@ -732,17 +757,43 @@ function callWriter(writer, input, intent) {
   return writer.updateIssueState(request, { stateId: intent.state.id })
 }
 
+async function verifyOperation({ writer, operation, intent, issue }) {
+  const basic = verifyLinearOperation({ operation, intent, issue })
+  if (basic.status !== "images-required") return basic
+  if (typeof writer?.verifyCommentImages !== "function") return { status: "conflict", resourceId: intent.commentId }
+  try {
+    return await writer.verifyCommentImages({ operation, intent, comment: basic.comment })
+  } catch (error) {
+    return { status: "read-failed", error: normalizeIssuePlatformError(error, { operation: operation.type }) }
+  }
+}
+
+async function persistVerificationReadFailure(input, error, prepared, store) {
+  input.record = await store.updateIssueOperation(input.scope, {
+    status: error.retryable
+      ? (["verified", "provider-succeeded"].includes(input.record.status) ? "provider-succeeded" : "retryable")
+      : "manual-required",
+    verification: { status: "refresh-failed", checkedAt: new Date().toISOString() },
+    error,
+  })
+  return error.retryable
+    ? retryableFailure(error, prepared.map(operationResult))
+    : manualRequired(error, prepared.map(operationResult))
+}
+
 function verifiedRecord(verification) {
   return {
     status: "verified",
     resourceId: verification.resourceId,
     checkedAt: new Date().toISOString(),
+    ...(verification.references ? { references: verification.references } : {}),
   }
 }
 
 function failedVerification(verification) {
   return {
     status: verification.status,
+    ...(verification.reason ? { reason: verification.reason } : {}),
     resourceId: verification.resourceId,
     checkedAt: new Date().toISOString(),
   }

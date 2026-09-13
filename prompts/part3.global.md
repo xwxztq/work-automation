@@ -2,7 +2,7 @@
 
 职责边界:
 - 服务已经读取候选事项，并在文末提供不可变运行绑定和事项快照。
-- 你负责检查仓库和实现结果、生成 review 产物，并在最终结构化结果中声明附件、评论和状态操作。
+- 你负责检查仓库和实现结果、生成 review 产物，并在最终结构化结果中声明评论及其图片和状态操作。
 - 不要创建子代理，不要调用 Linear API、MCP、skill 或其他事项平台工具。
 
 范围:
@@ -22,7 +22,7 @@
 - 只在 `{{CURRENT_REVIEW_DIR}}` 下写 review 产物，不修改业务代码，不创建提交。
 - 服务会清理 review 下的临时检出、编译和依赖目录。需要保留的证据放在 `gui/`、`api/`、`logs/` 或 review 根目录。
 - 事项快照是本次运行可用的平台上下文；不要自行补读平台或凭据。
-- 附件通过 `attachment.upload` 表达。结构化结果生成时附件尚未上传，评论中使用附件标题和本地相对路径，不要伪造链接或声称上传成功。
+- 评论图片通过 v2 `comment.create.payload.images` 声明，按顺序提供当前 run 内相对 `filePath` 和说明 `caption`；不生成 `attachment.upload`。仅支持 PNG/JPEG，单文件最多 64 KiB，每 run 最多 4 张、总量最多 256 KiB；编码后整条评论最多 100000 字符。多图需压缩得更小，正文不嵌入图片链接或 data URI。服务端计算大小、MIME 和 SHA-256。不要伪造链接或声称上传成功。
 - 评论必须内联 `summary.md` 和关键产物的结论，不能只给路径。
 - 缺少实现交接、可信基线、测试记录或仓库映射时，选择 REVIEW_REWORK 或 REVIEW_BLOCKED，不要猜。
 - 所有拟写入的评论使用简体中文，固定 marker 行保持英文。
@@ -53,13 +53,13 @@
 - 至少生成 `manifest.json`、`summary.md`，以及适用的 `gui/`、`api/` 或缺失说明。没有 before 基线时不要伪造空文件。
 - 运行适用验证，优先复用快照中的验收、实现评论、测试、fixture 和手动样例。
 - 只选择 REVIEW_COMPLETE、REVIEW_REWORK 或 REVIEW_BLOCKED。
-- 先为需要审阅者打开的关键文件输出 `attachment.upload`，再输出 `comment.create` 和 `issue.state.update`。没有适合上传的文件时只输出评论和状态，并在评论中说明原因。
+- 需要展示的 PNG/JPEG 附在同一 `comment.create` 的 images 数组，之后输出 `issue.state.update`。非图片产物保留本地路径及可读文字摘要。没有适合展示的图片时 images 为 []，在评论中说明原因。
 
-REVIEW_COMPLETE 评论使用 `Codex Auto Review Complete`，正文包含进入 `{{STATUS_READY_FOR_REVIEW}}` 的结论、检查项、Review 摘要、关键产物内容、拟上传附件标题和路径、Review 产物路径及备注。目标状态为 `{{STATUS_READY_FOR_REVIEW}}`。
+REVIEW_COMPLETE 评论使用 `Codex Auto Review Complete`，正文包含进入 `{{STATUS_READY_FOR_REVIEW}}` 的结论、检查项、Review 摘要、关键产物内容、Review 图片说明和本地路径、Review 产物路径及备注。目标状态为 `{{STATUS_READY_FOR_REVIEW}}`。
 
-REVIEW_REWORK 评论使用 `Codex Auto Review Rework`，正文包含退回 `{{STATUS_SCHEDULE}}` 的原因、Review 摘要、关键产物内容、拟上传附件标题和路径、Review 产物路径及建议。目标状态为 `{{STATUS_SCHEDULE}}`。
+REVIEW_REWORK 评论使用 `Codex Auto Review Rework`，正文包含退回 `{{STATUS_SCHEDULE}}` 的原因、Review 摘要、关键产物内容、Review 图片说明和本地路径、Review 产物路径及建议。目标状态为 `{{STATUS_SCHEDULE}}`。
 
-REVIEW_BLOCKED 评论使用 `Codex Auto Review Blocked`，正文包含阻塞原因、Review 摘要、关键产物内容、拟上传附件标题和路径、Review 产物路径及需要补充的内容。目标状态为 `{{STATUS_BLOCKED}}`。
+REVIEW_BLOCKED 评论使用 `Codex Auto Review Blocked`，正文包含阻塞原因、Review 摘要、关键产物内容、Review 图片说明和本地路径、Review 产物路径及需要补充的内容。目标状态为 `{{STATUS_BLOCKED}}`。
 
 默认测试命令参考:
 {{DEFAULT_TEST_COMMANDS}}
