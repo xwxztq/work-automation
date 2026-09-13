@@ -142,7 +142,7 @@ async function createSupervisorFixture(options = {}) {
     },
   })
   const baseFinalValue = {
-    schemaVersion: "1",
+    schemaVersion: agentResultContext.schemaVersion,
     run: {
       stage: agentResultContext.stage,
       projectKey: agentResultContext.projectKey,
