@@ -76,7 +76,7 @@ jobs:
 
       - name: Check package contents
         if: steps.registry.outputs.exists == 'false'
-        run: npm pack --dry-run
+        run: pnpm npm:check
 
       - name: Publish package
         if: steps.registry.outputs.exists == 'false'

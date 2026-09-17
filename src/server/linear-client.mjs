@@ -1,4 +1,5 @@
 import https from "node:https"
+import { redactDiagnostic } from "./diagnostic-redaction.mjs"
 import { readLinearImage } from "./linear-comment-images.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import { createProxyAgent, resolveProxyUrl } from "./proxy.mjs"
@@ -15,18 +16,18 @@ export function createLinearClient(apiKey) {
     try {
       payload = JSON.parse(text)
     } catch {
-      throw new Error(`Linear 返回了非 JSON 响应: ${text}`)
+      throw new Error("Linear 返回了非 JSON 响应。")
     }
     if (payload.errors?.some((error) => error.extensions?.http?.status >= 400)) {
       const status = payload.errors[0]?.extensions?.http?.status || 500
-      throw new Error(`Linear HTTP ${status}: ${JSON.stringify(payload)}`)
+      throw new Error(`Linear HTTP ${status}`)
     }
     if (payload.errors?.length) {
       const messages = payload.errors.map((error) => {
         const path = error.path ? ` 位置 ${error.path.join(".")}` : ""
         return `${error.message}${path}`
       })
-      throw new Error(`Linear GraphQL 错误: ${messages.join("; ")}`)
+      throw new Error(redactDiagnostic(`Linear GraphQL 错误: ${messages.join("; ")}`, [apiKey]))
     }
     return payload.data
   }

@@ -1,0 +1,38 @@
+[
+  {
+    "input": "Ada",
+    "output": "Hello, Ada!",
+    "expected": "Hello, Ada!",
+    "matchesExpected": true
+  },
+  {
+    "input": "",
+    "output": "Hello, world!",
+    "expected": "Hello, world!",
+    "matchesExpected": true
+  },
+  {
+    "input": "   ",
+    "output": "Hello, world!",
+    "expected": "Hello, world!",
+    "matchesExpected": true
+  },
+  {
+    "input": "\t\n",
+    "output": "Hello, world!",
+    "expected": "Hello, world!",
+    "matchesExpected": true
+  },
+  {
+    "input": "  Ada  ",
+    "output": "Hello, Ada!",
+    "expected": "Hello, Ada!",
+    "matchesExpected": true
+  },
+  {
+    "input": " \tAda  de LOVELACE\n ",
+    "output": "Hello, Ada  de LOVELACE!",
+    "expected": "Hello, Ada  de LOVELACE!",
+    "matchesExpected": true
+  }
+]

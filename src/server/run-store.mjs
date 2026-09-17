@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { redactDiagnostic } from "./diagnostic-redaction.mjs"
 import { ensureDir, fileExists, readJsonFile, writeJsonFile } from "./config.mjs"
 import {
   EVENTS_FILE,
@@ -19,6 +20,7 @@ export function createRunStore(rootDir) {
   const eventsPath = path.join(baseDir, EVENTS_FILE)
   const processedPath = path.join(baseDir, PROCESSED_FILE)
   const issueOperationsDir = path.join(baseDir, ISSUE_OPERATIONS_DIR)
+  const auditDir = path.join(baseDir, "issue-audit")
   let runsVersion = 0
   let runsCache = null
   let runsRead = null
@@ -74,6 +76,8 @@ export function createRunStore(rootDir) {
       ...patch,
       updatedAt: new Date().toISOString(),
     }
+    // Detail projections are read from the journal, never copied into run.json.
+    delete next.audit
     await writeJsonFile(next.metadataPath, next)
     invalidateRunsCache()
     return next
@@ -85,13 +89,33 @@ export function createRunStore(rootDir) {
   }
 
   async function appendEvent(event) {
-    const entry = {
+    const entry = redactDiagnostic({
       timestamp: new Date().toISOString(),
       level: "info",
       ...event,
-    }
+    })
     await appendText(eventsPath, `${JSON.stringify(entry)}\n`)
     return entry
+  }
+
+  async function appendIssueAudit(fields) {
+    const entry = { timestamp: new Date().toISOString(), version: 1 }
+    for (const key of ["runId", "stage", "platform", "projectKey", "projectId", "issueId", "operation", "idempotencyKey", "attemptId", "resourceId", "result", "failureCategory", "errorCode", "retryable", "attempts"]) {
+      const value = fields[key]
+      entry[key] = typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null
+    }
+    const safe = redactDiagnostic(entry)
+    const file = path.join(auditDir, `${createHash("sha256").update(String(fields.runId || "scan")).digest("hex")}.jsonl`)
+    await appendText(file, `${JSON.stringify(safe)}\n`)
+    await appendEvent({ type: "issue-operation-audit", ...safe, message: `${safe.operation}: ${safe.result}` })
+    return safe
+  }
+
+  async function listIssueAudit(runId) {
+    const file = path.join(auditDir, `${createHash("sha256").update(String(runId || "scan")).digest("hex")}.jsonl`)
+    return (await readOptional(file)).split("\n").filter(Boolean).map((line) => {
+      try { return redactDiagnostic(JSON.parse(line)) } catch { return { result: "audit-record-incomplete" } }
+    })
   }
 
   async function listEvents({ limit = 200, projectKey } = {}) {
@@ -182,6 +206,14 @@ export function createRunStore(rootDir) {
       const mutation = await updater(existing)
       if (mutation.write && mutation.record) {
         await writeJsonFile(filePath, mutation.record)
+        const record = mutation.record
+        await appendIssueAudit({
+          ...record.scope, operation: record.scope.type, runId: record.runIds?.at(-1),
+          stage: record.stage, result: record.status, attempts: record.attempts,
+          resourceId: record.provider?.resourceId || record.intent?.commentId || record.intent?.childIssueId,
+          errorCode: record.error?.code, retryable: record.error?.retryable,
+          failureCategory: record.error ? (record.error.code === "CONFLICT" ? "service-validation" : "provider") : null,
+        })
       }
       return mutation.result
     }
@@ -292,6 +324,7 @@ export function createRunStore(rootDir) {
       stderr: await readOptional(run.stderrPath),
       final: await readOptional(run.finalPath),
       prompt: await readOptional(run.promptPath),
+      audit: await listIssueAudit(run.id),
     }
   }
 
@@ -305,6 +338,8 @@ export function createRunStore(rootDir) {
     updateRun,
     appendText,
     appendEvent,
+    appendIssueAudit,
+    listIssueAudit,
     listEvents,
     prepareIssueOperation,
     getIssueOperation,

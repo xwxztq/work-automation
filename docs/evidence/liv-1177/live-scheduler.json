@@ -1,0 +1,280 @@
+{
+  "startedAt": "2026-09-16T13:36:14.479Z",
+  "root": "/var/folders/rx/s0xm_6wd6xz2m_n_t_09b57m0000gp/T/liv-1170-scheduler-O1A4cg",
+  "workspace": "/var/folders/rx/s0xm_6wd6xz2m_n_t_09b57m0000gp/T/liv-1170-scheduler-O1A4cg/fixture-repository",
+  "issue": {
+    "id": "475d9f95-7d7f-44e7-9f03-9b64baaf07c8",
+    "identifier": "LIV-1195",
+    "url": "https://linear.app/livehappy-workhappy/issue/LIV-1195/liv-1170-live-qa-标准调度流程修复-greet-空白姓名"
+  },
+  "stages": [
+    {
+      "stage": "part1",
+      "summary": {
+        "startedAt": "2026-09-16T13:36:14.482Z",
+        "stage": "part1",
+        "projectKey": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+        "projects": [
+          {
+            "key": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+            "part1": [
+              {
+                "issue": "LIV-1195",
+                "result": "succeeded"
+              }
+            ],
+            "split": [],
+            "part2": [],
+            "part3": [],
+            "skipped": []
+          }
+        ],
+        "finishedAt": "2026-09-16T13:37:41.848Z"
+      },
+      "state": "Ready for Codex",
+      "commentCount": 1,
+      "runs": [
+        {
+          "id": "2026-09-16T13-36-16-784Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part1-LIV-1195-57a3fc8d",
+          "status": "succeeded",
+          "operationExecution": {
+            "version": 1,
+            "required": true,
+            "status": "completed",
+            "safeTerminal": true,
+            "startedAt": "2026-09-16T13:37:38.815Z",
+            "operations": [
+              {
+                "type": "comment.create",
+                "idempotencyKey": "liv-1195-part1-ready-comment-v1",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "6dfdb25a-55b3-4fc4-b08e-b576d14e7a43"
+              },
+              {
+                "type": "issue.state.update",
+                "idempotencyKey": "liv-1195-part1-ready-state-v1",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "77b7d963-a4ea-46a7-b855-9358c1143f25"
+              }
+            ],
+            "failureCategory": null,
+            "updatedAt": "2026-09-16T13:37:41.534Z",
+            "finishedAt": "2026-09-16T13:37:41.534Z"
+          }
+        }
+      ]
+    },
+    {
+      "stage": "part2",
+      "summary": {
+        "startedAt": "2026-09-16T13:37:42.658Z",
+        "stage": "part2",
+        "projectKey": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+        "projects": [
+          {
+            "key": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+            "part1": [],
+            "split": [],
+            "part2": [
+              {
+                "issue": "LIV-1195",
+                "result": "succeeded"
+              }
+            ],
+            "part3": [],
+            "skipped": []
+          }
+        ],
+        "finishedAt": "2026-09-16T13:40:19.230Z"
+      },
+      "state": "Blocked",
+      "commentCount": 2,
+      "runs": [
+        {
+          "id": "2026-09-16T13-37-44-978Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part2-LIV-1195-42a4ca61",
+          "status": "succeeded",
+          "operationExecution": {
+            "version": 1,
+            "required": true,
+            "status": "completed",
+            "safeTerminal": true,
+            "startedAt": "2026-09-16T13:40:16.124Z",
+            "operations": [
+              {
+                "type": "comment.create",
+                "idempotencyKey": "LIV-1195-part2-blocked-comment",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "2323ffb0-9449-4ecd-9c2a-6b1beec5eea4"
+              },
+              {
+                "type": "issue.state.update",
+                "idempotencyKey": "LIV-1195-part2-blocked-state",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "c5f62db0-d0ec-4fa7-9193-8f646b0bea2b"
+              }
+            ],
+            "failureCategory": null,
+            "updatedAt": "2026-09-16T13:40:18.914Z",
+            "finishedAt": "2026-09-16T13:40:18.914Z"
+          }
+        }
+      ]
+    },
+    {
+      "stage": "part2",
+      "afterFix": true,
+      "summary": {
+        "startedAt": "2026-09-16T13:42:59.085Z",
+        "stage": "part2",
+        "projectKey": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+        "projects": [
+          {
+            "key": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+            "part1": [],
+            "split": [],
+            "part2": [
+              {
+                "issue": "LIV-1195",
+                "result": "succeeded"
+              }
+            ],
+            "part3": [],
+            "skipped": []
+          }
+        ],
+        "finishedAt": "2026-09-16T13:45:25.660Z"
+      },
+      "state": "Testing",
+      "commentCount": 4,
+      "runs": [
+        {
+          "id": "2026-09-16T13-43-01-196Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part2-LIV-1195-1f4d5ad0",
+          "status": "succeeded",
+          "operationExecution": {
+            "version": 1,
+            "required": true,
+            "status": "completed",
+            "safeTerminal": true,
+            "startedAt": "2026-09-16T13:45:21.901Z",
+            "operations": [
+              {
+                "type": "comment.create",
+                "idempotencyKey": "liv-1195-part2-34de9ad-complete",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "7b7c056b-69bc-4455-90c2-58d8f1576c2c"
+              },
+              {
+                "type": "issue.state.update",
+                "idempotencyKey": "liv-1195-part2-34de9ad-testing",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "4fe7a1a7-01a4-402e-9518-35a870ef4a52"
+              }
+            ],
+            "failureCategory": null,
+            "updatedAt": "2026-09-16T13:45:25.299Z",
+            "finishedAt": "2026-09-16T13:45:25.299Z"
+          }
+        },
+        {
+          "id": "2026-09-16T13-37-44-978Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part2-LIV-1195-42a4ca61",
+          "status": "succeeded",
+          "operationExecution": {
+            "version": 1,
+            "required": true,
+            "status": "completed",
+            "safeTerminal": true,
+            "startedAt": "2026-09-16T13:40:16.124Z",
+            "operations": [
+              {
+                "type": "comment.create",
+                "idempotencyKey": "LIV-1195-part2-blocked-comment",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "2323ffb0-9449-4ecd-9c2a-6b1beec5eea4"
+              },
+              {
+                "type": "issue.state.update",
+                "idempotencyKey": "LIV-1195-part2-blocked-state",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "c5f62db0-d0ec-4fa7-9193-8f646b0bea2b"
+              }
+            ],
+            "failureCategory": null,
+            "updatedAt": "2026-09-16T13:40:18.914Z",
+            "finishedAt": "2026-09-16T13:40:18.914Z"
+          }
+        }
+      ]
+    },
+    {
+      "stage": "part3",
+      "afterFix": true,
+      "summary": {
+        "startedAt": "2026-09-16T13:45:26.013Z",
+        "stage": "part3",
+        "projectKey": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+        "projects": [
+          {
+            "key": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+            "part1": [],
+            "split": [],
+            "part2": [],
+            "part3": [
+              {
+                "issue": "LIV-1195",
+                "result": "succeeded"
+              }
+            ],
+            "skipped": []
+          }
+        ],
+        "finishedAt": "2026-09-16T13:54:37.428Z"
+      },
+      "state": "Ready for Review",
+      "commentCount": 5,
+      "runs": [
+        {
+          "id": "2026-09-16T13-45-29-009Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part3-LIV-1195-713635d6",
+          "status": "succeeded",
+          "operationExecution": {
+            "version": 1,
+            "required": true,
+            "status": "completed",
+            "safeTerminal": true,
+            "startedAt": "2026-09-16T13:54:34.369Z",
+            "operations": [
+              {
+                "type": "comment.create",
+                "idempotencyKey": "LIV-1195-713635d6-review-comment",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "9d6be10e-92a0-47bd-b515-175f0d9ce02b"
+              },
+              {
+                "type": "issue.state.update",
+                "idempotencyKey": "LIV-1195-713635d6-review-state",
+                "status": "verified",
+                "attempts": 1,
+                "resourceId": "450be6ca-f817-43ff-a450-8a3f50ab076c"
+              }
+            ],
+            "failureCategory": null,
+            "updatedAt": "2026-09-16T13:54:37.086Z",
+            "finishedAt": "2026-09-16T13:54:37.086Z"
+          }
+        }
+      ]
+    }
+  ],
+  "tests": "✔ ordinary name (0.428333ms)\n✔ empty name (0.06625ms)\n✔ whitespace-only name (0.055708ms)\n✔ tabs and newlines only (0.047833ms)\n✔ surrounding whitespace (0.061083ms)\n✔ preserves internal spaces and case (0.495666ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 61.621083\n",
+  "gitLog": "34de9ad fix(greet): 修复 LIV-1195 空白姓名处理\nb25780c test: 初始化真实流程验收仓库\n",
+  "gitStatus": "",
+  "finishedAt": "2026-09-16T13:54:38.075Z"
+}

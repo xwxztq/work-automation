@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { buildAgentResultOutputSchema } from "./agent-result-runtime.mjs"
 import { buildCodexProcessEnv } from "./codex-environment.mjs"
 import {
+  assertCodexSandboxPaths,
   buildCodexPermissionBoundary,
   buildCodexRuntimeReadPaths,
   buildCodexSandboxArgs,
@@ -32,6 +33,12 @@ export async function runCodex({
   sandboxExecutable,
   runtimeRoot,
 }) {
+  await assertCodexSandboxPaths([
+    project.codexCwd || project.path,
+    project.path,
+    runtimeRoot || path.dirname(run.dir),
+    run.dir,
+  ])
   await fs.writeFile(run.promptPath, prompt)
 
   const configuredCodexBin = config.codex.bin || "codex"

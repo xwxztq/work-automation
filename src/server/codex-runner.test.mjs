@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -494,6 +494,71 @@ console.error("fake stderr")
   assert.deepEqual(schema.properties.run.properties.stage.enum, ["part2"])
   assert.deepEqual(schema.properties.target.properties.issueId.enum, ["issue-1172"])
   await assert.rejects(fs.access(supervisorConfig.sandboxUserHome))
+})
+
+test("runner rejects macOS /tmp workspace and runtime aliases before writing or launching", async (t) => {
+  if (process.platform !== "darwin") return t.skip("macOS sandbox path limitation")
+  const unsafe = await fs.mkdtemp("/tmp/work-automation-unsafe-")
+  const safe = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-safe-"))
+  t.after(() => fs.rm(unsafe, { recursive: true, force: true }))
+  t.after(() => fs.rm(safe, { recursive: true, force: true }))
+  const alias = path.join(safe, "alias")
+  await fs.symlink(unsafe, alias)
+  for (const unsafePath of [unsafe, await fs.realpath(unsafe), alias]) {
+    for (const field of ["project", "cwd", "runtime", "run"]) {
+      const options = {
+        config: { codex: { bin: "/must-not-launch" } },
+        project: {
+          path: field === "project" ? unsafePath : safe,
+          codexCwd: field === "cwd" ? unsafePath : safe,
+        },
+        runtimeRoot: field === "runtime" ? unsafePath : safe,
+        run: { dir: field === "run" ? unsafePath : safe, promptPath: path.join(safe, "must-not-write.md") },
+        stage: "part1", prompt: "must not be written",
+      }
+      await assert.rejects(runCodex(options), /macOS Codex 沙箱无法保护 \/tmp/u)
+      await assert.rejects(fs.access(options.run.promptPath))
+    }
+  }
+})
+
+test("real macOS sandbox permits an implementation commit only in part2", async (t) => {
+  if (process.platform !== "darwin") return t.skip("macOS Seatbelt verification")
+  const sandboxBin = await resolveExecutable("codex", { path: process.env.PATH })
+  if (!sandboxBin) return t.skip("Codex sandbox executable is unavailable")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-git-boundary-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const projectDir = path.join(root, "project")
+  const runDir = path.join(root, "run")
+  const home = path.join(root, "home")
+  await Promise.all([projectDir, runDir, home].map(dir => fs.mkdir(dir)))
+  // Avoid /usr/bin/git's xcrun shim; it tries to cache outside the isolated HOME.
+  const gitBin = await resolveExecutable("/Applications/Xcode.app/Contents/Developer/usr/bin/git") ||
+    await resolveExecutable("/Library/Developer/CommandLineTools/usr/bin/git") ||
+    await resolveExecutable("git")
+  const init = spawnSync(gitBin, ["init", "-q", projectDir], { encoding: "utf8" })
+  assert.equal(init.status, 0, init.stderr)
+  await fs.writeFile(path.join(projectDir, "fixture.txt"), "implementation\n")
+  await fs.writeFile(path.join(projectDir, ".env.local"), "SYNTHETIC_SECRET=test\n")
+  for (const stage of ["part1", "split", "part2", "part3"]) {
+    const boundary = buildCodexPermissionBoundary({
+      stage, cwd: projectDir, projectPath: projectDir, runtimeRoot: root,
+      runDir, finalPath: path.join(runDir, "final.txt"),
+      runtimeReadPaths: [path.dirname(process.execPath), path.dirname(gitBin)],
+      runtimeWritePaths: [home],
+    })
+    const command = stage === "part2"
+      ? `const {spawnSync}=require('node:child_process');const git=${JSON.stringify(gitBin)};for(const args of [['add','fixture.txt'],['-c','user.name=Sandbox Test','-c','user.email=sandbox@example.test','commit','--no-gpg-sign','-m','test: scoped commit']]){const r=spawnSync(git,args,{encoding:'utf8'});if(r.status!==0)throw new Error(r.stderr);}`
+      : `let denied=false;try{require('node:fs').writeFileSync('.git/write-probe','forbidden')}catch(e){denied=/EPERM|EACCES/.test(e.code)}require('node:assert/strict').ok(denied);`
+    const script = `{let denied=false;try{require('node:fs').readFileSync('.env.local')}catch(e){denied=/EPERM|EACCES/.test(e.code)}require('node:assert/strict').ok(denied);}${command}`
+    const result = spawnSync(sandboxBin, buildCodexSandboxArgs({
+      boundary, cwd: projectDir, targetBin: process.execPath, targetArgs: ["-e", script],
+    }), { cwd: projectDir, encoding: "utf8", env: { ...process.env, HOME: home, CODEX_HOME: home, TMPDIR: home, GIT_CONFIG_GLOBAL: os.devNull } })
+    assert.equal(result.status, 0, `${stage}: ${result.stderr}`)
+  }
+  const log = spawnSync(gitBin, ["log", "-1", "--format=%s"], { cwd: projectDir, encoding: "utf8" })
+  assert.equal(log.stdout.trim(), "test: scoped commit")
+  await assert.rejects(fs.access(path.join(projectDir, ".git", "write-probe")))
 })
 
 test("real macOS sandbox denies the Codex process access to service credentials and keeps review writable", async (t) => {

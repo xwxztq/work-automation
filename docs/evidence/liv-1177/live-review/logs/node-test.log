@@ -1,0 +1,15 @@
+✔ ordinary name (0.550709ms)
+✔ empty name (0.0755ms)
+✔ whitespace-only name (0.098ms)
+✔ tabs and newlines only (0.076375ms)
+✔ surrounding whitespace (0.069125ms)
+✔ preserves internal spaces and case (0.184291ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 65.262167
+exit: 0

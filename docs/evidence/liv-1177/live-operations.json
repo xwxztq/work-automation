@@ -1,0 +1,353 @@
+{
+  "startedAt": "2026-09-16T13:32:31.426Z",
+  "project": {
+    "id": "334ee61e-93f7-4b4b-be24-c48b0212aa35",
+    "name": "wa测试"
+  },
+  "workspace": "/var/folders/rx/s0xm_6wd6xz2m_n_t_09b57m0000gp/T/liv-1170-live-X2p8GM/workspace",
+  "root": "/var/folders/rx/s0xm_6wd6xz2m_n_t_09b57m0000gp/T/liv-1170-live-X2p8GM",
+  "stages": [
+    {
+      "stage": "part1",
+      "id": "e54c36e8-6f36-4175-836c-c94db6a826dd",
+      "identifier": "LIV-1190",
+      "url": "https://linear.app/livehappy-workhappy/issue/LIV-1190",
+      "input": "Todo",
+      "output": "Ready for Codex",
+      "phase": "passed",
+      "runId": "2026-09-16T13-32-31-777Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part1-LIV-1190-70000551",
+      "codex": {
+        "exitCode": 0,
+        "status": "succeeded",
+        "started": true,
+        "error": null
+      },
+      "first": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:e54c36e8-6f36-4175-836c-c94db6a826dd:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "39d70eb0-9c34-4249-8867-f655dd8bcb5c"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:e54c36e8-6f36-4175-836c-c94db6a826dd:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "77b7d963-a4ea-46a7-b855-9358c1143f25"
+          }
+        ]
+      },
+      "recovery": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:e54c36e8-6f36-4175-836c-c94db6a826dd:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "39d70eb0-9c34-4249-8867-f655dd8bcb5c"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:e54c36e8-6f36-4175-836c-c94db6a826dd:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "77b7d963-a4ea-46a7-b855-9358c1143f25"
+          }
+        ]
+      },
+      "replay": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:e54c36e8-6f36-4175-836c-c94db6a826dd:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "39d70eb0-9c34-4249-8867-f655dd8bcb5c"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:e54c36e8-6f36-4175-836c-c94db6a826dd:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "77b7d963-a4ea-46a7-b855-9358c1143f25"
+          }
+        ]
+      },
+      "auditCount": 45,
+      "remote": {
+        "state": "Ready for Codex",
+        "commentCount": 1,
+        "commentIds": [
+          "39d70eb0-9c34-4249-8867-f655dd8bcb5c"
+        ]
+      }
+    },
+    {
+      "stage": "split",
+      "id": "f1de6df1-ff6b-424c-98d2-e633d8b5f317",
+      "identifier": "LIV-1191",
+      "url": "https://linear.app/livehappy-workhappy/issue/LIV-1191/liv-1170-live-qa-split-2026-09-16t133231426z",
+      "input": "Needs Splitting",
+      "output": "In Progress",
+      "phase": "passed",
+      "runId": "2026-09-16T13-33-22-354Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-split-LIV-1191-5a6d91aa",
+      "codex": {
+        "exitCode": 0,
+        "status": "succeeded",
+        "started": true,
+        "error": null
+      },
+      "interruption": "after real provider write, before local success persistence",
+      "recovery": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "issue.child.create",
+            "idempotencyKey": "live:f1de6df1-ff6b-424c-98d2-e633d8b5f317:child",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "3b9c009c-8f8d-4089-aaa0-d51a52c007dc"
+          },
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:f1de6df1-ff6b-424c-98d2-e633d8b5f317:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "da6d4b25-a0d6-43db-9828-d5642bd6ddba"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:f1de6df1-ff6b-424c-98d2-e633d8b5f317:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "6b1ab209-64a5-467b-a8fc-3c76d117ef00"
+          }
+        ]
+      },
+      "replay": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "issue.child.create",
+            "idempotencyKey": "live:f1de6df1-ff6b-424c-98d2-e633d8b5f317:child",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "3b9c009c-8f8d-4089-aaa0-d51a52c007dc"
+          },
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:f1de6df1-ff6b-424c-98d2-e633d8b5f317:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "da6d4b25-a0d6-43db-9828-d5642bd6ddba"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:f1de6df1-ff6b-424c-98d2-e633d8b5f317:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "6b1ab209-64a5-467b-a8fc-3c76d117ef00"
+          }
+        ]
+      },
+      "child": {
+        "id": "3b9c009c-8f8d-4089-aaa0-d51a52c007dc",
+        "identifier": "LIV-1192",
+        "project": {
+          "id": "334ee61e-93f7-4b4b-be24-c48b0212aa35"
+        },
+        "team": {
+          "id": "607343fb-492f-4aea-82a6-cba3a80c0043"
+        },
+        "parent": {
+          "id": "f1de6df1-ff6b-424c-98d2-e633d8b5f317"
+        },
+        "priority": 4
+      },
+      "auditCount": 56,
+      "remote": {
+        "state": "In Progress",
+        "commentCount": 1,
+        "commentIds": [
+          "da6d4b25-a0d6-43db-9828-d5642bd6ddba"
+        ]
+      }
+    },
+    {
+      "stage": "part2",
+      "id": "795c59ec-bbe7-4ce0-8c29-a04fc50fc498",
+      "identifier": "LIV-1193",
+      "url": "https://linear.app/livehappy-workhappy/issue/LIV-1193/liv-1170-live-qa-part2-2026-09-16t133231426z",
+      "input": "On Schedule",
+      "output": "Testing",
+      "phase": "passed",
+      "runId": "2026-09-16T13-34-20-173Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part2-LIV-1193-fed6ca03",
+      "codex": {
+        "exitCode": 0,
+        "status": "succeeded",
+        "started": true,
+        "error": null
+      },
+      "first": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:795c59ec-bbe7-4ce0-8c29-a04fc50fc498:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "75a52e07-8d2e-40ea-87ae-74f1bdab855d"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:795c59ec-bbe7-4ce0-8c29-a04fc50fc498:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "4fe7a1a7-01a4-402e-9518-35a870ef4a52"
+          }
+        ]
+      },
+      "recovery": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:795c59ec-bbe7-4ce0-8c29-a04fc50fc498:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "75a52e07-8d2e-40ea-87ae-74f1bdab855d"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:795c59ec-bbe7-4ce0-8c29-a04fc50fc498:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "4fe7a1a7-01a4-402e-9518-35a870ef4a52"
+          }
+        ]
+      },
+      "replay": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:795c59ec-bbe7-4ce0-8c29-a04fc50fc498:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "75a52e07-8d2e-40ea-87ae-74f1bdab855d"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:795c59ec-bbe7-4ce0-8c29-a04fc50fc498:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "4fe7a1a7-01a4-402e-9518-35a870ef4a52"
+          }
+        ]
+      },
+      "auditCount": 45,
+      "remote": {
+        "state": "Testing",
+        "commentCount": 1,
+        "commentIds": [
+          "75a52e07-8d2e-40ea-87ae-74f1bdab855d"
+        ]
+      }
+    },
+    {
+      "stage": "part3",
+      "id": "9f06d388-78da-4e79-a458-f9ce5060a963",
+      "identifier": "LIV-1194",
+      "url": "https://linear.app/livehappy-workhappy/issue/LIV-1194/liv-1170-live-qa-part3-2026-09-16t133231426z",
+      "input": "Testing",
+      "output": "Ready for Review",
+      "phase": "passed",
+      "runId": "2026-09-16T13-35-08-408Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part3-LIV-1194-40fe161d",
+      "codex": {
+        "exitCode": 0,
+        "status": "succeeded",
+        "started": true,
+        "error": null
+      },
+      "interruption": "after real provider write, before local success persistence",
+      "recovery": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:9f06d388-78da-4e79-a458-f9ce5060a963:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "15de05a2-579c-45c8-b073-7b3d3a7d8665"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:9f06d388-78da-4e79-a458-f9ce5060a963:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "450be6ca-f817-43ff-a450-8a3f50ab076c"
+          }
+        ]
+      },
+      "replay": {
+        "version": 1,
+        "status": "completed",
+        "safeTerminal": true,
+        "operations": [
+          {
+            "type": "comment.create",
+            "idempotencyKey": "live:9f06d388-78da-4e79-a458-f9ce5060a963:comment",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "15de05a2-579c-45c8-b073-7b3d3a7d8665"
+          },
+          {
+            "type": "issue.state.update",
+            "idempotencyKey": "live:9f06d388-78da-4e79-a458-f9ce5060a963:state",
+            "status": "verified",
+            "attempts": 1,
+            "resourceId": "450be6ca-f817-43ff-a450-8a3f50ab076c"
+          }
+        ]
+      },
+      "auditCount": 43,
+      "remote": {
+        "state": "Ready for Review",
+        "commentCount": 1,
+        "commentIds": [
+          "15de05a2-579c-45c8-b073-7b3d3a7d8665"
+        ]
+      }
+    }
+  ],
+  "finishedAt": "2026-09-16T13:36:02.035Z",
+  "freshProcessReplay": {
+    "passed": true,
+    "time": "2026-09-16T13:37:20.044Z",
+    "pid": 71188
+  }
+}

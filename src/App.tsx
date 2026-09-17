@@ -2239,11 +2239,26 @@ function RunDetailPanel({
             <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
               <TabsList className="max-w-full shrink-0 overflow-x-auto">
                 <TabsTrigger value="final">最终结果</TabsTrigger>
+                <TabsTrigger value="audit">事项操作</TabsTrigger>
                 <TabsTrigger value="stdout">标准输出</TabsTrigger>
                 <TabsTrigger value="stderr">错误输出</TabsTrigger>
                 <TabsTrigger value="prompt">提示词</TabsTrigger>
               </TabsList>
               <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
+              <TabsContent value="audit" className="min-h-0 overflow-auto">
+                <div className="space-y-2 text-xs">
+                  <p className="text-muted-foreground">{selectedRun.operationExecution?.status || "无操作执行记录"}。已核对的操作在重试时会保留；调用成功仍需写后核对。</p>
+                  {(selectedRun.audit || []).map((entry, index) => (
+                    <div key={index} className="space-y-1 rounded border p-3 break-all">
+                      <div>{formatDate(entry.timestamp)} · {entry.operation} · {entry.result}</div>
+                      {entry.idempotencyKey && <div>幂等键：{entry.idempotencyKey}</div>}
+                      {entry.resourceId && <div>远端记录：{entry.resourceId}</div>}
+                      {entry.failureCategory && <div>失败来源：{({ "agent-output": "Agent 输出", "service-validation": "服务校验", provider: "平台调用或写后核对" } as Record<string, string>)[entry.failureCategory] || entry.failureCategory}，{entry.errorCode || "未知错误"}，{entry.retryable ? "等待自动恢复" : "需要检查"}</div>}
+                    </div>
+                  ))}
+                  {!selectedRun.audit?.length && <p>此运行没有审计记录。升级前的历史运行不补造记录。</p>}
+                </div>
+              </TabsContent>
               <RunStdoutLog text={selectedRun.stdout} />
               <RunLog value="stderr" text={selectedRun.stderr} />
               <RunLog value="prompt" text={selectedRun.prompt} />

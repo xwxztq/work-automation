@@ -1,6 +1,8 @@
 import fs from "node:fs/promises"
 import http from "node:http"
 import path from "node:path"
+import { redactDiagnostic } from "./diagnostic-redaction.mjs"
+import { auditIssueAdapter } from "./issue-audit.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import {
   loadConfig,
@@ -150,6 +152,7 @@ async function handleApi(req, res, url, context) {
       200,
       await linearStatusHealthChecker.check(config, {
         force: url.searchParams.get("refresh") === "1",
+        store,
       }),
     )
     return
@@ -168,7 +171,7 @@ async function handleApi(req, res, url, context) {
       sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
       return
     }
-    const linear = createLinearClient(apiKey)
+    const linear = auditIssueAdapter(createLinearClient(apiKey), store, { stage: "configuration" })
     sendJson(res, 200, {
       projects: await linear.listProjects(),
     })
@@ -207,7 +210,7 @@ async function handleApi(req, res, url, context) {
       sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
       return
     }
-    const linear = createLinearClient(apiKey)
+    const linear = auditIssueAdapter(createLinearClient(apiKey), store, { stage: "preview", projectKey: project.key, projectId: project.linearProjectId })
     const preview = await linear.listProjectIssues(project.linearProjectId)
     const counts = {}
     for (const issue of preview.issues) {
@@ -386,7 +389,7 @@ function sendJson(res, status, payload) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   })
-  res.end(JSON.stringify(payload, null, 2))
+  res.end(JSON.stringify(redactDiagnostic(payload), null, 2))
 }
 
 async function serveStatic(res, pathname, staticRootDir) {

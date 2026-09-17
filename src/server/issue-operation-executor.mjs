@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { auditIssueAdapter, failureCategory, recordIssueAudit, withIssueAuditContext } from "./issue-audit.mjs"
 
 import { validateAgentResult } from "./agent-result-protocol.mjs"
 import {
@@ -25,6 +26,25 @@ export function createIssueOperationExecutor({ store, platforms, checkpoint } = 
   const registry = normalizePlatforms(platforms)
 
   async function execute({ run, project, config, agentResult } = {}) {
+    return withIssueAuditContext({ runId: run?.id, stage: run?.stage, projectKey: project?.key,
+      projectId: project?.linearProjectId, issueId: run?.issueId, platform: run?.issueBinding?.platform }, async () => {
+      const execution = await executeResult({ run, project, config, agentResult })
+      const validated = validateAgentResult(agentResult, run?.agentResultContext)
+      const category = execution.error ? (validated.ok ? failureCategory(execution.error) : "agent-output") : null
+      if (execution.error && validated.ok && execution.operations.length === 0) {
+        for (const operation of validated.value.operations) {
+          await recordIssueAudit(store, { operation: operation.type, idempotencyKey: operation.idempotencyKey,
+            result: "rejected", errorCode: execution.error.code, failureCategory: category, retryable: execution.error.retryable })
+        }
+      }
+      await recordIssueAudit(store, { operation: "result.execute", result: execution.status,
+        errorCode: execution.error?.code, retryable: execution.error?.retryable,
+        failureCategory: category })
+      return execution
+    })
+  }
+
+  async function executeResult({ run, project, config, agentResult }) {
     const validation = validateAgentResult(agentResult, run?.agentResultContext)
     if (!validation.ok) {
       return manualRequired(platformError(
@@ -38,7 +58,8 @@ export function createIssueOperationExecutor({ store, platforms, checkpoint } = 
       return completed([])
     }
 
-    const platform = registry.get(result.target.platform)
+    const registered = registry.get(result.target.platform)
+    const platform = registered && { reader: auditIssueAdapter(registered.reader, store), writer: auditIssueAdapter(registered.writer, store) }
     if (!platform) {
       return manualRequired(platformError(
         ISSUE_PLATFORM_ERROR_CODE.INVALID_REQUEST,

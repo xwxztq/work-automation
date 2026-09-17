@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "docs",
+    "!docs/evidence",
     "prompts",
     "src/server/*.mjs",
     "!src/server/*.test.mjs",
@@ -40,6 +41,7 @@
     "once": "node src/server/index.mjs once --runtime-root . --config config.local.json",
     "validate": "node src/server/index.mjs validate-config --runtime-root . --config config.local.json",
     "prepack": "npm run build",
+    "npm:check": "node scripts/check-npm-package.mjs",
     "npm:pack": "node scripts/pack-npm.mjs",
     "native:bundle:macos": "npm run build && node scripts/build-native-runtime.mjs --platform darwin",
     "native:bundle:macos:local": "npm run build && node scripts/build-native-runtime.mjs --platform darwin --local-node"

@@ -38,6 +38,19 @@ const FILE_ENVIRONMENT_NAMES = [
   "SSL_CERT_FILE",
 ]
 
+export async function assertCodexSandboxPaths(paths) {
+  if (process.platform !== "darwin") return
+  // Codex CLI 0.153.4's macOS sandbox permits writes below /private/tmp even
+  // with a read-only workspace and :slash_tmp = deny. Keep protected data out
+  // of that tree; realpath also catches /tmp and user-created symlink aliases.
+  for (const candidate of new Set(paths.filter(Boolean))) {
+    const resolved = await fs.realpath(candidate)
+    if (isSameOrDescendant(resolved, "/private/tmp")) {
+      throw new Error("macOS Codex 沙箱无法保护 /tmp 下的仓库或运行数据。请将项目、工作目录和运行目录移到 /tmp 之外（符号链接也不支持）。")
+    }
+  }
+}
+
 export function buildCodexPermissionBoundary({
   stage,
   cwd,
@@ -61,6 +74,9 @@ export function buildCodexPermissionBoundary({
       : { [resolvedProjectPath]: true }
   const workspaceRules = {
     ".": workspaceAccess,
+    // Codex protects .git by default even for a writable workspace. Stage two
+    // is explicitly authorized to create one scoped local implementation commit.
+    ...(stage === "part2" ? { ".git": "write" } : {}),
     ...Object.fromEntries(ENV_FILE_PATTERNS.map((pattern) => [pattern, "deny"])),
   }
   const runRules = buildRunRules({

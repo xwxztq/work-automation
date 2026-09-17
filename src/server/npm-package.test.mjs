@@ -83,3 +83,19 @@ test("npm publish workflow uses the pinned OIDC toolchain without publish secret
   assert.match(readme, /Workflow filename：`publish-npm\.yml`/)
   assert.match(readme, /不读取 `NPM_TOKEN`、npm 密码或一次性验证码/)
 })
+
+test("package checker rejects local credentials and incomplete runtime archives", async () => {
+  const { gzipSync } = await import("node:zlib")
+  const { inspectPackageArchive } = await import("../../scripts/check-npm-package.mjs")
+  const archive = (name, body = "") => {
+    const header = Buffer.alloc(512)
+    header.write(name, 0)
+    header.write(Buffer.byteLength(body).toString(8).padStart(11, "0"), 124)
+    header.write("0", 156)
+    return gzipSync(Buffer.concat([header, Buffer.from(body), Buffer.alloc((512 - Buffer.byteLength(body) % 512) % 512), Buffer.alloc(1024)]))
+  }
+  assert.throws(() => inspectPackageArchive(archive("package/.env.local", "private")), /Private package entry/u)
+  assert.throws(() => inspectPackageArchive(archive("package/docs/leak.md", "lin_api_" + "a".repeat(24))), /Credential-like content/u)
+  assert.throws(() => inspectPackageArchive(archive("package/README.md", "Safe")), /Missing runtime file/u)
+  assert.match(npmPublishWorkflow, /run: pnpm npm:check/u)
+})

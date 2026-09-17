@@ -8,7 +8,7 @@ import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import { createLinearWriteAdapter } from "./linear-write-adapter.mjs"
-import { isCodexLinearAuthFailureRun } from "./linear-auth-diagnostics.mjs"
+import { auditIssueAdapter, bindIssueAuditRun, failureCategory, recordIssueAudit, withIssueAuditContext } from "./issue-audit.mjs"
 import { createIssueOperationExecutor } from "./issue-operation-executor.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 import { sendRunWebhook } from "./webhook-notifier.mjs"
@@ -128,7 +128,7 @@ export function createScheduler({
 
   async function runOnce(stage = "both", options = {}) {
     const config = await configProvider()
-    const linear = linearProvider(config)
+    const linear = auditIssueAdapter(linearProvider(config), store, { stage, projectKey: options.projectKey, projects: config.projects })
     const summary = {
       startedAt: new Date().toISOString(),
       stage,
@@ -1149,27 +1149,6 @@ export function createScheduler({
       })
       return false
     }
-    const linearAuthFailureRun = await getProcessedCodexLinearAuthFailureRun(processed)
-    if (linearAuthFailureRun) {
-      await logEvent({
-        type: "issue-retry-after-linear-auth-failure",
-        level: "warn",
-        stage,
-        projectKey: project.key,
-        issueIdentifier: issue.identifier,
-        runId: linearAuthFailureRun.id,
-        message: `${issue.identifier} 上次处理快照来自 Codex Linear 授权失效，本轮继续重试`,
-        data: {
-          fingerprint,
-          recordedAt: processed.recordedAt,
-          issueUpdatedAt: issue.updatedAt,
-          state: issue.state?.name,
-          failureKind: linearAuthFailureRun.failureKind,
-          action: linearAuthFailureRun.failureAction || null,
-        },
-      })
-      return false
-    }
     projectSummary.skipped.push(`${issue.identifier}: 自上次处理后没有变化`)
     await logEvent({
       type: "issue-skip-unchanged",
@@ -1223,25 +1202,6 @@ export function createScheduler({
           runStatus: run.status,
           codexStarted: run.codexStarted,
           startupError: run.startupError || run.error || null,
-        },
-      })
-      return run
-    }
-    if (isCodexLinearAuthFailureRun(run)) {
-      await logEvent({
-        type: "issue-processed-not-recorded",
-        level: "warn",
-        stage,
-        projectKey: project.key,
-        issueIdentifier: issue.identifier,
-        runId: run.id,
-        message: `${issue.identifier} Codex Linear 授权失效，需要重新登录，未记录处理快照`,
-        data: {
-          runStatus: run.status,
-          codexStarted: run.codexStarted,
-          failureKind: run.failureKind,
-          retryable: true,
-          action: run.failureAction || null,
         },
       })
       return run
@@ -1301,18 +1261,6 @@ export function createScheduler({
     }
   }
 
-  async function getProcessedCodexLinearAuthFailureRun(processed) {
-    if (!processed?.runId) {
-      return null
-    }
-    try {
-      const run = await store.getRun(processed.runId)
-      return isCodexLinearAuthFailureRun(run) ? run : null
-    } catch {
-      return null
-    }
-  }
-
   async function executeAgentOperations({ config, project, linear, run, agentResult }) {
     if (Array.isArray(agentResult?.operations) && agentResult.operations.length === 0) {
       return {
@@ -1348,7 +1296,11 @@ export function createScheduler({
     return executor.execute({ run, project, config, agentResult })
   }
 
-  async function executeCodexStage({
+  function executeCodexStage(input) {
+    return withIssueAuditContext({ stage: input.stage, projectKey: input.project.key, projectId: input.project.linearProjectId, issueId: input.issue.id }, () => executeCodexStageWithContext(input))
+  }
+
+  async function executeCodexStageWithContext({
     config,
     project,
     linear,
@@ -1440,6 +1392,8 @@ export function createScheduler({
           issue,
         }),
       })
+      bindIssueAuditRun(run)
+      await recordIssueAudit(store, { operation: "context.snapshot", result: "succeeded" })
       active.runId = run.id
       activeRunsById.set(run.id, active)
       await logEvent({
@@ -1539,7 +1493,11 @@ export function createScheduler({
               finishedAt: new Date().toISOString(),
             },
       })
+      if (!agentSucceeded) {
+        await recordIssueAudit(store, { runId: run.id, operation: "agent.result", result: "rejected", failureCategory: "agent-output", errorCode: run.agentResultValidation?.error?.code })
+      }
       if (agentSucceeded) {
+        await recordIssueAudit(store, { operation: "agent.result", result: "validated" })
         const operationExecution = await executeAgentOperations({
           config,
           project,
@@ -2027,6 +1985,7 @@ export function operationExecutionRunPatch(execution, previous = {}) {
     ...previous,
     ...execution,
     required: true,
+    failureCategory: execution?.error ? failureCategory(execution.error) : null,
     updatedAt: now,
     ...(execution?.safeTerminal ? { finishedAt: now } : {}),
   }
@@ -2057,7 +2016,7 @@ export function operationExecutionRunPatch(execution, previous = {}) {
     operationExecution,
     error: execution?.error?.message || "事项平台操作需要人工处理。",
     failureKind: "issue-operation-manual-required",
-    failureSummary: "事项平台操作需要人工处理",
+    failureSummary: failureCategory(execution?.error) === "service-validation" ? "服务校验拒绝了事项操作" : "事项平台调用或写后核对失败",
     failureAction: "检查 run 中的脱敏操作结果，并在 Linear 中核对目标事项。",
     retryableFailure: false,
   }

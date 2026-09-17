@@ -49,6 +49,7 @@ const configProvider = async () =>
   )
 const linearStatusHealthChecker = createLinearStatusHealthChecker()
 const setupManager = createSetupManager({
+  store,
   configPath: runtimePaths.configPath,
   rootDir: runtimePaths.runtimeRootDir,
 })

@@ -1,4 +1,5 @@
 import { createLinearClient } from "./linear-client.mjs"
+import { auditIssueAdapter } from "./issue-audit.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import {
   ISSUE_PLATFORM_ERROR_CODE,
@@ -84,7 +85,7 @@ export function createLinearStatusHealthChecker({ ttlMs = DEFAULT_STATUS_HEALTH_
 
 export async function checkLinearStatusHealth(config, options = {}) {
   const apiKeyEnv = options.apiKeyEnv || config.linear?.apiKeyEnv || "LINEAR_API_KEY"
-  const linear = options.linear || createLinearFromOptions({ ...options, apiKeyEnv })
+  const linear = auditIssueAdapter(options.linear || createLinearFromOptions({ ...options, apiKeyEnv }), options.store, { stage: "status-health", projects: config.projects })
   const projects = config.projects.filter((project) => project.enabled)
   const requiredStatuses = configuredRequiredStatuses(config)
   const checkedAt = new Date().toISOString()
