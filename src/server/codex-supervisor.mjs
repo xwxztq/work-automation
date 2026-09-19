@@ -9,6 +9,7 @@ import {
 } from "./agent-result-runtime.mjs"
 import { buildCodexProcessEnv } from "./codex-environment.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
+import { startBrowserSession } from "./browser-session.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
 const SANDBOX_HOME_PREFIX = "work-automation-codex-"
@@ -27,6 +28,7 @@ async function main() {
   let forceKillTimer = null
   let stdoutHandle = null
   let stderrHandle = null
+  let browserSession = null
 
   const appendStderr = async (message) => {
     await fs.mkdir(path.dirname(input.stderrPath), { recursive: true })
@@ -104,6 +106,14 @@ async function main() {
     if (input.launcherCodexHome) {
       await fs.mkdir(input.launcherCodexHome, { recursive: true })
       childEnvironment.CODEX_HOME = input.launcherCodexHome
+    }
+    if (input.browserEnabled) {
+      browserSession = await startBrowserSession({
+        runDir: path.dirname(input.metadataPath),
+        cwd: input.cwd,
+        runId: input.runId,
+      })
+      await fs.appendFile(input.promptPath, browserSession.guidance)
     }
     child = spawn(input.launchBin || input.codexBin, input.launchArgs || input.args, {
       cwd: input.cwd,
@@ -207,6 +217,9 @@ async function main() {
     if (forceKillTimer) {
       clearTimeout(forceKillTimer)
     }
+    await browserSession?.close().catch(async () => {
+      await appendStderr("浏览器会话清理失败。\n").catch(() => {})
+    })
     await stdoutHandle?.close().catch(() => {})
     await stderrHandle?.close().catch(() => {})
     await cleanupCompletedReview().catch(async (error) => {

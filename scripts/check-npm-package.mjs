@@ -22,7 +22,7 @@ export function inspectPackageArchive(bytes) {
     files.set(name.replace(/^package\//u, ""), body)
     offset += 512 + Math.ceil(size / 512) * 512
   }
-  for (const name of ["dist/index.html", "config.example.json", "docs/agent-result-protocol.md", "docs/centralized-linear-migration.md", ...["part1", "split", "part2", "part3"].map((stage) => `prompts/${stage}.global.md`), ...["agent-result-protocol", "agent-result-runtime", "issue-audit", "diagnostic-redaction", "issue-operation-executor", "run-images", "linear-read-adapter", "linear-write-adapter", "native-service-cli"].map((name) => `src/server/${name}.mjs`)]) {
+  for (const name of ["dist/index.html", "config.example.json", "docs/agent-result-protocol.md", "docs/centralized-linear-migration.md", ...["part1", "split", "part2", "part3"].map((stage) => `prompts/${stage}.global.md`), ...["agent-result-protocol", "agent-result-runtime", "issue-audit", "diagnostic-redaction", "issue-operation-executor", "run-images", "linear-read-adapter", "linear-write-adapter", "native-service-cli", "browser-client", "browser-session"].map((name) => `src/server/${name}.mjs`)]) {
     if (!files.has(name)) throw new Error(`Missing runtime file: ${name}`)
   }
   if ([...files.keys()].some((name) => name.endsWith(".test.mjs") || name.includes("linear-auth-diagnostics"))) throw new Error("Obsolete diagnostics or tests included")

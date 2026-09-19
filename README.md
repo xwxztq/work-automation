@@ -110,6 +110,20 @@ workflow 固定使用 Node 24.19.0、npm 11.17.0 和仓库声明的 pnpm 11.2.2�
 - 关闭前端轮询只停止扫描，不会停止已运行的 Codex 子进程。
 - 生产模式：`pnpm build && pnpm start`，访问 `http://127.0.0.1:4378`；局域网用 `pnpm start:lan --host <IP>`。`--host` 优先级高于配置文件 `host`。
 
+### 浏览器验收环境
+
+需要 GUI 验收时，在运行服务的同一用户下安装与依赖版本匹配的浏览器：
+
+```bash
+npx --yes playwright-core@1.61.1 install chromium --only-shell
+```
+
+浏览器下载与 npm 包安装分开；普通单元测试和非 GUI 任务不需要下载浏览器。Linux 还需要 Playwright 要求的系统库。升级 `playwright-core` 后应重新安装匹配版本。
+
+阶段二和阶段三会收到本次运行专用的浏览器调用说明。服务负责启动独立的 Chromium Headless Shell，保留 Chromium 自身的沙箱，避免 macOS 上从 Codex 文件沙箱启动 Chrome 时被系统进程通信权限阻止。它不使用个人 Chrome 配置或登录信息，也不向浏览器传入 Linear、OpenAI 凭据。预览地址限制为本机 HTTP(S)，支持页面状态、点击、填写、按键、拖拽和截图；外部 CDN 资源可以加载，但不允许跳转到外站或读取 `file:` 地址。
+
+截图保存到本次运行的 `browser/` 目录，执行进程可以读取但不能改写，并记录提交、页面地址、时间、尺寸和 SHA-256。GUI 验收仍需检查图片和交互结果；启动成功不代表功能通过。缺少浏览器时应报告环境阻塞，不要在任务中循环安装浏览器或关闭沙箱。真实沙箱回归可在 macOS 宿主运行 `WAUTO_BROWSER_LIVE_TEST=1 node --test src/server/browser-session.test.mjs`。
+
 ### 无需 Node 的 macOS 原生包（备用）
 
 原生包适合不希望单独安装 Node 的用户，不要求预装 Node 或 pnpm。构建命令会下载与构建机 Node 版本一致的官方 macOS 运行时，按照 Node 发布页的 `SHASUMS256.txt` 校验后放入发布包：

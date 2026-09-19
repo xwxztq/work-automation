@@ -21,7 +21,7 @@ test("npm manifest publishes only the prebuilt runtime", () => {
   assert.equal(packageMetadata.bin.wauto, "src/server/native-service-cli.mjs")
   assert.equal(packageMetadata.bin["work-automation"], undefined)
   assert.match(packageMetadata.engines.node, /^>=22/)
-  assert.deepEqual(Object.keys(packageMetadata.dependencies), ["https-proxy-agent", "jpeg-js", "pngjs"])
+  assert.deepEqual(Object.keys(packageMetadata.dependencies), ["https-proxy-agent", "jpeg-js", "playwright-core", "pngjs"])
   assert.ok(packageMetadata.files.includes("dist"))
   assert.ok(packageMetadata.files.includes("src/server/*.mjs"))
   assert.ok(packageMetadata.files.includes("!src/server/*.test.mjs"))

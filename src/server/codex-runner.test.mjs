@@ -476,7 +476,9 @@ console.error("fake stderr")
   )
   assert.match(supervisorConfig.launchArgs.join(" "), /\.env\.local/u)
   assert.doesNotMatch(supervisorConfig.launchArgs.join(" "), /danger-full-access/u)
-  assert.equal(capture.prompt, "service supplied prompt")
+  assert.ok(capture.prompt.startsWith("service supplied prompt\n"))
+  assert.match(capture.prompt, /browser-client\.mjs/u)
+  assert.match(capture.prompt, /browser-session\.json/u)
   assert.doesNotMatch(
     supervisorInput,
     /LINEAR_SENTINEL|MCP_SENTINEL|CUSTOM_LINEAR_SENTINEL|UNAUTHORIZED_SENTINEL|ARG_LINEAR_SECRET/u,

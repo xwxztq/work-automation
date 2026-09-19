@@ -18,6 +18,7 @@ const FORCE_KILL_DELAY_MS = 5000
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SUPERVISOR_PATH = path.join(__dirname, "codex-supervisor.mjs")
 const SANDBOX_TARGET_PATH = path.join(__dirname, "codex-sandbox-target.mjs")
+const BROWSER_CLIENT_PATH = path.join(__dirname, "browser-client.mjs")
 
 export async function runCodex({
   config,
@@ -111,6 +112,7 @@ export async function runCodex({
   ])
   const launcherReadPaths = [
     SANDBOX_TARGET_PATH,
+    BROWSER_CLIENT_PATH,
     ...codexExecutableReadPaths,
     ...nodeExecutableReadPaths,
   ]
@@ -162,6 +164,8 @@ export async function runCodex({
         innerCodexHome,
         sandboxUserHome,
         sandboxTempDir,
+        browserEnabled: stage === "part2" || stage === "part3",
+        runId: run.id,
       },
       null,
       2,
