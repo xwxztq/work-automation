@@ -2,36 +2,113 @@ import test from "node:test"
 import assert from "node:assert/strict"
 
 import {
-  LINEAR_WRITE_MANUAL_REQUIRED_KIND,
-  diagnoseLinearWriteVerification,
+  verifyLinearOperation,
 } from "./linear-write-verification.mjs"
 
-test("returns manual-handling diagnostic when Linear state is unchanged", () => {
-  const diagnostic = diagnoseLinearWriteVerification({
-    beforeStateName: "Todo",
-    afterStateName: "Todo",
+test("verifies a comment by its preallocated ID and intended body", () => {
+  const verified = verifyLinearOperation({
+    operation: {
+      type: "comment.create",
+      payload: { body: "Codex Implementation Complete" },
+    },
+    intent: { commentId: "comment-stable-id" },
+    issue: {
+      comments: [{
+        id: "comment-stable-id",
+        body: "Codex Implementation Complete",
+      }],
+    },
+  })
+  const missing = verifyLinearOperation({
+    operation: {
+      type: "comment.create",
+      payload: { body: "Codex Implementation Complete" },
+    },
+    intent: { commentId: "comment-stable-id" },
+    issue: { comments: [] },
   })
 
-  assert.equal(diagnostic?.kind, LINEAR_WRITE_MANUAL_REQUIRED_KIND)
-  assert.equal(diagnostic?.retryable, false)
-  assert.match(diagnostic?.summary || "", /Todo/)
+  assert.deepEqual(verified, {
+    status: "verified",
+    resourceId: "comment-stable-id",
+  })
+  assert.deepEqual(missing, {
+    status: "not-applied",
+    resourceId: "comment-stable-id",
+  })
 })
 
-test("includes refresh failure detail when status verification falls back to the old state", () => {
-  const diagnostic = diagnoseLinearWriteVerification({
-    beforeStateName: "On Schedule",
-    afterStateName: "On Schedule",
-    refreshErrorMessage: "getaddrinfo ENOTFOUND api.linear.app",
-  })
+test("verifies a state update by stable ID and name", () => {
+  const operation = {
+    type: "issue.state.update",
+    payload: { state: "Testing" },
+  }
+  const intent = {
+    state: { id: "state-testing", name: "Testing" },
+  }
 
-  assert.match(diagnostic?.message || "", /ENOTFOUND/)
+  assert.deepEqual(
+    verifyLinearOperation({
+      operation,
+      intent,
+      issue: { state: { id: "state-testing", name: "Testing" } },
+    }),
+    { status: "verified", resourceId: "state-testing" },
+  )
+  assert.deepEqual(
+    verifyLinearOperation({
+      operation,
+      intent,
+      issue: { state: { id: "state-schedule", name: "On Schedule" } },
+    }),
+    { status: "not-applied", resourceId: "state-testing" },
+  )
+  assert.deepEqual(
+    verifyLinearOperation({
+      operation,
+      intent,
+      issue: { state: { id: "state-testing", name: "Renamed Testing" } },
+    }),
+    { status: "conflict", resourceId: "state-testing" },
+  )
 })
 
-test("returns null when Linear state changed", () => {
-  const diagnostic = diagnoseLinearWriteVerification({
-    beforeStateName: "Todo",
-    afterStateName: "Needs Clarification",
-  })
+test("verifies a child issue against its persisted ID and inherited parent fields", () => {
+  const operation = {
+    type: "issue.child.create",
+    payload: { title: "Child scope", description: "Bound implementation scope" },
+  }
+  const intent = {
+    childIssueId: "child-stable-id",
+    parentIssueId: "issue-1175",
+    teamId: "team-liv",
+    projectId: "project-work-automation",
+    priority: 2,
+  }
+  const issue = {
+    id: "child-stable-id",
+    parentIssueId: "issue-1175",
+    team: { id: "team-liv" },
+    project: { id: "project-work-automation" },
+    priority: 2,
+    title: "Child scope",
+    description: "Bound implementation scope",
+  }
 
-  assert.equal(diagnostic, null)
+  assert.deepEqual(
+    verifyLinearOperation({ operation, intent, issue }),
+    { status: "verified", resourceId: "child-stable-id" },
+  )
+  assert.deepEqual(
+    verifyLinearOperation({ operation, intent, issue: null }),
+    { status: "not-applied", resourceId: "child-stable-id" },
+  )
+  assert.deepEqual(
+    verifyLinearOperation({
+      operation,
+      intent,
+      issue: { ...issue, project: { id: "other-project" } },
+    }),
+    { status: "conflict", resourceId: "child-stable-id" },
+  )
 })

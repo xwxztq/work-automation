@@ -26,6 +26,17 @@ import { toast } from "sonner"
 
 import { api } from "@/app/api"
 import {
+  createCodexActivityLoader,
+  getCodexActivityScope,
+} from "@/app/codex-activity"
+import {
+  getInitialProjectNameSource,
+  getLinearProjectSelectionUpdate,
+  getProjectNameInputUpdate,
+  getProjectNamePatchForPath,
+  type ProjectNameSource,
+} from "@/app/project-name"
+import {
   collectBrowserNotificationCandidates,
   createBrowserNotificationTracker,
   markBrowserNotificationDelivered,
@@ -217,9 +228,7 @@ function emptyCodexActivity(): CodexActivityPayload {
   }
 }
 
-async function loadCodexActivity(projectKey?: string) {
-  return api.getCodexActivity(projectKey).catch(() => emptyCodexActivity())
-}
+const loadCodexActivity = createCodexActivityLoader(api.getCodexActivity, emptyCodexActivity)
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(() => (
@@ -325,22 +334,22 @@ function App() {
   }, [config, prompts, selectedProjectKey, setupStatus?.ready, view])
 
   useEffect(() => {
-    if (!setupStatus?.ready || !config || view !== "project") {
+    if (!setupStatus?.ready || !config) {
       return
     }
-    if (!selectedProjectKey) {
+    const activityScope = getCodexActivityScope(view, selectedProjectKey)
+    if (activityScope?.kind === "global") {
+      void loadCodexActivity().then(setGlobalCodexActivity)
+      return
+    }
+    if (activityScope?.kind === "project") {
+      void loadCodexActivity(activityScope.projectKey).then(setCodexActivity)
+      return
+    }
+    if (view === "project") {
       setCodexActivity({ generatedAt: "", agents: [] })
-      return
     }
-    void loadCodexActivity(selectedProjectKey).then(setCodexActivity)
   }, [config, selectedProjectKey, setupStatus?.ready, view])
-
-  useEffect(() => {
-    if (!setupStatus?.ready || !config || view !== "activity") return
-    void refreshGlobalActivity(true)
-    // The view/config transition is the trigger; polling handles later refreshes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, setupStatus?.ready, view])
 
   useEffect(() => {
     if (!prompts) return
@@ -544,14 +553,12 @@ function App() {
       nextRuns,
       nextGlobalRuns,
       nextDaemon,
-      nextCodexActivity,
       nextLinearStatusHealth,
       nextEvents,
     ] = await Promise.all([
       api.getRuns(nextProjectKey || undefined),
       api.getRuns(),
       api.getDaemonStatus(),
-      loadCodexActivity(nextProjectKey || undefined),
       api.getLinearStatusHealth(),
       includeEvents ? api.getEvents() : Promise.resolve(null),
     ])
@@ -561,7 +568,6 @@ function App() {
     processRunNotifications(nextGlobalRuns.runs, nextConfig)
     setRunTotalCount(nextRuns.totalCount)
     setDaemon(nextDaemon)
-    setCodexActivity(nextCodexActivity)
     setLinearStatusHealth(nextLinearStatusHealth)
     if (nextEvents) {
       setEvents(nextEvents.events)
@@ -1104,6 +1110,12 @@ function App() {
                 <CheckCircle2 className="size-4" />
                 校验
               </Button>
+              {view === "project" && selectedProject && (
+                <Button variant="outline" onClick={() => openEditProject(selectedProject)} disabled={busy}>
+                  <Settings className="size-4" />
+                  项目设置
+                </Button>
+              )}
             </div>
           </header>
 
@@ -1130,7 +1142,6 @@ function App() {
                 retryRun={retryRun}
                 cancelRun={(id) => void cancelRun(id)}
                 cancelProject={(key) => void cancelProject(key)}
-                editProject={(project) => openEditProject(project)}
                 addProject={openNewProject}
               />
             )}
@@ -1665,7 +1676,6 @@ function ProjectView({
   retryRun,
   cancelRun,
   cancelProject,
-  editProject,
   addProject,
 }: {
   project: ProjectConfig | null
@@ -1688,7 +1698,6 @@ function ProjectView({
   retryRun: (run: RunDetail | RunSummary) => void
   cancelRun: (id: string) => void
   cancelProject: (key: string) => void
-  editProject: (project: ProjectConfig) => void
   addProject: () => void
 }) {
   const shouldUseRunDialog = useMediaQuery("(max-width: 1535px)")
@@ -1745,10 +1754,6 @@ function ProjectView({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle>当前项目</CardTitle>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => editProject(project)} disabled={busy}>
-                    <Pencil className="size-4" />
-                    修改
-                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -2234,11 +2239,26 @@ function RunDetailPanel({
             <Tabs defaultValue="final" className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
               <TabsList className="max-w-full shrink-0 overflow-x-auto">
                 <TabsTrigger value="final">最终结果</TabsTrigger>
+                <TabsTrigger value="audit">事项操作</TabsTrigger>
                 <TabsTrigger value="stdout">标准输出</TabsTrigger>
                 <TabsTrigger value="stderr">错误输出</TabsTrigger>
                 <TabsTrigger value="prompt">提示词</TabsTrigger>
               </TabsList>
               <RunLog value="final" text={selectedRun.final || JSON.stringify(selectedRun.finalJson, null, 2) || ""} />
+              <TabsContent value="audit" className="min-h-0 overflow-auto">
+                <div className="space-y-2 text-xs">
+                  <p className="text-muted-foreground">{selectedRun.operationExecution?.status || "无操作执行记录"}。已核对的操作在重试时会保留；调用成功仍需写后核对。</p>
+                  {(selectedRun.audit || []).map((entry, index) => (
+                    <div key={index} className="space-y-1 rounded border p-3 break-all">
+                      <div>{formatDate(entry.timestamp)} · {entry.operation} · {entry.result}</div>
+                      {entry.idempotencyKey && <div>幂等键：{entry.idempotencyKey}</div>}
+                      {entry.resourceId && <div>远端记录：{entry.resourceId}</div>}
+                      {entry.failureCategory && <div>失败来源：{({ "agent-output": "Agent 输出", "service-validation": "服务校验", provider: "平台调用或写后核对" } as Record<string, string>)[entry.failureCategory] || entry.failureCategory}，{entry.errorCode || "未知错误"}，{entry.retryable ? "等待自动恢复" : "需要检查"}</div>}
+                    </div>
+                  ))}
+                  {!selectedRun.audit?.length && <p>此运行没有审计记录。升级前的历史运行不补造记录。</p>}
+                </div>
+              </TabsContent>
               <RunStdoutLog text={selectedRun.stdout} />
               <RunLog value="stderr" text={selectedRun.stderr} />
               <RunLog value="prompt" text={selectedRun.prompt} />
@@ -2470,8 +2490,12 @@ function ProjectEditor({
   const [linearProjectOptions, setLinearProjectOptions] = useState<LinearProjectOption[]>([])
   const [linearProjectLoading, setLinearProjectLoading] = useState(false)
   const [linearProjectError, setLinearProjectError] = useState<string | null>(null)
+  const [directoryPickerAvailable, setDirectoryPickerAvailable] = useState(false)
+  const [directoryPickerBusy, setDirectoryPickerBusy] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(editing)
-  const [repoNameManual, setRepoNameManual] = useState(editing)
+  const [projectNameSource, setProjectNameSource] = useState<ProjectNameSource>(
+    getInitialProjectNameSource(editing),
+  )
 
   const loadLinearProjects = useCallback(async () => {
     setLinearProjectLoading(true)
@@ -2495,9 +2519,35 @@ function ProjectEditor({
       return
     }
     setAdvancedOpen(editing)
-    setRepoNameManual(editing)
+    setProjectNameSource(getInitialProjectNameSource(editing))
     void loadLinearProjects()
   }, [open, editing, loadLinearProjects])
+
+  useEffect(() => {
+    let active = true
+    if (!open) {
+      setDirectoryPickerAvailable(false)
+      setDirectoryPickerBusy(false)
+      return () => {
+        active = false
+      }
+    }
+
+    setDirectoryPickerAvailable(false)
+    void api.getDirectoryPickerCapability()
+      .then((capability) => {
+        if (active) {
+          setDirectoryPickerAvailable(capability.available)
+        }
+      })
+      .catch((error) => {
+        console.error("目录选择能力检测失败，已保留手工输入。", error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [open])
 
   const filteredLinearProjects = useMemo(() => {
     const query = linearProjectFilter.trim().toLowerCase()
@@ -2523,28 +2573,40 @@ function ProjectEditor({
   }
 
   function selectLinearProject(item: LinearProjectOption) {
-    onUpdate({ linearProjectId: item.id })
+    const update = getLinearProjectSelectionUpdate(project, item, projectNameSource)
+    onUpdate(update.patch)
+    setProjectNameSource(update.source)
     setLinearProjectPickerOpen(false)
   }
 
   function handlePathChange(nextPath: string) {
     const shouldSyncCodexCwd = !project.codexCwd || project.codexCwd === project.path
-    const derivedName = deriveRepoName(nextPath)
     onUpdate({
       path: nextPath,
       ...(shouldSyncCodexCwd ? { codexCwd: nextPath } : {}),
-      ...(!repoNameManual && derivedName ? { repoName: derivedName } : {}),
+      ...getProjectNamePatchForPath(nextPath, projectNameSource),
     })
   }
 
-  function handleRepoNameChange(nextName: string) {
-    if (!nextName.trim()) {
-      setRepoNameManual(false)
-      onUpdate({ repoName: deriveRepoName(project.path) })
-      return
+  async function selectDirectory() {
+    setDirectoryPickerBusy(true)
+    try {
+      const result = await api.pickDirectory()
+      if (result.status === "selected") {
+        handlePathChange(result.path)
+      }
+    } catch (error) {
+      console.error("目录选择失败，已隐藏选择入口。", error)
+      setDirectoryPickerAvailable(false)
+    } finally {
+      setDirectoryPickerBusy(false)
     }
-    setRepoNameManual(true)
-    onUpdate({ repoName: nextName })
+  }
+
+  function handleRepoNameChange(nextName: string) {
+    const update = getProjectNameInputUpdate(nextName, project.path)
+    setProjectNameSource(update.source)
+    onUpdate({ repoName: update.repoName })
   }
 
   return (
@@ -2617,16 +2679,39 @@ function ProjectEditor({
               </button>
             </Field>
             <Field label="仓库路径" description={projectFieldDescriptions.path}>
-              <Input
-                className="font-mono"
-                placeholder="/Users/you/Projects/my-repo"
-                value={project.path}
-                onChange={(event) => handlePathChange(event.target.value)}
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  className="min-w-0 flex-1 font-mono"
+                  placeholder="/Users/you/Projects/my-repo"
+                  value={project.path}
+                  onChange={(event) => handlePathChange(event.target.value)}
+                />
+                {directoryPickerAvailable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void selectDirectory()}
+                    disabled={busy || directoryPickerBusy}
+                  >
+                    {directoryPickerBusy ? (
+                      <RefreshCcw className="animate-spin" />
+                    ) : (
+                      <FolderGit2 />
+                    )}
+                    选择
+                  </Button>
+                )}
+              </div>
             </Field>
             <Field
               label="仓库名称"
-              description={repoNameManual ? projectFieldDescriptions.repoName : "已根据仓库路径自动填充，可手动修改。"}
+              description={
+                projectNameSource === "manual"
+                  ? projectFieldDescriptions.repoName
+                  : projectNameSource === "linear"
+                    ? "已根据 Linear 项目名称填充，可手动修改。"
+                    : "已根据仓库路径自动填充，可手动修改。"
+              }
             >
               <Input
                 placeholder="my-repo"
@@ -3410,12 +3495,6 @@ function formatDate(value: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
-}
-
-function deriveRepoName(path: string) {
-  const normalized = path.trim().replace(/[/\\]+$/, "")
-  if (!normalized) return ""
-  return normalized.split(/[/\\]/).pop() || ""
 }
 
 export default App

@@ -1,6 +1,8 @@
 import fs from "node:fs/promises"
 import http from "node:http"
 import path from "node:path"
+import { redactDiagnostic } from "./diagnostic-redaction.mjs"
+import { auditIssueAdapter } from "./issue-audit.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import {
   loadConfig,
@@ -8,7 +10,11 @@ import {
   saveConfig,
   validateConfig,
 } from "./config.mjs"
-import { createCodexActivityPayload } from "./codex-activity.mjs"
+import { createCodexActivityPayload, createCodexActivityReader } from "./codex-activity.mjs"
+import {
+  createDirectoryPicker,
+  DirectoryPickerUnavailableError,
+} from "./directory-picker.mjs"
 import { readAllPrompts, readPrompt, writePrompt } from "./prompts.mjs"
 import { createLinearStatusHealthChecker } from "./status-health.mjs"
 
@@ -20,7 +26,9 @@ export function createHttpApi({
   store,
   setupManager = null,
   dev = false,
+  directoryPicker = createDirectoryPicker(),
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
+  codexActivityReader = createCodexActivityReader(),
 }) {
   return http.createServer(async (req, res) => {
     try {
@@ -32,7 +40,9 @@ export function createHttpApi({
           scheduler,
           store,
           setupManager,
+          directoryPicker,
           linearStatusHealthChecker,
+          codexActivityReader,
         })
         return
       }
@@ -58,7 +68,9 @@ async function handleApi(req, res, url, context) {
     scheduler,
     store,
     setupManager,
+    directoryPicker,
     linearStatusHealthChecker,
+    codexActivityReader,
   } = context
   const method = req.method || "GET"
   const parts = url.pathname.split("/").filter(Boolean)
@@ -111,6 +123,22 @@ async function handleApi(req, res, url, context) {
     return
   }
 
+  if (method === "GET" && url.pathname === "/api/directory-picker") {
+    sendJson(res, 200, await directoryPicker.getCapability())
+    return
+  }
+
+  if (method === "POST" && url.pathname === "/api/directory-picker") {
+    try {
+      sendJson(res, 200, await directoryPicker.pickDirectory())
+    } catch (error) {
+      sendJson(res, error instanceof DirectoryPickerUnavailableError ? 409 : 500, {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return
+  }
+
   if (method === "POST" && url.pathname === "/api/config/validate") {
     const config = await loadConfig(configPath, rootDir)
     sendJson(res, 200, await validateConfig(config, rootDir))
@@ -124,6 +152,7 @@ async function handleApi(req, res, url, context) {
       200,
       await linearStatusHealthChecker.check(config, {
         force: url.searchParams.get("refresh") === "1",
+        store,
       }),
     )
     return
@@ -142,7 +171,7 @@ async function handleApi(req, res, url, context) {
       sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
       return
     }
-    const linear = createLinearClient(apiKey)
+    const linear = auditIssueAdapter(createLinearClient(apiKey), store, { stage: "configuration" })
     sendJson(res, 200, {
       projects: await linear.listProjects(),
     })
@@ -181,8 +210,8 @@ async function handleApi(req, res, url, context) {
       sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
       return
     }
-    const linear = createLinearClient(apiKey)
-    const preview = await linear.listProjectIssues(project.linearProjectId, 100)
+    const linear = auditIssueAdapter(createLinearClient(apiKey), store, { stage: "preview", projectKey: project.key, projectId: project.linearProjectId })
+    const preview = await linear.listProjectIssues(project.linearProjectId)
     const counts = {}
     for (const issue of preview.issues) {
       const status = issue.state?.name || "未知"
@@ -289,6 +318,7 @@ async function handleApi(req, res, url, context) {
       await createCodexActivityPayload({
         scheduler,
         store,
+        activityReader: codexActivityReader,
         projectKey: url.searchParams.get("projectKey") || undefined,
       }),
     )
@@ -359,15 +389,29 @@ function sendJson(res, status, payload) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   })
-  res.end(JSON.stringify(payload, null, 2))
+  res.end(JSON.stringify(redactDiagnostic(payload), null, 2))
 }
 
 async function serveStatic(res, pathname, staticRootDir) {
-  const distDir = path.join(staticRootDir, "dist")
-  const requested = pathname === "/" ? "/index.html" : pathname
-  const filePath = path.join(distDir, requested)
-  const resolved = path.resolve(filePath)
-  if (!resolved.startsWith(distDir)) {
+  const distDir = path.resolve(staticRootDir, "dist")
+  let decodedPathname
+  try {
+    decodedPathname = decodeURIComponent(pathname)
+  } catch {
+    sendJson(res, 400, { error: "静态资源路径编码无效" })
+    return
+  }
+  if (decodedPathname.includes("\0")) {
+    sendJson(res, 400, { error: "静态资源路径无效" })
+    return
+  }
+
+  const requested = decodedPathname === "/"
+    ? "index.html"
+    : decodedPathname.replace(/^[/\\]+/u, "")
+  const resolved = path.resolve(distDir, requested)
+  const relative = path.relative(distDir, resolved)
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     sendJson(res, 403, { error: "无权访问" })
     return
   }

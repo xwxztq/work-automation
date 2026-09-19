@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { AGENT_RESULT_SCHEMA_VERSION } from "./agent-result-protocol.mjs"
 import { ensureDir, fileExists } from "./config.mjs"
 
 const STAGES = new Set(["part1", "split", "part2", "part3"])
@@ -94,7 +95,6 @@ export function buildRunPromptContext(rootDir, run) {
   }
   const reviewDir = path.join(run.dir, "review")
   return {
-    AUTOMATION_ROOT_DIR: rootDir,
     CURRENT_RUN_ID: run.id,
     CURRENT_RUN_DIR: run.dir,
     CURRENT_RUN_DIR_RELATIVE: toPortableRelativePath(rootDir, run.dir),
@@ -131,6 +131,88 @@ export function buildIssueReviewPromptContext(issue) {
     POST_IMPLEMENTATION_USER_COMMENTS: userCommentsAfterImplementation.length
       ? userCommentsAfterImplementation.map((comment) => formatPromptComment(comment)).join("\n")
       : "（无）",
+  }
+}
+
+export function buildAgentResultPromptSection(context, issue) {
+  const binding = {
+    schemaVersion: AGENT_RESULT_SCHEMA_VERSION,
+    run: {
+      stage: context?.stage,
+      projectKey: context?.projectKey,
+      parentIssueId: context?.parentIssueId ?? null,
+      allowedOperations: context?.allowedOperations,
+    },
+    target: context?.target,
+  }
+  return `服务提供的不可变运行上下文:
+- 以下边界对全局模板和项目覆盖模板都生效；如有冲突，以这里为准。
+- 不得调用 Linear API、Linear MCP、Linear skill 或其他事项平台工具，也不要读取相关凭据。
+- 事项信息只使用下方服务快照。需要平台变更时，把意图写入 operations，由服务后续处理。
+- 最终输出必须是单个 JSON 文档，不得带 Markdown 代码块或说明文字。
+- 最终 JSON 必须原样复制 binding 中的 schemaVersion、run 和 target；run.allowedOperations 也必须保持原顺序与完整内容。
+- operations 只能使用 run.allowedOperations 中的类型；每项使用 8 至 128 字符且在本结果内唯一的 idempotencyKey。
+- 每项 operation 只包含 type、idempotencyKey 和 payload。comment.create 的 payload 必须包含 body；阶段三另带有序 images 数组，每项包含 run 相对 filePath 和 caption，没有图片时 images 为 []。其他阶段不得声明 images。issue.state.update 必须包含 state，issue.child.create 必须包含 title 和 description。attachment.upload 不可执行。
+- 图片只用 images 声明，不在 body 内嵌图片 Markdown、HTML 或 data URI。仅支持 PNG/JPEG，单文件最多 64 KiB，每 run 最多 4 张、总计 256 KiB；编码后评论不得超过 100000 字符，长正文或多图需要减少图片体积。
+- 不需要平台操作时输出空 operations 数组。不要声称操作已经在平台执行。
+
+运行绑定 binding:
+${JSON.stringify(binding, null, 2)}
+
+服务提供的事项快照:
+${JSON.stringify(buildIssueSnapshot(issue), null, 2)}`
+}
+
+export function buildIssueSnapshot(issue) {
+  return {
+    id: issue?.id || null,
+    identifier: issue?.identifier || null,
+    title: issue?.title || "",
+    description: issue?.description || "",
+    url: issue?.url || null,
+    priority: issue?.priority ?? null,
+    priorityLabel: issue?.priorityLabel || null,
+    createdAt: issue?.createdAt || null,
+    updatedAt: issue?.updatedAt || null,
+    state: selectFields(issue?.state, ["id", "name", "type"]),
+    team: selectFields(issue?.team, ["id", "key", "name"]),
+    project: selectFields(issue?.project, ["id", "name"]),
+    parent: selectFields(issue?.parent, ["id", "identifier"]),
+    assignee: selectFields(issue?.assignee, ["name"]),
+    labels: Array.isArray(issue?.labels)
+      ? issue.labels.map((label) => selectFields(label, ["id", "name"]))
+      : [],
+    comments: Array.isArray(issue?.comments)
+      ? issue.comments.map((comment) => ({
+          id: comment?.id || null,
+          body: comment?.body || "",
+          createdAt: comment?.createdAt || null,
+          updatedAt: comment?.updatedAt || null,
+          user: selectFields(comment?.user, ["name"]),
+        }))
+      : [],
+    relations: Array.isArray(issue?.relations)
+      ? issue.relations.map((relation) => ({
+          ...selectFields(relation, [
+            "id",
+            "type",
+            "direction",
+            "createdAt",
+            "updatedAt",
+          ]),
+          issue: relation?.issue
+            ? {
+                ...selectFields(relation.issue, ["id", "identifier", "title", "url"]),
+                target: selectFields(relation.issue.target, ["platform", "issueId"]),
+              }
+            : null,
+        }))
+      : [],
+    attachments: Array.isArray(issue?.attachments)
+      ? issue.attachments.map((attachment) =>
+          selectFields(attachment, ["id", "title", "url"]),
+        )
+      : [],
   }
 }
 
@@ -198,6 +280,15 @@ function firstNonEmptyLine(text) {
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .find(Boolean) || ""
+}
+
+function selectFields(value, fields) {
+  if (!value || typeof value !== "object") {
+    return null
+  }
+  return Object.fromEntries(
+    fields.map((field) => [field, value[field] ?? null]),
+  )
 }
 
 function toPortableRelativePath(fromDir, targetPath) {

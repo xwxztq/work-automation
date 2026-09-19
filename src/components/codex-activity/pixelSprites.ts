@@ -72,7 +72,7 @@ export type PixelAgentAssets = {
   characters: HTMLImageElement[]
   floors: HTMLImageElement[]
   furniture: Record<FurnitureAssetKey, HTMLImageElement>
-  modernOffice: HTMLImageElement
+  modernOffice: HTMLImageElement | null
   whiteCat: PixelCatAssets | null
   layout: PixelOfficeLayout
 }
@@ -185,7 +185,7 @@ export function loadPixelAgentAssets() {
         return [key, image] as const
       }),
     ),
-    loadImage(`${ASSET_BASE}/furniture/Modern%20Office%2048x48.png`),
+    loadImage(`${ASSET_BASE}/furniture/Modern%20Office%2048x48.png`).catch(() => null),
     loadWhiteCatAssets().catch(() => null),
     loadLayout(),
   ]).then(([characters, floors, furnitureEntries, modernOffice, whiteCat, layout]) => ({
@@ -538,7 +538,7 @@ function spriteRowForDirection(direction: PixelDirection) {
   return { row: 0, flipX: false }
 }
 
-function isImageReady(image: HTMLImageElement | undefined): image is HTMLImageElement {
+function isImageReady(image: HTMLImageElement | null | undefined): image is HTMLImageElement {
   return !!image && image.complete && image.naturalWidth > 0
 }
 

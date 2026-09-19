@@ -41,6 +41,45 @@ test("marks new runs for review cleanup on completion", async (t) => {
   })
 
   assert.equal(run.cleanupReviewTempOnCompletion, true)
+  assert.equal(
+    run.resultSchemaPath,
+    path.join(run.dir, "agent-result-schema.json"),
+  )
+})
+
+test("persists the immutable issue binding before Agent execution", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-run-binding-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+
+  const store = createRunStore(rootDir)
+  const run = await store.createRun({
+    projectKey: "work-automation",
+    stage: "part2",
+    issue: {
+      id: "issue-1174",
+      identifier: "LIV-1174",
+      title: "Controlled writes",
+      target: { platform: "primary-issues", issueId: "issue-1174" },
+      project: { id: "project-1" },
+      team: { id: "team-1" },
+      state: { id: "state-schedule", name: "On Schedule" },
+    },
+  })
+
+  assert.deepEqual(run.issueBinding, {
+    platform: "primary-issues",
+    issueId: "issue-1174",
+    projectId: "project-1",
+    teamId: "team-1",
+    stateId: "state-schedule",
+    stateName: "On Schedule",
+  })
+  assert.deepEqual(run.operationExecution, {
+    version: 1,
+    required: true,
+    status: "waiting-for-agent-result",
+    safeTerminal: false,
+  })
 })
 
 test("preserves supervisor metadata when the scheduler updates a stale run object", async (t) => {
@@ -65,4 +104,71 @@ test("preserves supervisor metadata when the scheduler updates a stale run objec
   assert.equal(updated.status, "succeeded")
   assert.equal(updated.supervisorPid, 1234)
   assert.deepEqual(updated.reviewCleanup.removedEntries, ["_work"])
+})
+
+test("reads run metadata without hydrating stdout, stderr, prompt, or final artifacts", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-run-metadata-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+
+  const store = createRunStore(rootDir)
+  const run = await store.createRun({
+    projectKey: "project",
+    stage: "part2",
+    issue: { id: "issue-3", identifier: "LIV-3", title: "Metadata" },
+  })
+  await fs.writeFile(run.stdoutPath, "stdout")
+  await fs.writeFile(run.stderrPath, "stderr")
+  await fs.writeFile(run.promptPath, "prompt")
+  await fs.writeFile(run.finalPath, "final")
+
+  const metadata = await store.getRunMetadata(run.id)
+  const detail = await store.getRun(run.id)
+
+  assert.equal(metadata.id, run.id)
+  assert.equal("stdout" in metadata, false)
+  assert.equal("stderr" in metadata, false)
+  assert.equal("prompt" in metadata, false)
+  assert.equal("final" in metadata, false)
+  assert.equal(detail.stdout, "stdout")
+  assert.equal(detail.stderr, "stderr")
+  assert.equal(detail.prompt, "prompt")
+  assert.equal(detail.final, "final")
+})
+
+test("persists one operation intent for the same scoped idempotency key", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-operation-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+
+  const scope = {
+    platform: "primary-issues",
+    projectKey: "work-automation",
+    issueId: "issue-1174",
+    type: "comment.create",
+    idempotencyKey: "issue-1174:part2:comment",
+  }
+  const firstStore = createRunStore(rootDir)
+  const first = await firstStore.prepareIssueOperation({
+    scope,
+    runId: "run-first",
+    stage: "part2",
+    sequence: 0,
+    payload: { body: "Codex Implementation Complete" },
+    intent: { commentId: "comment-stable-id" },
+  })
+  const restartedStore = createRunStore(rootDir)
+  const replay = await restartedStore.prepareIssueOperation({
+    scope,
+    runId: "run-replay",
+    stage: "part2",
+    sequence: 0,
+    payload: { body: "Codex Implementation Complete" },
+    intent: { commentId: "comment-must-not-replace-the-first" },
+  })
+
+  assert.equal(first.created, true)
+  assert.equal(replay.created, false)
+  assert.equal(replay.record.intent.commentId, "comment-stable-id")
+  assert.equal(replay.record.status, "intent")
+  assert.equal(replay.record.attempts, 0)
+  assert.deepEqual(replay.record.runIds, ["run-first", "run-replay"])
 })

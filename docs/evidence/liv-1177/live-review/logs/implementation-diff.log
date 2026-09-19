@@ -1,0 +1,18 @@
+diff --git a/greet.mjs b/greet.mjs
+index 606df91..41c6c1c 100644
+--- a/greet.mjs
++++ b/greet.mjs
+@@ -1 +1 @@
+-export function greet(name) { return 'Hello, ' + name + '!' }
++export function greet(name) { return 'Hello, ' + (name.trim() || 'world') + '!' }
+diff --git a/greet.test.mjs b/greet.test.mjs
+index a2b2273..d7ebe73 100644
+--- a/greet.test.mjs
++++ b/greet.test.mjs
+@@ -1 +1,6 @@
+ import assert from 'node:assert/strict'; import test from 'node:test'; import {greet} from './greet.mjs'; test('ordinary name',()=>assert.equal(greet('Ada'),'Hello, Ada!'));
++test('empty name',()=>assert.equal(greet(''),'Hello, world!'));
++test('whitespace-only name',()=>assert.equal(greet('   '),'Hello, world!'));
++test('tabs and newlines only',()=>assert.equal(greet('\t\n'),'Hello, world!'));
++test('surrounding whitespace',()=>assert.equal(greet('  Ada  '),'Hello, Ada!'));
++test('preserves internal spaces and case',()=>assert.equal(greet(' \tAda  de LOVELACE\n '),'Hello, Ada  de LOVELACE!'));

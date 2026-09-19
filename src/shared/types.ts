@@ -163,6 +163,11 @@ export type RunSummary = {
   exitCode?: number
   error?: string
   failureKind?: string
+  operationExecution?: {
+    status: string
+    failureCategory?: string | null
+    operations?: Array<{ idempotencyKey: string; type: string; status: string }>
+  }
   failureSummary?: string
   failureAction?: string
   retryableFailure?: boolean
@@ -196,7 +201,25 @@ export type LinearProjectListResponse = {
   projects: LinearProjectOption[]
 }
 
+export type DirectoryPickerCapability = {
+  available: boolean
+}
+
+export type DirectoryPickerResult =
+  | { status: "selected"; path: string }
+  | { status: "canceled" }
+
 export type RunDetail = RunSummary & {
+  audit?: Array<{
+    timestamp: string
+    operation: string
+    result: string
+    idempotencyKey?: string | null
+    errorCode?: string | null
+    failureCategory?: string | null
+    resourceId?: string | null
+    retryable?: boolean | null
+  }>
   stdout: string
   stderr: string
   final: string

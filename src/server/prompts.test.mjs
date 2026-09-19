@@ -2,8 +2,12 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import path from "node:path"
 
+import { parseAgentResult } from "./agent-result-protocol.mjs"
+import { createAgentResultContext } from "./agent-result-runtime.mjs"
 import {
+  buildAgentResultPromptSection,
   buildIssueReviewPromptContext,
+  buildIssueSnapshot,
   buildPromptContext,
   buildRunPromptContext,
   findLatestCommentByMarker,
@@ -28,6 +32,7 @@ test("buildRunPromptContext exposes absolute and relative part3 paths", () => {
     ".linear-automation/runs/run-123/review",
   )
   assert.match(context.CURRENT_REVIEW_DIR || "", /run-123\/review$/)
+  assert.equal(context.AUTOMATION_ROOT_DIR, undefined)
 })
 
 test("buildIssueReviewPromptContext extracts latest implementation comment and ignores automation followups", () => {
@@ -136,29 +141,137 @@ test("formatPromptComments keeps recent comment blocks readable", () => {
   assert.match(text, /Second/)
 })
 
-test("part3 prompt requires inline review artifact content and Linear attachments", async () => {
+test("issue snapshot keeps service context but removes user email fields", () => {
+  const snapshot = buildIssueSnapshot({
+    id: "issue-1",
+    identifier: "LIV-1",
+    assignee: { name: "Jack", email: "jack@example.test" },
+    comments: [
+      {
+        id: "comment-1",
+        body: "context",
+        user: { name: "Xuan", email: "xuan@example.test" },
+      },
+    ],
+  })
+
+  assert.deepEqual(snapshot.assignee, { name: "Jack" })
+  assert.deepEqual(snapshot.comments[0].user, { name: "Xuan" })
+  assert.doesNotMatch(JSON.stringify(snapshot), /example\.test/u)
+})
+
+test("issue snapshot includes normalized relation context for every stage", () => {
+  const snapshot = buildIssueSnapshot({
+    id: "issue-1",
+    identifier: "LIV-1",
+    relations: [
+      {
+        id: "relation-1",
+        type: "blocks",
+        direction: "incoming",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        updatedAt: "2026-08-24T01:00:00.000Z",
+        issue: {
+          id: "issue-2",
+          identifier: "LIV-2",
+          title: "前置事项",
+          url: "https://linear.example/LIV-2",
+          target: { platform: "primary-issues", issueId: "issue-2" },
+          email: "should-not-leak@example.test",
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(snapshot.relations, [
+    {
+      id: "relation-1",
+      type: "blocks",
+      direction: "incoming",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      updatedAt: "2026-08-24T01:00:00.000Z",
+      issue: {
+        id: "issue-2",
+        identifier: "LIV-2",
+        title: "前置事项",
+        url: "https://linear.example/LIV-2",
+        target: { platform: "primary-issues", issueId: "issue-2" },
+      },
+    },
+  ])
+  assert.doesNotMatch(JSON.stringify(snapshot), /should-not-leak/u)
+})
+
+test("all stages use the same immutable v2 binding and produce parser-valid no-op results", () => {
+  for (const stage of ["part1", "split", "part2", "part3"]) {
+    const context = createAgentResultContext({
+      stage,
+      projectKey: "work-automation",
+      issue: {
+        id: "issue-1172",
+        identifier: "LIV-1172",
+        parent: { id: "issue-1170" },
+      },
+    })
+    const section = buildAgentResultPromptSection(context, {
+      id: "issue-1172",
+      identifier: "LIV-1172",
+      title: "Structured result",
+    })
+    const finalText = JSON.stringify({
+      schemaVersion: "2",
+      run: {
+        stage: context.stage,
+        projectKey: context.projectKey,
+        parentIssueId: context.parentIssueId,
+        allowedOperations: context.allowedOperations,
+      },
+      target: context.target,
+      operations: [],
+    })
+
+    assert.match(section, /"schemaVersion": "2"/u)
+    assert.match(section, /"platform": "primary-issues"/u)
+    assert.match(section, /不得调用 Linear API、Linear MCP、Linear skill/u)
+    assert.equal(parseAgentResult(finalText, context).ok, true)
+  }
+})
+
+test("global prompts request structured operations instead of direct Linear writes", async () => {
+  for (const stage of ["part1", "split", "part2", "part3"]) {
+    const prompt = await readPrompt(path.resolve(process.cwd()), "global", stage)
+
+    assert.match(prompt, /operations/u)
+    assert.match(prompt, /不要调用 Linear API、MCP、skill/u)
+    assert.doesNotMatch(prompt, /优先使用可用的 Linear 工具/u)
+    assert.doesNotMatch(prompt, /当前进程环境里的 Linear API key/u)
+    assert.doesNotMatch(prompt, /当前 Codex agent 负责读取 Linear/u)
+    assert.doesNotMatch(prompt, /已移动到 `\{\{STATUS_/u)
+  }
+})
+
+test("part3 prompt keeps inline evidence and declares controlled comment images", async () => {
   const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part3")
 
   assert.match(prompt, /不能只给路径/u)
-  assert.match(prompt, /Review 摘要:/u)
-  assert.match(prompt, /关键产物内容:/u)
-  assert.match(prompt, /Review 附件:/u)
-  assert.match(prompt, /上传到 Linear/u)
-  assert.match(prompt, /上传失败/u)
+  assert.match(prompt, /comment\.create\.payload\.images/u)
+  assert.match(prompt, /不生成 `attachment\.upload`/u)
+  assert.match(prompt, /不要伪造链接或声称上传成功/u)
+  assert.doesNotMatch(prompt, /Work Automation 根目录/u)
 })
 
-test("split prompt documents coverage checklist handoff", async () => {
+test("split prompt queues child creation and forbids fabricated child IDs", async () => {
   const prompt = await readPrompt(path.resolve(process.cwd()), "global", "split")
 
   assert.match(prompt, /Codex Split Complete/u)
   assert.match(prompt, /覆盖清单/u)
-  assert.match(prompt, /parent\/sub-issue/u)
-  assert.match(prompt, /已移动到/u)
+  assert.match(prompt, /issue\.child\.create/u)
+  assert.match(prompt, /不要伪造 ID/u)
 })
 
-test("part1 prompt documents too large status before manual split", async () => {
+test("part1 prompt keeps too-large status behind manual split approval", async () => {
   const prompt = await readPrompt(path.resolve(process.cwd()), "global", "part1")
 
   assert.match(prompt, /\{\{STATUS_TOO_LARGE\}\}/u)
-  assert.match(prompt, /不要自动把 issue 继续移到/u)
+  assert.match(prompt, /不要请求继续移动到/u)
 })

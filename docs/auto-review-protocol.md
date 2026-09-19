@@ -5,12 +5,12 @@
 ## 目标与边界
 
 - 阶段三只认领当前处于 `Testing` 的 issue。
-- 阶段三默认只做 review、评论和状态流转，不主动修改业务代码，也不创建新提交。
+- 阶段三默认只做 review 和产物生成，不主动修改业务代码，也不创建新提交；评论、附件和状态变更以结构化 operations 交给服务。
 - 阶段三的唯一状态出口是:
   - `Ready for Review`: review 完成，具备人工验证的最小条件。
   - `On Schedule`: review 已完成，但发现需要返工的问题。
   - `Blocked`: 缺少上下文、权限、环境或基线，无法得出可信结论。
-- Linear 仍然是 issue 上下文、用户决策和最终状态的唯一来源。
+- 服务提供的事项快照是本次 run 的平台上下文，Linear 仍然是用户决策和最终状态的来源。
 
 ## 当前仓库已存在的能力
 
@@ -23,20 +23,20 @@
   - `final.txt`
   - `run.json`
 - 阶段三执行器会把当前 `part3` run 目录、review 目录、最新实现交接评论和实现后用户评论显式传给 Codex agent，便于按协议生成 review 产物。
-- 默认 `part3Sandbox` 使用 `danger-full-access`，因为 review 产物需要写入 Work Automation 仓库中的当前 run 目录，而阶段三的 `codex -C` 可能指向其他业务仓库。提示词必须继续约束 agent 只写当前 run 目录，不改业务代码。
+- 默认 `part3Sandbox` 使用 `workspace-write` 兼容配置，但真实执行由 Codex 进程外层 permission profile 收紧：Codex 及其命令默认不能读取业务仓库、必要工具链、临时 Codex HOME 和当前 run 之外的文件；业务仓库只读，当前 run 可读且仅 `review/` 可写。macOS 下 `codex exec` 关闭不能嵌套的内层 Seatbelt，外层 profile 仍持续生效。提示词继续约束 agent 只写当前 review 目录，不改业务代码。
 
 ## 阶段三输入协议
 
 阶段三实现至少要读取并校验以下输入:
 
-1. Linear issue 当前状态必须是 `Testing`。
+1. 服务提供的事项快照状态必须是 `Testing`。
 2. 最新用户上下文:
    - issue 标题、描述、标签、优先级、最新评论
    - 最新 `Codex Implementation Complete` 评论
 3. 本地仓库上下文:
    - 实现提交 hash
    - 当前仓库 HEAD 与工作树状态
-   - 相关测试、脚本、fixture、文档或 issue 附件
+   - 相关测试、脚本、fixture、文档或快照中已有的 issue 附件
 4. 当前 run 目录基础文件:
    - `.linear-automation/runs/<part3-run-id>/run.json`
    - `.linear-automation/runs/<part3-run-id>/prompt.md`
@@ -67,7 +67,7 @@
 - `artifact-reference`: 之前已经存在可信的样例、截图、设计稿、fixture 或 issue 附件，优先复用这些现成产物。
 - `spec-only`: 新功能没有可运行的“before”版本，基线只来自 issue 需求、验收和设计说明。
 
-如果无法确定基线类型，或现有来源不足以支撑 review 结论，阶段三应移动到 `Blocked`。
+如果无法确定基线类型，或现有来源不足以支撑 review 结论，阶段三应输出目标为 `Blocked` 的状态操作。
 
 ## GUI 类功能产物要求
 
@@ -166,30 +166,21 @@
 }
 ```
 
-## 附件上传与引用规则
+## 评论图片与引用规则
 
-阶段三在写评论前，应先把“审阅者需要直接打开或预览”的关键 review 产物上传到当前 Linear issue，再在评论里引用。当前优先级如下:
+阶段三使用 v2 `comment.create` 的有序 `images` 数组，每项仅声明当前 run 内相对 `filePath` 和可选 `caption`。服务端完成文件安全预检后将图片与正文放在同一次 `commentCreate` 中。不得输出 `attachment.upload`，不执行 `fileUpload` 或 `attachmentCreate`。
 
-- 优先上传可直接预览的二进制或富文本产物，例如 `.png`、`.jpg`、`.gif`、`.pdf`、`.html`。
-- GUI 场景至少优先上传同一 `scenario-slug` 下的 `after` 截图；若存在 `before` / `flow`，且它们对判断差异有帮助，也应一并上传。
-- API / 算法场景优先上传无法在评论中可靠压缩的关键对比产物；短文本结论仍以评论内联为主，附件作为补充。
-- 优先使用 Linear 的附件上传能力，例如 `prepare_attachment_upload` + `create_attachment_from_upload`；如果工具链只有 issue 级附件能力，也按 issue 附件上传，并在评论中明确引用这些附件。
+- 仅展示 PNG/JPEG。优先选择同一场景的 after 截图；before 或 flow 有助于判断时可以按顺序加入。
+- 单文件上限为 64 KiB，每 run 最多四张、原始总量最多 256 KiB。编码后的单条评论最多 100000 字符，整条 JSON 请求最多 512 KiB。多图和长正文会进一步减少可用图片容量。
+- 2026-09-13 实测 Linear 拒绝 1 MiB、5 MiB 和 80 KiB 的 data URI 评论，返回正文最多 100000 字符的校验错误；64 KiB 样本通过。因此按用户允许的收紧规则采用 64 KiB，而不宣称 5 MiB 可用。
+- 图片不得通过 body 的 Markdown、HTML 或 data URI 绕过 images 声明。服务端决定 MIME、大小和 SHA-256，Agent 不填写这些字段、不读取凭据、不伪造托管 URL。
+- `Review 图片` 写图片说明和本地相对路径；图片不能替代内联 `Review 摘要` 和 `关键产物内容`。
+- PDF、HTML、日志及其他非图片产物保留本地路径和可读的文字摘要。没有合适图片时 images 使用空数组，并说明原因。只有缺失证据会阻碍审阅判断时才进入 `Blocked`。
+- 服务端保留稳定评论 ID、图片校验和、写入与复查记录。图片引用不一致或无法证明时交人工处理，不删除、重建评论或管理独立资产；未解决的图片运行保留 review 临时产物。
 
-上传后的评论引用规则:
+## 评论与状态操作规则
 
-- 评论必须保留内联的 `Review 摘要` 和 `关键产物内容`，附件不能替代文字结论。
-- 评论新增 `Review 附件` 字段，列出附件标题或可访问链接，并用一句中文说明每个附件对应什么场景或证据。
-- `Review 产物` 仍保留 Work Automation 仓库内的相对路径，作为可追溯来源。
-
-上传失败时的回退规则:
-
-- 不要伪造“已上传”结果；在 `Review 附件` 中明确写失败原因。
-- 继续保留内联摘要、关键结论和本地 `review/` 相对路径，避免评论退化成“只给本地路径”。
-- 只有当关键信息无法通过评论文字可靠传达，且缺少附件会直接影响 reviewer 判断时，才因为上传失败进入 `Blocked`。
-
-## Linear 评论与状态流转规则
-
-阶段三评论必须保留英文 marker 行，并用简体中文写其余内容。评论里需要直接展示 `review/summary.md` 和关键 `.notes.md` / `.diff.md` / 对比产物里的核心结论；关键附件要先上传到 Linear 并在评论中引用，仓库相对路径只作为溯源补充，不能只给路径让人回仓库查。
+阶段三通过 `comment.create` 和 `issue.state.update` 表达评论与状态意图，不直接调用 Linear。评论必须保留英文 marker 行，并用简体中文写其余内容。评论里需要直接展示 `review/summary.md` 和关键 `.notes.md` / `.diff.md` / 对比产物里的核心结论；图片列出对应 `images` 的说明和路径，仓库相对路径只作为溯源补充，不能只给路径让人回仓库查。
 
 ### `Ready for Review`
 
@@ -236,7 +227,7 @@
 - 阶段三所有结果评论
   - `Review 摘要`: 直接展示 `review/summary.md` 的核心结论、检查项和验证结果；如果原文较长，提炼为简洁要点，但不要只写“见文件”
   - `关键产物内容`: 直接展示关键 `.notes.md`、`.diff.md`、截图说明或算法对比文件里的结论；如果某类产物不适用，明确写缺失原因
-  - `Review 附件`: 列出已上传到 Linear 的关键附件标题或链接，并说明对应场景；若没有适合上传的文件或上传失败，明确写原因
+  - `Review 图片`: 列出评论内图片的说明和路径，并说明对应场景；若没有合适图片，明确写原因
   - `Review 产物`: 列出 `review/summary.md` 和关键对比文件的相对路径，作为溯源；若未生成，明确写 `无`
 
 ## 最小落地要求
@@ -245,5 +236,5 @@
 
 - `README.md`、提示词和默认状态名使用同一套状态词汇。
 - 阶段二评论能够提供 review 需要的提交和基线线索。
-- 阶段三评论能够直接展示 review 产物内容，引用已上传的关键附件，并附带产物路径或缺失情况。
+- 阶段三评论操作能够直接展示 review 产物内容，展示声明的评论图片，并附带产物路径或缺失情况。
 - review 产物永远放在当前阶段三 run 目录下，不写回业务仓库的其他位置。

@@ -54,7 +54,7 @@ const nodeRuntime = args.localNode || args.nodeBin
       baseUrl: String(args.nodeBaseUrl || "https://nodejs.org/dist"),
     })
 
-await copyRuntimeDependencies(["https-proxy-agent"])
+await copyRuntimeDependencies(Object.keys(packageJson.dependencies || {}))
 await writeLaunchers()
 
 const manifest = {

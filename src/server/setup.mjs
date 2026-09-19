@@ -4,10 +4,12 @@ import { loadConfig, saveConfig } from "./config.mjs"
 import { writeLocalEnvValue } from "./env.mjs"
 import { resolveCodexExecutable } from "./executable.mjs"
 import { createLinearClient } from "./linear-client.mjs"
+import { auditIssueAdapter } from "./issue-audit.mjs"
 
 export function createSetupManager({
   configPath,
   rootDir,
+  store,
   env = process.env,
   load = loadConfig,
   save = saveConfig,
@@ -61,7 +63,7 @@ export function createSetupManager({
     }
 
     try {
-      await createLinear(apiKey).listProjects()
+      await auditIssueAdapter(createLinear(apiKey), store, { stage: "setup" }).listProjects()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       throw new Error(`Linear API key 校验失败: ${message}`)

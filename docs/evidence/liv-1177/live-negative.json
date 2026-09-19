@@ -1,0 +1,100 @@
+{
+  "time": "2026-09-16T13:39:33.713Z",
+  "root": "/var/folders/rx/s0xm_6wd6xz2m_n_t_09b57m0000gp/T/liv-1170-negative-QQPzH3",
+  "issue": {
+    "id": "481be748-83d2-4daf-b11d-7473747816ae",
+    "identifier": "LIV-1196",
+    "url": "https://linear.app/livehappy-workhappy/issue/LIV-1196/liv-1170-live-qa-非法操作失败关闭"
+  },
+  "outcomes": [
+    {
+      "name": "invalid-schema",
+      "status": "manual-required",
+      "error": {
+        "code": "INVALID_REQUEST",
+        "message": "事项平台请求不合法。",
+        "operation": null,
+        "path": "$",
+        "retryable": false
+      }
+    },
+    {
+      "name": "cross-issue",
+      "status": "manual-required",
+      "error": {
+        "code": "INVALID_REQUEST",
+        "message": "事项平台请求不合法。",
+        "operation": null,
+        "path": "$",
+        "retryable": false
+      }
+    },
+    {
+      "name": "attachment-upload",
+      "status": "manual-required",
+      "error": {
+        "code": "INVALID_REQUEST",
+        "message": "事项平台请求不合法。",
+        "operation": null,
+        "path": "$",
+        "retryable": false
+      }
+    },
+    {
+      "name": "image-traversal",
+      "status": "manual-required",
+      "error": {
+        "code": "INVALID_REQUEST",
+        "message": "事项平台请求不合法。",
+        "operation": "comment.create",
+        "path": "$.payload.images",
+        "retryable": false
+      }
+    },
+    {
+      "name": "image-absolute",
+      "status": "manual-required",
+      "error": {
+        "code": "INVALID_REQUEST",
+        "message": "事项平台请求不合法。",
+        "operation": "comment.create",
+        "path": "$.payload.images",
+        "retryable": false
+      }
+    },
+    {
+      "name": "wrong-state",
+      "status": "manual-required",
+      "error": {
+        "code": "CONFLICT",
+        "message": "事项平台操作发生冲突。",
+        "operation": "issue.state.update",
+        "path": "$.payload.state",
+        "retryable": false
+      }
+    }
+  ],
+  "providerFailure": {
+    "timestamp": "2026-09-16T13:39:33.708Z",
+    "version": 1,
+    "runId": "2026-09-16T13-39-28-809Z-f04a1ddd-3b0b-48e2-b5d9-c135fa229587-part3-LIV-1196-408130d2",
+    "stage": "part3",
+    "platform": "primary-issues",
+    "projectKey": "f04a1ddd-3b0b-48e2-b5d9-c135fa229587",
+    "projectId": null,
+    "issueId": "481be748-83d2-4daf-b11d-7473747816ae",
+    "operation": "issue.read",
+    "idempotencyKey": "read:readIssue:8ee866d901d94ccaa659",
+    "attemptId": "3c869ece-22aa-47f1-8566-551e75404ed4",
+    "resourceId": null,
+    "result": "failed",
+    "failureCategory": "provider",
+    "errorCode": "PERMISSION_DENIED",
+    "retryable": false,
+    "attempts": null
+  },
+  "remote": {
+    "comments": 0,
+    "state": "Testing"
+  }
+}

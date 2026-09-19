@@ -4,7 +4,12 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { applyRuntimeConfigOverrides, normalizeConfig, saveConfig } from "./config.mjs"
+import {
+  applyPortOverride,
+  applyRuntimeConfigOverrides,
+  normalizeConfig,
+  saveConfig,
+} from "./config.mjs"
 
 test("notification defaults match the four-stage policy", () => {
   const config = normalizeConfig({})
@@ -44,14 +49,30 @@ test("saving an enabled webhook rejects an invalid URL template", async () => {
 test("runtime sandbox overrides do not mutate the saved config", () => {
   const config = normalizeConfig({})
   const overridden = applyRuntimeConfigOverrides(config, {
-    LINEAR_AUTOMATION_PART1_SANDBOX: "danger-full-access",
-    LINEAR_AUTOMATION_SPLIT_SANDBOX: "danger-full-access",
+    LINEAR_AUTOMATION_PART1_SANDBOX: "workspace-write",
+    LINEAR_AUTOMATION_SPLIT_SANDBOX: "workspace-write",
   })
 
   assert.equal(config.codex.part1Sandbox, "read-only")
   assert.equal(config.codex.splitSandbox, "read-only")
-  assert.equal(overridden.codex.part1Sandbox, "danger-full-access")
-  assert.equal(overridden.codex.splitSandbox, "danger-full-access")
+  assert.equal(overridden.codex.part1Sandbox, "workspace-write")
+  assert.equal(overridden.codex.splitSandbox, "workspace-write")
+})
+
+test("legacy full-access sandbox values normalize to protected stage permissions", () => {
+  const config = normalizeConfig({
+    codex: {
+      part1Sandbox: "danger-full-access",
+      splitSandbox: "danger-full-access",
+      part2Sandbox: "danger-full-access",
+      part3Sandbox: "danger-full-access",
+    },
+  })
+
+  assert.equal(config.codex.part1Sandbox, "read-only")
+  assert.equal(config.codex.splitSandbox, "read-only")
+  assert.equal(config.codex.part2Sandbox, "workspace-write")
+  assert.equal(config.codex.part3Sandbox, "workspace-write")
 })
 
 test("runtime sandbox overrides reject unknown modes", () => {
@@ -63,4 +84,27 @@ test("runtime sandbox overrides reject unknown modes", () => {
       }),
     /LINEAR_AUTOMATION_PART1_SANDBOX/,
   )
+  assert.throws(
+    () =>
+      applyRuntimeConfigOverrides(config, {
+        LINEAR_AUTOMATION_PART2_SANDBOX: "danger-full-access",
+      }),
+    /LINEAR_AUTOMATION_PART2_SANDBOX/,
+  )
+})
+
+test("command-line port override does not mutate the saved config", () => {
+  const config = normalizeConfig({ port: 4378 })
+  const overridden = applyPortOverride(config, "4379")
+
+  assert.equal(config.port, 4378)
+  assert.equal(overridden.port, 4379)
+})
+
+test("command-line port override rejects invalid ports", () => {
+  const config = normalizeConfig({})
+
+  assert.throws(() => applyPortOverride(config, true), /--port/)
+  assert.throws(() => applyPortOverride(config, "0"), /--port/)
+  assert.throws(() => applyPortOverride(config, "not-a-port"), /--port/)
 })

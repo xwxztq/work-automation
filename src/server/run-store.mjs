@@ -1,8 +1,15 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
+import { redactDiagnostic } from "./diagnostic-redaction.mjs"
 import { ensureDir, fileExists, readJsonFile, writeJsonFile } from "./config.mjs"
-import { EVENTS_FILE, PROCESSED_FILE, RUNS_DIR, STATE_DIR } from "./defaults.mjs"
+import {
+  EVENTS_FILE,
+  ISSUE_OPERATIONS_DIR,
+  PROCESSED_FILE,
+  RUNS_DIR,
+  STATE_DIR,
+} from "./defaults.mjs"
 
 const EVENT_READ_CHUNK_BYTES = 64 * 1024
 const RUNS_CACHE_TTL_MS = 250
@@ -12,9 +19,12 @@ export function createRunStore(rootDir) {
   const runsDir = path.join(baseDir, RUNS_DIR)
   const eventsPath = path.join(baseDir, EVENTS_FILE)
   const processedPath = path.join(baseDir, PROCESSED_FILE)
+  const issueOperationsDir = path.join(baseDir, ISSUE_OPERATIONS_DIR)
+  const auditDir = path.join(baseDir, "issue-audit")
   let runsVersion = 0
   let runsCache = null
   let runsRead = null
+  let operationMutationQueue = Promise.resolve()
 
   async function createRun({ projectKey, stage, issue }) {
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${projectKey}-${stage}-${issue.identifier || issue.id}-${randomUUID().slice(0, 8)}`
@@ -27,6 +37,20 @@ export function createRunStore(rootDir) {
       issueIdentifier: issue.identifier,
       issueTitle: issue.title,
       status: "running",
+      issueBinding: {
+        platform: String(issue.target?.platform || "primary-issues"),
+        issueId: String(issue.target?.issueId || issue.id || ""),
+        projectId: String(issue.project?.id || ""),
+        teamId: String(issue.team?.id || ""),
+        stateId: String(issue.state?.id || ""),
+        stateName: String(issue.state?.name || ""),
+      },
+      operationExecution: {
+        version: 1,
+        required: true,
+        status: "waiting-for-agent-result",
+        safeTerminal: false,
+      },
       cleanupReviewTempOnCompletion: stage === "part3",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -35,6 +59,7 @@ export function createRunStore(rootDir) {
       stderrPath: path.join(dir, "stderr.log"),
       promptPath: path.join(dir, "prompt.md"),
       finalPath: path.join(dir, "final.txt"),
+      resultSchemaPath: path.join(dir, "agent-result-schema.json"),
       metadataPath: path.join(dir, "run.json"),
     }
     await ensureDir(dir)
@@ -51,6 +76,8 @@ export function createRunStore(rootDir) {
       ...patch,
       updatedAt: new Date().toISOString(),
     }
+    // Detail projections are read from the journal, never copied into run.json.
+    delete next.audit
     await writeJsonFile(next.metadataPath, next)
     invalidateRunsCache()
     return next
@@ -62,13 +89,33 @@ export function createRunStore(rootDir) {
   }
 
   async function appendEvent(event) {
-    const entry = {
+    const entry = redactDiagnostic({
       timestamp: new Date().toISOString(),
       level: "info",
       ...event,
-    }
+    })
     await appendText(eventsPath, `${JSON.stringify(entry)}\n`)
     return entry
+  }
+
+  async function appendIssueAudit(fields) {
+    const entry = { timestamp: new Date().toISOString(), version: 1 }
+    for (const key of ["runId", "stage", "platform", "projectKey", "projectId", "issueId", "operation", "idempotencyKey", "attemptId", "resourceId", "result", "failureCategory", "errorCode", "retryable", "attempts"]) {
+      const value = fields[key]
+      entry[key] = typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null
+    }
+    const safe = redactDiagnostic(entry)
+    const file = path.join(auditDir, `${createHash("sha256").update(String(fields.runId || "scan")).digest("hex")}.jsonl`)
+    await appendText(file, `${JSON.stringify(safe)}\n`)
+    await appendEvent({ type: "issue-operation-audit", ...safe, message: `${safe.operation}: ${safe.result}` })
+    return safe
+  }
+
+  async function listIssueAudit(runId) {
+    const file = path.join(auditDir, `${createHash("sha256").update(String(runId || "scan")).digest("hex")}.jsonl`)
+    return (await readOptional(file)).split("\n").filter(Boolean).map((line) => {
+      try { return redactDiagnostic(JSON.parse(line)) } catch { return { result: "audit-record-incomplete" } }
+    })
   }
 
   async function listEvents({ limit = 200, projectKey } = {}) {
@@ -84,6 +131,95 @@ export function createRunStore(rootDir) {
   async function getProcessedIssue(projectKey, stage, issueId) {
     const state = await readProcessedState()
     return state.issues[processedIssueKey(projectKey, stage, issueId)] || null
+  }
+
+  async function prepareIssueOperation({
+    scope,
+    runId,
+    stage,
+    sequence,
+    payload,
+    intent,
+  }) {
+    return mutateIssueOperation(scope, (existing) => {
+      const now = new Date().toISOString()
+      if (existing) {
+        const normalizedRunId = String(runId || "").trim()
+        const record = {
+          ...existing,
+          runIds: normalizedRunId
+            ? [...new Set([...(existing.runIds || []), normalizedRunId])]
+            : [...(existing.runIds || [])],
+          updatedAt: now,
+        }
+        return {
+          result: { created: false, record },
+          record,
+          write: true,
+        }
+      }
+      const record = {
+        version: 1,
+        scope: normalizeOperationScope(scope),
+        runIds: [String(runId || "").trim()].filter(Boolean),
+        stage: String(stage || "").trim(),
+        sequence: Number(sequence),
+        payload,
+        intent,
+        status: "intent",
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+      }
+      return {
+        result: { created: true, record },
+        record,
+        write: true,
+      }
+    })
+  }
+
+  async function getIssueOperation(scope) {
+    return readJsonFile(issueOperationPath(issueOperationsDir, scope), null)
+  }
+
+  async function updateIssueOperation(scope, update) {
+    return mutateIssueOperation(scope, (existing) => {
+      if (!existing) {
+        throw new Error("事项操作 intent 不存在。")
+      }
+      const patch = typeof update === "function" ? update(existing) : update
+      const record = {
+        ...existing,
+        ...(patch || {}),
+        scope: existing.scope,
+        updatedAt: new Date().toISOString(),
+      }
+      return { result: record, record, write: true }
+    })
+  }
+
+  function mutateIssueOperation(scope, updater) {
+    const task = async () => {
+      const filePath = issueOperationPath(issueOperationsDir, scope)
+      const existing = await readJsonFile(filePath, null)
+      const mutation = await updater(existing)
+      if (mutation.write && mutation.record) {
+        await writeJsonFile(filePath, mutation.record)
+        const record = mutation.record
+        await appendIssueAudit({
+          ...record.scope, operation: record.scope.type, runId: record.runIds?.at(-1),
+          stage: record.stage, result: record.status, attempts: record.attempts,
+          resourceId: record.provider?.resourceId || record.intent?.commentId || record.intent?.childIssueId,
+          errorCode: record.error?.code, retryable: record.error?.retryable,
+          failureCategory: record.error ? (record.error.code === "CONFLICT" ? "service-validation" : "provider") : null,
+        })
+      }
+      return mutation.result
+    }
+    const pending = operationMutationQueue.then(task, task)
+    operationMutationQueue = pending.catch(() => {})
+    return pending
   }
 
   async function setProcessedIssue({ projectKey, stage, issueId, issueIdentifier, fingerprint, issueUpdatedAt, stateName, runId }) {
@@ -172,9 +308,13 @@ export function createRunStore(rootDir) {
     runsCache = null
   }
 
-  async function getRun(id) {
+  async function getRunMetadata(id) {
     const metadataPath = path.join(runsDir, id, "run.json")
-    const run = await readJsonFile(metadataPath, null)
+    return readJsonFile(metadataPath, null)
+  }
+
+  async function getRun(id) {
+    const run = await getRunMetadata(id)
     if (!run) {
       return null
     }
@@ -184,6 +324,7 @@ export function createRunStore(rootDir) {
       stderr: await readOptional(run.stderrPath),
       final: await readOptional(run.finalPath),
       prompt: await readOptional(run.promptPath),
+      audit: await listIssueAudit(run.id),
     }
   }
 
@@ -192,15 +333,22 @@ export function createRunStore(rootDir) {
     runsDir,
     eventsPath,
     processedPath,
+    issueOperationsDir,
     createRun,
     updateRun,
     appendText,
     appendEvent,
+    appendIssueAudit,
+    listIssueAudit,
     listEvents,
+    prepareIssueOperation,
+    getIssueOperation,
+    updateIssueOperation,
     getProcessedIssue,
     setProcessedIssue,
     listRuns,
     listRunsWithTotal,
+    getRunMetadata,
     getRun,
   }
 
@@ -215,6 +363,28 @@ export function createRunStore(rootDir) {
 
 function processedIssueKey(projectKey, stage, issueId) {
   return `${projectKey}:${stage}:${issueId}`
+}
+
+function issueOperationPath(issueOperationsDir, scope) {
+  const normalized = normalizeOperationScope(scope)
+  const digest = createHash("sha256")
+    .update(JSON.stringify(normalized))
+    .digest("hex")
+  return path.join(issueOperationsDir, `${digest}.json`)
+}
+
+function normalizeOperationScope(scope) {
+  const normalized = {
+    platform: String(scope?.platform || "").trim(),
+    projectKey: String(scope?.projectKey || "").trim(),
+    issueId: String(scope?.issueId || "").trim(),
+    type: String(scope?.type || "").trim(),
+    idempotencyKey: String(scope?.idempotencyKey || "").trim(),
+  }
+  if (Object.values(normalized).some((value) => !value)) {
+    throw new TypeError("事项操作幂等作用域不完整。")
+  }
+  return normalized
 }
 
 async function readOptional(filePath) {

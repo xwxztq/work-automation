@@ -11,8 +11,8 @@ export const DEFAULT_CONFIG = {
     defaultArgs: ["--json", "--skip-git-repo-check"],
     part1Sandbox: "read-only",
     splitSandbox: "read-only",
-    part2Sandbox: "danger-full-access",
-    part3Sandbox: "danger-full-access",
+    part2Sandbox: "workspace-write",
+    part3Sandbox: "workspace-write",
   },
   statuses: {
     todo: "Todo",
@@ -43,3 +43,4 @@ export const STATE_DIR = ".linear-automation"
 export const RUNS_DIR = "runs"
 export const EVENTS_FILE = "events.jsonl"
 export const PROCESSED_FILE = "processed-issues.json"
+export const ISSUE_OPERATIONS_DIR = "issue-operations"

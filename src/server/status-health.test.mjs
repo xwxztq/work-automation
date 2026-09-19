@@ -169,6 +169,107 @@ test("maps batched workflow state results by requested project slug", async () =
   assert.equal(health.projects[0].linearProjectName, "work-automation")
 })
 
+test("builds status health from the paginated read adapter client boundary", async () => {
+  const health = await checkLinearStatusHealth(baseConfig, {
+    linearClient: {
+      async graphql(query) {
+        if (query.includes("LinearReadProjectTeams")) {
+          return {
+            project: {
+              id: "project-1",
+              name: "work-automation",
+              url: "https://linear.example/project-1",
+              archivedAt: null,
+              teams: {
+                nodes: [{ id: "team-1", key: "LIV", name: "Livehappy-workhappy", archivedAt: null }],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }
+        }
+        return {
+          workflowStates: {
+            nodes: allRequiredStatusNames().map((name) => ({
+              id: `state-${name}`,
+              name,
+              type: "unstarted",
+              archivedAt: null,
+            })),
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        }
+      },
+    },
+  })
+
+  assert.equal(health.ok, true)
+  assert.deepEqual(health.projects[0].teams[0].existingStatuses, allRequiredStatusNames().sort())
+})
+
+test("blocks status health when an adapter result is incomplete", async () => {
+  const health = await checkLinearStatusHealth(baseConfig, {
+    linear: {
+      async listProjectsWorkflowStates() {
+        return [{
+          requestedProjectId: "project-1",
+          ...fakeProjectWorkflowStates("project-1", allRequiredStatusNames()),
+          complete: false,
+        }]
+      },
+    },
+  })
+
+  assert.equal(health.ok, false)
+  assert.match(health.projects[0].errors[0], /读取不完整/u)
+})
+
+test("preserves a safe structured missing-project error in health output", async () => {
+  const health = await checkLinearStatusHealth(baseConfig, {
+    linear: {
+      async listProjectsWorkflowStates() {
+        return [{
+          requestedProjectId: "project-1",
+          project: { id: "project-1", name: "", url: null },
+          teams: [],
+          complete: false,
+          error: {
+            code: "NOT_FOUND",
+            message: "private-provider-details",
+            operation: "issue.read",
+            path: "$",
+            retryable: false,
+          },
+        }]
+      },
+    },
+  })
+
+  assert.equal(health.ok, false)
+  assert.equal(health.projects[0].readError.code, "NOT_FOUND")
+  assert.equal(health.projects[0].readError.message, "事项平台目标不存在。")
+  assert.doesNotMatch(JSON.stringify(health), /private-provider-details/u)
+})
+
+test("marks transient read failures as unavailable and retryable", async () => {
+  const failure = Object.assign(new Error("private-network-details"), {
+    code: "UNAVAILABLE",
+    retryable: true,
+  })
+  const health = await checkLinearStatusHealth(baseConfig, {
+    linear: {
+      async listProjectsWorkflowStates() {
+        throw failure
+      },
+    },
+  })
+
+  assert.equal(health.ok, false)
+  assert.equal(health.unavailable, true)
+  assert.equal(health.projects[0].readError.code, "UNAVAILABLE")
+  assert.equal(health.projects[0].readError.retryable, true)
+  assert.doesNotMatch(JSON.stringify(health), /private-network-details/u)
+})
+
 test("caches status health checks for repeated callers", async () => {
   let callCount = 0
   const checker = createLinearStatusHealthChecker({ ttlMs: 60_000 })
@@ -189,12 +290,14 @@ test("caches status health checks for repeated callers", async () => {
 test("captures Linear project read errors without leaking credentials", async () => {
   const health = await checkLinearProjectStatusHealth(baseConfig, baseConfig.projects[0], {
     async listProjectWorkflowStates() {
-      throw new Error("Linear GraphQL 错误: project not found")
+      throw new Error("Linear GraphQL 错误: project not found apiKey=private-value")
     },
   })
 
   assert.equal(health.ok, false)
-  assert.match(health.errors[0], /project not found/)
+  assert.equal(health.readError.code, "OPERATION_FAILED")
+  assert.match(health.errors[0], /事项平台操作失败/u)
+  assert.doesNotMatch(JSON.stringify(health), /private-value/u)
 })
 
 test("formats blocking details with missing statuses", async () => {

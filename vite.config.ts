@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 const host = process.env.LINEAR_AUTOMATION_HOST?.trim() || '127.0.0.1'
 const apiHost = process.env.LINEAR_AUTOMATION_API_HOST?.trim() || host
-const apiPort = process.env.LINEAR_AUTOMATION_API_PORT?.trim() || '4378'
+const apiPort = process.env.LINEAR_AUTOMATION_API_PORT?.trim() || '4379'
 
 // https://vite.dev/config/
 export default defineConfig({

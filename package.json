@@ -1,7 +1,7 @@
 {
   "name": "@xwxztq/work-automation",
   "private": false,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run Linear-to-Codex automation as a local service.",
   "type": "module",
   "bin": {
@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "docs",
+    "!docs/evidence",
     "prompts",
     "src/server/*.mjs",
     "!src/server/*.test.mjs",
@@ -28,7 +29,7 @@
   "scripts": {
     "dev": "vite --port 8888",
     "dev:lan": "node src/server/with-host.mjs dev:all",
-    "dev:server": "node --watch src/server/index.mjs --runtime-root . --config config.local.json --dev",
+    "dev:server": "node --watch src/server/index.mjs --runtime-root . --config config.local.json --dev --port 4379",
     "dev:all": "concurrently \"pnpm dev\" \"pnpm dev:server\"",
     "build": "tsc -b && vite build",
     "test": "node --test src/server/*.test.mjs src/app/*.test.mjs",
@@ -40,12 +41,16 @@
     "once": "node src/server/index.mjs once --runtime-root . --config config.local.json",
     "validate": "node src/server/index.mjs validate-config --runtime-root . --config config.local.json",
     "prepack": "npm run build",
+    "npm:check": "node scripts/check-npm-package.mjs",
     "npm:pack": "node scripts/pack-npm.mjs",
     "native:bundle:macos": "npm run build && node scripts/build-native-runtime.mjs --platform darwin",
     "native:bundle:macos:local": "npm run build && node scripts/build-native-runtime.mjs --platform darwin --local-node"
   },
   "dependencies": {
-    "https-proxy-agent": "^7.0.6"
+    "https-proxy-agent": "^7.0.6",
+    "jpeg-js": "0.4.4",
+    "playwright-core": "1.61.1",
+    "pngjs": "7.0.0"
   },
   "devDependencies": {
     "@fontsource-variable/geist": "^5.2.9",

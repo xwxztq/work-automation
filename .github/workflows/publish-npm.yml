@@ -1,0 +1,83 @@
+name: Publish npm package
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish new package version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.19.0"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Verify release toolchain
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          test "$(npm --version)" = "11.17.0"
+          test "$(pnpm --version)" = "11.2.2"
+
+      - name: Check npm package version
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+          package_spec="${package_name}@${package_version}"
+
+          if lookup_output="$(npm view "$package_spec" version --json 2>&1)"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Publish skipped::$package_spec already exists on npm."
+          elif grep -qE "E404|404 Not Found" <<< "$lookup_output"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "$package_spec is not published; checks and publish will run."
+          else
+            printf '%s\n' "$lookup_output" >&2
+            echo "Could not determine whether $package_spec exists on npm." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        if: steps.registry.outputs.exists == 'false'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        if: steps.registry.outputs.exists == 'false'
+        run: pnpm test
+
+      - name: Build package
+        if: steps.registry.outputs.exists == 'false'
+        run: pnpm build
+
+      - name: Check package contents
+        if: steps.registry.outputs.exists == 'false'
+        run: pnpm npm:check
+
+      - name: Publish package
+        if: steps.registry.outputs.exists == 'false'
+        run: npm publish --access public

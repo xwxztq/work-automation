@@ -1,0 +1,42 @@
+{
+  "time": "2026-09-16T13:46:59.127Z",
+  "purpose": "Keep evidence visible and prevent future development polling from executing disposable fixtures",
+  "issues": [
+    {
+      "identifier": "LIV-1190",
+      "id": "e54c36e8-6f36-4175-836c-c94db6a826dd",
+      "before": "Ready for Codex",
+      "after": "Ready for Review"
+    },
+    {
+      "identifier": "LIV-1191",
+      "id": "f1de6df1-ff6b-424c-98d2-e633d8b5f317",
+      "before": "In Progress",
+      "after": "Ready for Review"
+    },
+    {
+      "identifier": "LIV-1192",
+      "id": "3b9c009c-8f8d-4089-aaa0-d51a52c007dc",
+      "before": "Backlog",
+      "after": "Ready for Review"
+    },
+    {
+      "identifier": "LIV-1193",
+      "id": "795c59ec-bbe7-4ce0-8c29-a04fc50fc498",
+      "before": "Testing",
+      "after": "Ready for Review"
+    },
+    {
+      "identifier": "LIV-1194",
+      "id": "9f06d388-78da-4e79-a458-f9ce5060a963",
+      "before": "Ready for Review",
+      "after": "Ready for Review"
+    },
+    {
+      "identifier": "LIV-1196",
+      "id": "481be748-83d2-4daf-b11d-7473747816ae",
+      "before": "Testing",
+      "after": "Ready for Review"
+    }
+  ]
+}

@@ -8,7 +8,7 @@ import { validateProjectKeys } from "./project-key.mjs"
 import { checkLinearStatusHealth } from "./status-health.mjs"
 import { validateWebhookUrlTemplate } from "./webhook-notifier.mjs"
 
-const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"])
+const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write"])
 export const CODEX_SANDBOX_RUNTIME_ENV = {
   part1Sandbox: "LINEAR_AUTOMATION_PART1_SANDBOX",
   splitSandbox: "LINEAR_AUTOMATION_SPLIT_SANDBOX",
@@ -98,6 +98,14 @@ export function normalizeConfig(raw) {
   config.pollIntervalSeconds = Number(
     config.pollIntervalSeconds || DEFAULT_CONFIG.pollIntervalSeconds,
   )
+  for (const configKey of Object.keys(CODEX_SANDBOX_RUNTIME_ENV)) {
+    if (config.codex[configKey] === "danger-full-access") {
+      config.codex[configKey] =
+        configKey === "part1Sandbox" || configKey === "splitSandbox"
+          ? "read-only"
+          : "workspace-write"
+    }
+  }
   config.projects = config.projects.map((project) => {
     const normalized = {
       key: "",
@@ -141,12 +149,26 @@ export function applyRuntimeConfigOverrides(config, env = process.env) {
     }
     if (!CODEX_SANDBOX_MODES.has(value)) {
       throw new Error(
-        `${envKey} 必须是 read-only、workspace-write 或 danger-full-access。`,
+        `${envKey} 必须是 read-only 或 workspace-write。`,
       )
     }
     codex[configKey] = value
   }
   return { ...config, codex }
+}
+
+export function applyPortOverride(config, portOverride) {
+  if (portOverride === undefined || portOverride === null || portOverride === "") {
+    return config
+  }
+  if (typeof portOverride === "boolean") {
+    throw new Error("--port 需要指定一个端口号。")
+  }
+  const port = Number(portOverride)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("--port 必须是 1 到 65535 之间的整数。")
+  }
+  return { ...config, port }
 }
 
 export function redactConfig(config) {

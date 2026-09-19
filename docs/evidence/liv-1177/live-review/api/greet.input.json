@@ -1,0 +1,26 @@
+[
+  {
+    "input": "Ada",
+    "expected": "Hello, Ada!"
+  },
+  {
+    "input": "",
+    "expected": "Hello, world!"
+  },
+  {
+    "input": "   ",
+    "expected": "Hello, world!"
+  },
+  {
+    "input": "\t\n",
+    "expected": "Hello, world!"
+  },
+  {
+    "input": "  Ada  ",
+    "expected": "Hello, Ada!"
+  },
+  {
+    "input": " \tAda  de LOVELACE\n ",
+    "expected": "Hello, Ada  de LOVELACE!"
+  }
+]
