@@ -117,6 +117,7 @@ const emptyProject: ProjectConfig = {
   repoName: "",
   path: "",
   codexCwd: "",
+  executionMode: "inherit",
   branchOrScopePrefix: "",
   maxActivePart2: 1,
   defaultTests: [],
@@ -2223,6 +2224,7 @@ function RunDetailPanel({
               <InfoItem label="事项" value={selectedRun.issueIdentifier || "-"} />
               <InfoItem label="状态" value={runStatusLabel(selectedRun.status)} />
               <InfoItem label="阶段" value={stageLabel(selectedRun.stage)} />
+              <InfoItem label="执行模式" value={selectedRun.executionMode === "native" ? "本机执行" : selectedRun.executionMode === "sandbox" ? "受限沙箱" : "未记录"} />
               <InfoItem label="退出码" value={selectedRun.exitCode == null ? "-" : String(selectedRun.exitCode)} />
               <InfoItem label="Codex PID" value={selectedRun.codexPid == null ? "-" : String(selectedRun.codexPid)} />
               <InfoItem label="更新时间" value={formatDate(selectedRun.updatedAt)} />
@@ -2770,6 +2772,16 @@ function ProjectEditor({
                     onChange={(event) => onUpdate({ branchOrScopePrefix: event.target.value })}
                   />
                 </Field>
+                <Field label="执行模式" description="本机模式使用服务账号的开发环境，可访问工作区外的文件；仅用于可信项目。">
+                  <Select value={project.executionMode || "inherit"} onValueChange={(value) => onUpdate({ executionMode: value as ProjectConfig["executionMode"] })}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">跟随全局设置</SelectItem>
+                      <SelectItem value="sandbox">受限沙箱</SelectItem>
+                      <SelectItem value="native">本机执行</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
                 <Field label="阶段二并发上限" description={projectFieldDescriptions.maxActivePart2}>
                   <Input
                     type="number"
@@ -3058,6 +3070,15 @@ function SettingsPage({
                   })
                 }
               />
+            </Field>
+            <Field label="默认执行模式" description="项目可以单独覆盖。本机模式保留 HOME、工具链和 Codex 用户插件，由 Codex 处理权限审批；阶段一和阶段三的只读要求由指令约束。">
+              <Select value={config.codex.executionMode || "sandbox"} onValueChange={(value) => setConfig({ ...config, codex: { ...config.codex, executionMode: value as AppConfig["codex"]["executionMode"] } })}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sandbox">受限沙箱</SelectItem>
+                  <SelectItem value="native">本机执行</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <Field label="阶段一沙箱">

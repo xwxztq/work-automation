@@ -69,6 +69,7 @@ async function main() {
       pid: process.pid,
       supervisorPid: process.pid,
       supervisorStartedAt: startedAt,
+      executionMode: input.executionMode || "sandbox",
     })
 
     await fs.mkdir(path.dirname(input.stdoutPath), { recursive: true })
@@ -79,7 +80,7 @@ async function main() {
     const childEnvironment = buildCodexProcessEnv(process.env, {
       blockedNames: input.blockedEnvironmentNames,
     })
-    await prependMacDeveloperTools(childEnvironment)
+    if (input.executionMode !== "native") await prependMacDeveloperTools(childEnvironment)
     if (input.sandboxUserHome) {
       await fs.mkdir(input.sandboxTempDir, { recursive: true, mode: 0o700 })
       await prepareCodexRuntimeHome({

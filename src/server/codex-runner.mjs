@@ -13,6 +13,7 @@ import {
   resolveExecutableReadPaths,
 } from "./codex-permissions.mjs"
 import { resolveExecutable } from "./executable.mjs"
+import { resolveExecutionMode, executionModeGuidance } from "./execution-mode.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -34,13 +35,15 @@ export async function runCodex({
   sandboxExecutable,
   runtimeRoot,
 }) {
-  await assertCodexSandboxPaths([
+  const executionMode = resolveExecutionMode(config, project)
+  const sandboxed = executionMode === "sandbox"
+  if (sandboxed) await assertCodexSandboxPaths([
     project.codexCwd || project.path,
     project.path,
     runtimeRoot || path.dirname(run.dir),
     run.dir,
   ])
-  await fs.writeFile(run.promptPath, prompt)
+  await fs.writeFile(run.promptPath, prompt + executionModeGuidance(executionMode, stage))
 
   const configuredCodexBin = config.codex.bin || "codex"
   const resolvedCodexBin = await resolveExecutable(configuredCodexBin, {
@@ -51,7 +54,7 @@ export async function runCodex({
       `未找到 Codex 可执行文件: ${configuredCodexBin}。请在启动服务的进程 PATH 中加入 codex，或把 config.local.json 的 codex.bin 改成绝对路径。`,
     )
   }
-  const resolvedSandboxBin = sandboxExecutable
+  const resolvedSandboxBin = sandboxed && sandboxExecutable
     ? await resolveExecutable(sandboxExecutable, {
         cwd: project.codexCwd || project.path,
       })
@@ -77,30 +80,30 @@ export async function runCodex({
     {
       ...environment,
       ...gitIdentityEnvironment,
-      GIT_CONFIG_GLOBAL: os.devNull,
+      ...(sandboxed ? { GIT_CONFIG_GLOBAL: os.devNull } : {}),
     },
     { blockedNames: blockedEnvironmentNames },
   )
   const sourceCodexHome = resolveCodexHome(codexEnvironment)
   codexEnvironment.CODEX_HOME = sourceCodexHome
-  codexEnvironment.PATH = excludePathTree(
+  if (sandboxed) codexEnvironment.PATH = excludePathTree(
     codexEnvironment.PATH,
     sourceCodexHome,
   )
   const resolvedRuntimeRoot = path.resolve(runtimeRoot || path.dirname(run.dir))
   const supervisorInputPath = path.join(run.dir, "supervisor-input.json")
-  const sandboxUserHome = await fs.mkdtemp(
+  const sandboxUserHome = sandboxed ? await fs.mkdtemp(
     path.join(os.tmpdir(), "work-automation-codex-"),
-  )
-  const sandboxTempDir = path.join(sandboxUserHome, "tmp")
-  const launcherCodexHome = path.join(sandboxUserHome, ".codex-launcher")
-  const innerCodexHome = path.join(sandboxUserHome, ".codex-runtime")
+  ) : null
+  const sandboxTempDir = sandboxed ? path.join(sandboxUserHome, "tmp") : null
+  const launcherCodexHome = sandboxed ? path.join(sandboxUserHome, ".codex-launcher") : null
+  const innerCodexHome = sandboxed ? path.join(sandboxUserHome, ".codex-runtime") : null
   const credentialFilePaths = [
     path.join(resolvedRuntimeRoot, ".env.local"),
     path.join(resolvedRuntimeRoot, ".env"),
   ]
   const runtimeReadPaths = buildCodexRuntimeReadPaths(codexEnvironment)
-  const [codexExecutableReadPaths, nodeExecutableReadPaths] = await Promise.all([
+  const [codexExecutableReadPaths, nodeExecutableReadPaths] = sandboxed ? await Promise.all([
     resolveExecutableReadPaths(resolvedCodexBin, {
       cwd: project.codexCwd || project.path,
       path: codexEnvironment.PATH,
@@ -109,14 +112,14 @@ export async function runCodex({
       cwd: project.codexCwd || project.path,
       path: codexEnvironment.PATH,
     }),
-  ])
+  ]) : [[], []]
   const launcherReadPaths = [
     SANDBOX_TARGET_PATH,
     BROWSER_CLIENT_PATH,
     ...codexExecutableReadPaths,
     ...nodeExecutableReadPaths,
   ]
-  const permissionBoundary = buildCodexPermissionBoundary({
+  const permissionBoundary = sandboxed ? buildCodexPermissionBoundary({
     stage,
     cwd: project.codexCwd || project.path,
     projectPath: project.path,
@@ -127,7 +130,7 @@ export async function runCodex({
     runtimeReadPaths,
     launcherReadPaths,
     runtimeWritePaths: [sandboxUserHome],
-  })
+  }) : null
   const args = buildCodexArgs({
     config,
     project,
@@ -136,20 +139,21 @@ export async function runCodex({
   if (stage === "part3") {
     await fs.mkdir(path.join(run.dir, "review"), { recursive: true })
   }
-  await fs.mkdir(sandboxTempDir, { recursive: true })
-  const launchArgs = buildCodexSandboxArgs({
+  if (sandboxed) await fs.mkdir(sandboxTempDir, { recursive: true })
+  const launchArgs = sandboxed ? buildCodexSandboxArgs({
     boundary: permissionBoundary,
     cwd: project.codexCwd || project.path,
     targetBin: process.execPath,
     targetArgs: [SANDBOX_TARGET_PATH, supervisorInputPath],
-  })
+  }) : args
   await fs.writeFile(
     supervisorInputPath,
     `${JSON.stringify(
       {
         codexBin: resolvedCodexBin,
+        executionMode,
         args,
-        launchBin: resolvedSandboxBin,
+        launchBin: sandboxed ? resolvedSandboxBin : resolvedCodexBin,
         launchArgs,
         cwd: project.codexCwd || project.path,
         promptPath: run.promptPath,
@@ -234,7 +238,7 @@ export async function runCodex({
   const latestRun = await readJsonFile(run.metadataPath, run)
   const finalText = await readOptional(run.finalPath)
   const codexStarted = Boolean(latestRun.codexStarted)
-  await fs.rm(sandboxUserHome, { recursive: true, force: true }).catch(() => {})
+  if (sandboxUserHome) await fs.rm(sandboxUserHome, { recursive: true, force: true }).catch(() => {})
 
   return {
     exitCode: latestRun.exitCode ?? supervisorExitCode,
@@ -338,17 +342,22 @@ function normalizeCodexDefaultArgs(defaultArgs = []) {
 }
 
 export function buildCodexArgs({ config, project, run }) {
-  // The supervisor launches this command inside the external permission profile.
-  // macOS rejects a second nested Seatbelt policy, so exec must use that boundary.
+  // Only externally sandboxed runs need the inner bypass (Seatbelt cannot nest).
+  // Native runs load the user's tools and let Codex review permission requests.
+  const executionArgs = resolveExecutionMode(config, project) === "native"
+    ? ["--approve-for-me", "--add-dir", run.dir]
+    : [
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c",
+        "mcp_servers={}",
+      ]
   return [
     "exec",
     ...normalizeCodexDefaultArgs(config.codex.defaultArgs),
-    "--ignore-user-config",
-    "--ignore-rules",
+    ...executionArgs,
     "--ephemeral",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "-c",
-    "mcp_servers={}",
     "-C",
     project.codexCwd || project.path,
     "--output-last-message",

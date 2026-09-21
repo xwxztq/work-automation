@@ -11,7 +11,7 @@
 - **阶段二**：扫描 `On Schedule`，Codex 实现代码、测试并提交，再输出完成或阻塞操作；按 Linear 优先级（Urgent → Low）排序执行。
 - **阶段三**：扫描 `Testing`，Codex 做 Auto Review、生成产物，并输出包含图片声明的评论及状态操作。
 
-服务端读取候选事项并提供不可变快照，启动独立 Codex supervisor，再按 [Agent 结构化结果协议](docs/agent-result-protocol.md) 校验和保存 `final.txt`。Codex 子进程不接收 Linear API key，也不加载用户级 Linear MCP 配置。校验通过后，服务端会受控执行 `issue.child.create`、`comment.create` 和 `issue.state.update`，并在写入前检查 run、项目、事项、团队、阶段和状态流转，写入后重新读取 Linear 核对稳定 ID。子事项只能由 split 阶段创建，固定挂在当前 target 下，并继承执行前读取的团队、项目和优先级。v2 的阶段三评论支持有序 run 图片声明，服务端校验后随评论正文写入；单文件最多 64 KiB，每 run 最多四张、总计 256 KiB，编码后评论最多 100000 字符，请求最多 512 KiB（容量依据见 [图片协议](docs/agent-result-protocol.md)）。保留 v1 解析与旧运行恢复。迁移、审计字段、失败恢复及包验证见 [集中授权迁移](docs/centralized-linear-migration.md)。运行详情的“事项操作”页签可按幂等键追溯读取、写入和复查结果。`attachment.upload` 尚未注册执行器；结果中出现该操作时，整组 operations 会在任何 Linear mutation 前失败关闭。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
+服务端读取候选事项并提供不可变快照，启动独立 Codex supervisor，再按 [Agent 结构化结果协议](docs/agent-result-protocol.md) 校验和保存 `final.txt`。Codex 子进程不接收服务的 Linear API key。默认沙箱模式不加载用户配置；本机模式保留用户配置和插件，但阶段指令仍禁止直接操作事项平台。校验通过后，服务端会受控执行 `issue.child.create`、`comment.create` 和 `issue.state.update`，并在写入前检查 run、项目、事项、团队、阶段和状态流转，写入后重新读取 Linear 核对稳定 ID。子事项只能由 split 阶段创建，固定挂在当前 target 下，并继承执行前读取的团队、项目和优先级。v2 的阶段三评论支持有序 run 图片声明，服务端校验后随评论正文写入；单文件最多 64 KiB，每 run 最多四张、总计 256 KiB，编码后评论最多 100000 字符，请求最多 512 KiB（容量依据见 [图片协议](docs/agent-result-protocol.md)）。保留 v1 解析与旧运行恢复。迁移、审计字段、失败恢复及包验证见 [集中授权迁移](docs/centralized-linear-migration.md)。运行详情的“事项操作”页签可按幂等键追溯读取、写入和复查结果。`attachment.upload` 尚未注册执行器；结果中出现该操作时，整组 operations 会在任何 Linear mutation 前失败关闭。多个项目并行，同一项目内各阶段互不等待，阶段二受并发上限控制。
 
 Linear 读取由服务端适配器使用集中保管的凭据完成。项目事项、评论、关系、项目团队和工作流状态按游标读到末页，再映射为平台无关快照；空集合标记为完整结果，分页中断、权限不足、目标不存在、归档、速率限制和瞬时网络失败会阻止使用部分数据启动 Codex。
 
@@ -24,7 +24,7 @@ Linear 读取由服务端适配器使用集中保管的凭据完成。项目事�
 
 ## Auto Review 协议
 
-阶段三的输入、判定、基线和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。阶段三只读业务仓库，并由受控 permission profile 单独开放当前 run 和 review 目录；不再使用 `danger-full-access`。提示词模板在 `prompts/part1.global.md`、`split.global.md`、`part2.global.md`、`part3.global.md`。
+阶段三的输入、判定、基线和产物命名约定见 [docs/auto-review-protocol.md](docs/auto-review-protocol.md)。阶段三不修改业务源码；默认沙箱模式由 permission profile 强制限制，本机模式依靠阶段指令约束。提示词模板在 `prompts/part1.global.md`、`split.global.md`、`part2.global.md`、`part3.global.md`。
 
 ## npm 安装（推荐）
 
@@ -85,7 +85,7 @@ workflow 固定使用 Node 24.19.0、npm 11.17.0 和仓库声明的 pnpm 11.2.2�
 
 2. 在 `.env.local` 填写 `LINEAR_API_KEY`（不要写入 `config.local.json`；服务按 `.env.local` → `.env` 顺序加载，不覆盖已有环境变量）。
 
-3. 确认 Codex CLI 版本不低于 0.138.0，并支持 `sandbox --permission-profile`、`exec --ignore-user-config`、`--output-schema` 和 `--output-last-message`。自动化运行不会加载用户 `config.toml`，不需要配置 Linear MCP；不支持 permission profile 时会失败关闭，不会退回无文件边界的执行方式。
+3. 确认 Codex CLI 版本不低于 0.138.0，并支持 `sandbox --permission-profile`、`exec --ignore-user-config`、`--output-schema` 和 `--output-last-message`。默认沙箱运行不加载用户 `config.toml`，不需要配置 Linear MCP；沙箱模式不支持 permission profile 时会失败关闭，不会自动切换到本机模式。本机模式保留用户配置，不使用外层 permission profile，另要求 CLI 支持 `exec --approve-for-me`；本机 Computer Use 已在 0.155.1 上进行验收。
 
 4. 在 Linear 工作流中确认以下状态名，并与 `config.local.json` 的 `statuses` 保持一致：
    `Todo`、`Needs Clarification`、`Too Large`、`Needs Splitting`、`Blocked`、`Ready for Codex`、`On Schedule`、`In Progress`、`Testing`、`Ready for Review`。
@@ -122,7 +122,7 @@ npx --yes playwright-core@1.61.1 install chromium --only-shell
 
 阶段二和阶段三会收到本次运行专用的浏览器调用说明。服务负责启动独立的 Chromium Headless Shell，保留 Chromium 自身的沙箱，避免 macOS 上从 Codex 文件沙箱启动 Chrome 时被系统进程通信权限阻止。它不使用个人 Chrome 配置或登录信息，也不向浏览器传入 Linear、OpenAI 凭据。预览地址限制为本机 HTTP(S)，支持页面状态、点击、填写、按键、拖拽和截图；外部 CDN 资源可以加载，但不允许跳转到外站或读取 `file:` 地址。
 
-截图保存到本次运行的 `browser/` 目录，执行进程可以读取但不能改写，并记录提交、页面地址、时间、尺寸和 SHA-256。GUI 验收仍需检查图片和交互结果；启动成功不代表功能通过。缺少浏览器时应报告环境阻塞，不要在任务中循环安装浏览器或关闭沙箱。真实沙箱回归可在 macOS 宿主运行 `WAUTO_BROWSER_LIVE_TEST=1 node --test src/server/browser-session.test.mjs`。
+截图保存到本次运行的 `browser/` 目录，沙箱模式下执行进程可以读取但不能改写；本机模式不提供这一文件保护。截图并记录提交、页面地址、时间、尺寸和 SHA-256。GUI 验收仍需检查图片和交互结果；启动成功不代表功能通过。缺少浏览器时应报告环境阻塞，不要在任务中循环安装浏览器或关闭沙箱。真实沙箱回归可在 macOS 宿主运行 `WAUTO_BROWSER_LIVE_TEST=1 node --test src/server/browser-session.test.mjs`。
 
 ### 无需 Node 的 macOS 原生包（备用）
 
@@ -154,6 +154,18 @@ bin/wauto uninstall
 
 ## 配置
 
-界面可配置：服务 ID、监听地址、端口、轮询间隔、Linear 密钥环境变量名（真实密钥只在 env 中）、Codex 命令与阶段权限（阶段一/拆分 `read-only`，阶段二/三 `workspace-write`）、工作流状态名、各阶段成功/失败通知（系统通知 + 可选 Webhook，支持 `{IssueID}` 等 URL 模板变量）、项目与提示词。服务会把旧配置中的 `danger-full-access` 收敛为对应阶段的安全权限。Codex 及其命令由进程外层 permission profile 统一约束：默认拒绝全盘读取，只开放业务仓库、必要工具链、临时 Codex HOME 和当前 run；临时 HOME 只复制 Codex 自身认证文件，结束后删除。阶段二可写业务工作区，阶段三只可写当前 review 目录，工作区内的 `.env` 文件始终不可读。macOS 不支持在外层 Seatbelt 中再次应用内层 Seatbelt，因此 `codex exec` 使用官方为外部沙箱准备的 bypass 参数；文件权限仍由外层 profile 强制执行。
+界面可配置：服务 ID、监听地址、端口、轮询间隔、Linear 密钥环境变量名（真实密钥只在 env 中）、Codex 命令与阶段权限（阶段一/拆分 `read-only`，阶段二/三 `workspace-write`）、工作流状态名、各阶段成功/失败通知（系统通知 + 可选 Webhook，支持 `{IssueID}` 等 URL 模板变量）、项目与提示词。服务会把旧配置中的 `danger-full-access` 收敛为对应阶段的安全权限。默认 `codex.executionMode` 为 `sandbox`。在此模式下，Codex 及其命令由进程外层 permission profile 统一约束：默认拒绝全盘读取，只开放业务仓库、必要工具链、临时 Codex HOME 和当前 run；临时 HOME 只复制 Codex 自身认证文件，结束后删除。阶段二可写业务工作区，阶段三只可写当前 review 目录，工作区内的 `.env` 文件始终不可读。macOS 不支持在外层 Seatbelt 中再次应用内层 Seatbelt，因此 `codex exec` 使用官方为外部沙箱准备的 bypass 参数；文件权限仍由外层 profile 强制执行。
 
 执行事件在全局日志页查看，提示词在设置页维护。`config.local.json`、`.env.local`、`.env` 已被 gitignore，接口不返回密钥明文。
+
+### 本机执行模式
+
+设置页可选择默认执行模式，项目高级设置可选择“跟随全局设置”“受限沙箱”或“本机执行”。旧配置继续使用沙箱；不会因为构建失败自动放开权限。
+
+全局配置为 `codex.executionMode: "sandbox" | "native"`，项目配置为 `executionMode: "inherit" | "sandbox" | "native"`。例如保留全局沙箱，只在需要 Xcode 的项目对象中设置 `"executionMode": "native"`。设置保存后对新运行生效；运行详情记录本次采用的模式。已有的 `part1Sandbox` 等字段仅作旧配置兼容，不用于开启本机模式。
+
+本机模式直接启动 Codex，不使用 WorkAutomation 的外层文件沙箱，也不替换服务账号的 HOME、TMPDIR、Git 配置、开发缓存目录或 PATH。运行环境仍过滤 Linear 等服务凭据和父任务身份，但保留用户 Codex 配置、规则与已启用的插件/MCP。本机运行使用 `--approve-for-me`，由 Codex 处理命令权限和自动审批，不再使用内层 bypass；当前 run 目录作为附加工作目录供写入证据。用户自己配置的工具可能具备账户访问能力，环境变量过滤不等于工具权限隔离；阶段指令仍要求事项操作通过服务结构化协议执行。仅应对可信项目启用。阶段一、拆分、阶段三仍不得修改业务源码，但这是指令约束，不再是操作系统强制只读；浏览器证据目录同样失去文件级防篡改保证。
+
+Swift 环境验收应从自动化启动的进程中执行 `swift --version`、`xcrun --show-sdk-path`、项目构建及对应测试。独立 scratch 目录可避免与正在运行的开发构建冲突。构建通过不能代替原生窗口、键盘焦点或输入法验收。
+
+本机模式让 Codex 按现有用户配置加载 Computer Use 等已启用插件，不硬编码或复制桌面工具管道。是否能够操作应用仍取决于实际工具、浏览器连接及系统授权；工具缺失或权限拒绝时应报告阻塞。多个任务对桌面的竞争及 IAB 等宿主服务需要分别验证，不能把工具列表可见等同于交互通过。详见 [Linear 端到端验证记录](docs/workautomation-computer-use-linear-validation.md)。

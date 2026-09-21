@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG = {
   },
   codex: {
     bin: "codex",
+    executionMode: "sandbox",
     defaultArgs: ["--json", "--skip-git-repo-check"],
     part1Sandbox: "read-only",
     splitSandbox: "read-only",
