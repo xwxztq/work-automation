@@ -39,7 +39,7 @@ Agent 最终输出必须是单个 JSON 文档，不能带 Markdown 代码块或�
 字段含义：
 
 - **schemaVersion**：接受字符串 "1" 和 "2"，不将旧结果自动改写成 v2。
-- **run.stage**：part1、split、part2 或 part3。
+- **run.stage**：part1、split、part2、part3 或 superpower。
 - **run.projectKey**：Work Automation 项目配置里的稳定 key，不是平台项目对象。
 - **run.parentIssueId**：父事项的 opaque ID；没有父事项时必须显式写 null。
 - **run.allowedOperations**：Agent 在结果中声明会使用的权限，必须是服务授权集合的子集。每项实际操作还必须同时存在于这个数组和服务授权集合中。
@@ -55,12 +55,14 @@ Agent 最终输出必须是单个 JSON 文档，不能带 Markdown 代码块或�
 | 操作 | 用途 | payload |
 | --- | --- | --- |
 | issue.read | 读取目标事项 | 可选 include，值只允许 comments、attachments、relations |
-| comment.create | 新增评论 | 必填非空 body；v2 的 part3 可带有序 images，每项仅含 filePath 和可选 caption |
+| comment.create | 新增评论 | 必填非空 body；v2 的 part3 和 superpower 可带有序 images，每项仅含 filePath 和可选 caption |
 | issue.state.update | 更新状态 | 必填非空 state；适配器负责映射平台状态字段 |
 | issue.child.create | 在目标事项下创建子事项 | 必填 title；split 运行时还要求非空 description |
 | attachment.upload | 保留旧合同，未注册执行器 | 必填 filePath，可选 filename、contentType、title；新运行不再授予该操作，旧结果包含它时仍整批拒绝 |
 
 操作 payload 只描述业务意图。平台 SDK 类型、专属状态 ID、上传会话、认证头和 MCP 配置都留在适配器或执行器内部，不属于 Agent 输出。
+
+superpower 使用同一最终结果协议，只授予 `comment.create` 和 `issue.state.update`；最终目标仅为 `Ready for Review`、`Needs Clarification` 或 `Blocked`（使用配置中的状态名）。运行期间，独立进度命令只接受 `inProgress` 或 `testing`，由服务构造仅含状态更新的操作，仍经过绑定、幂等和写后核对。Agent 只能写当前 run 的请求目录，不能写服务回执或已核对状态；原始快照不被改写。最终操作使用最后核对的状态作为检查依据，用户在平台上的状态变更仍会触发冲突。一次运行完成分析、实现和检验，不创建后续阶段运行或拆分子事项。
 
 ## 评论图片文件与容量边界
 

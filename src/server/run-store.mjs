@@ -51,7 +51,7 @@ export function createRunStore(rootDir) {
         status: "waiting-for-agent-result",
         safeTerminal: false,
       },
-      cleanupReviewTempOnCompletion: stage === "part3",
+      cleanupReviewTempOnCompletion: stage === "part3" || stage === "superpower",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       dir,

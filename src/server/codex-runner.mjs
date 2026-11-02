@@ -13,6 +13,7 @@ import {
   resolveExecutableReadPaths,
 } from "./codex-permissions.mjs"
 import { resolveExecutable } from "./executable.mjs"
+import { ISSUE_PROGRESS_CLIENT_PATH } from "./issue-progress.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -113,6 +114,7 @@ export async function runCodex({
   const launcherReadPaths = [
     SANDBOX_TARGET_PATH,
     BROWSER_CLIENT_PATH,
+    ...(stage === "superpower" ? [ISSUE_PROGRESS_CLIENT_PATH] : []),
     ...codexExecutableReadPaths,
     ...nodeExecutableReadPaths,
   ]
@@ -133,7 +135,7 @@ export async function runCodex({
     project,
     run: { ...run, resultSchemaPath },
   })
-  if (stage === "part3") {
+  if (stage === "part3" || stage === "superpower") {
     await fs.mkdir(path.join(run.dir, "review"), { recursive: true })
   }
   await fs.mkdir(sandboxTempDir, { recursive: true })
@@ -164,7 +166,7 @@ export async function runCodex({
         innerCodexHome,
         sandboxUserHome,
         sandboxTempDir,
-        browserEnabled: stage === "part2" || stage === "part3",
+        browserEnabled: ["part2", "part3", "superpower"].includes(stage),
         runId: run.id,
       },
       null,

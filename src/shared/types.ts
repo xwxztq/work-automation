@@ -1,4 +1,4 @@
-export type PromptStage = "part1" | "split" | "part2" | "part3"
+export type PromptStage = "part1" | "split" | "part2" | "part3" | "superpower"
 export type Stage = PromptStage | "both"
 
 export type LinearProjectOption = {
@@ -46,10 +46,12 @@ export type ProjectConfig = {
   splitPromptMode: "global" | "override"
   part2PromptMode: "global" | "override"
   part3PromptMode: "global" | "override"
+  superpowerPromptMode: "global" | "override"
   extraRules: string
 }
 
 export type AppConfig = {
+  executionMode: "staged" | "superpower"
   serverId: string
   host: string
   port: number
@@ -134,6 +136,7 @@ export type PromptBundle = {
     split: string
     part2: string
     part3: string
+    superpower: string
   }
   projects: Record<
     string,
@@ -142,10 +145,12 @@ export type PromptBundle = {
       split: string
       part2: string
       part3: string
+      superpower: string
       part1IsOverride: boolean
       splitIsOverride: boolean
       part2IsOverride: boolean
       part3IsOverride: boolean
+      superpowerIsOverride: boolean
     }
   >
 }

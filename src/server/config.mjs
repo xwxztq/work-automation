@@ -95,6 +95,9 @@ export function normalizeConfig(raw) {
   }
 
   config.port = Number(config.port || DEFAULT_CONFIG.port)
+  if (!["staged", "superpower"].includes(config.executionMode)) {
+    throw new Error("executionMode 必须是 staged 或 superpower。")
+  }
   config.pollIntervalSeconds = Number(
     config.pollIntervalSeconds || DEFAULT_CONFIG.pollIntervalSeconds,
   )
@@ -121,6 +124,7 @@ export function normalizeConfig(raw) {
       splitPromptMode: "global",
       part2PromptMode: "global",
       part3PromptMode: "global",
+      superpowerPromptMode: "global",
       extraRules: "无额外项目规则。",
       ...project,
       defaultTests: Array.isArray(project.defaultTests)

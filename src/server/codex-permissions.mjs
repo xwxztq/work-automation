@@ -67,16 +67,17 @@ export function buildCodexPermissionBoundary({
   const resolvedProjectPath = path.resolve(projectPath || cwd)
   const resolvedRuntimeRoot = runtimeRoot ? path.resolve(runtimeRoot) : null
   const resolvedRunDir = path.resolve(runDir)
-  const workspaceAccess = stage === "part2" ? "write" : "read"
+  const canImplement = stage === "part2" || stage === "superpower"
+  const workspaceAccess = canImplement ? "write" : "read"
   const profileWorkspaceRoots =
     resolvedProjectPath === resolvedCwd
       ? undefined
       : { [resolvedProjectPath]: true }
   const workspaceRules = {
     ".": workspaceAccess,
-    // Codex protects .git by default even for a writable workspace. Stage two
-    // is explicitly authorized to create one scoped local implementation commit.
-    ...(stage === "part2" ? { ".git": "write" } : {}),
+    // Codex protects .git by default even for a writable workspace. Implementation
+    // stages are authorized to create a scoped local commit.
+    ...(canImplement ? { ".git": "write" } : {}),
     ...Object.fromEntries(ENV_FILE_PATTERNS.map((pattern) => [pattern, "deny"])),
   }
   const runRules = buildRunRules({
@@ -232,8 +233,11 @@ function buildRunRules({ stage, runDir, finalPath }) {
   } else if (finalPath) {
     rules[path.resolve(finalPath)] = "write"
   }
-  if (stage === "part3") {
+  if (stage === "part3" || stage === "superpower") {
     rules.review = "write"
+  }
+  if (stage === "superpower") {
+    rules["progress/requests"] = "write"
   }
   return rules
 }

@@ -3,6 +3,7 @@ export const DEFAULT_CONFIG = {
   host: "127.0.0.1",
   port: 4378,
   pollIntervalSeconds: 60,
+  executionMode: "staged",
   linear: {
     apiKeyEnv: "LINEAR_API_KEY",
   },
@@ -31,6 +32,7 @@ export const DEFAULT_CONFIG = {
     split: { succeeded: false, failed: true },
     part2: { succeeded: false, failed: true },
     part3: { succeeded: true, failed: true },
+    superpower: { succeeded: true, failed: true },
   },
   webhook: {
     enabled: false,

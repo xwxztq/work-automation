@@ -32,6 +32,27 @@ async function withServer(options, run) {
   }
 }
 
+test("manual API reports and dispatches superpower when the saved mode is enabled", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-http-mode-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const configPath = path.join(root, "config.json")
+  await fs.writeFile(configPath, JSON.stringify({ executionMode: "superpower" }))
+  const dispatched = []
+  await withServer({ configPath, rootDir: root, scheduler: {
+    async runOnce(stage, options) { dispatched.push({ stage, options }) },
+  } }, async (baseUrl) => {
+    for (const endpoint of ["once", "issue"]) {
+      const response = await fetch(`${baseUrl}/api/runs/${endpoint}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "part1", issueId: "LIV-1", projectKey: "repo" }),
+      })
+      assert.equal(response.status, 202)
+      assert.equal((await response.json()).stage, "superpower")
+    }
+  })
+  assert.deepEqual(dispatched.map((request) => request.stage), ["superpower", "superpower"])
+})
+
 test("setup API returns status and clears Linear health after configuration", async () => {
   const setupStatus = {
     ready: false,

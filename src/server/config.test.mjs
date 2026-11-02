@@ -11,7 +11,7 @@ import {
   saveConfig,
 } from "./config.mjs"
 
-test("notification defaults match the four-stage policy", () => {
+test("notification defaults include staged and superpower results", () => {
   const config = normalizeConfig({})
 
   assert.deepEqual(config.notifications, {
@@ -19,7 +19,21 @@ test("notification defaults match the four-stage policy", () => {
     split: { succeeded: false, failed: true },
     part2: { succeeded: false, failed: true },
     part3: { succeeded: true, failed: true },
+    superpower: { succeeded: true, failed: true },
   })
+})
+
+test("superpower is opt-in and persists without changing legacy project prompts", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-mode-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+  assert.equal(normalizeConfig({}).executionMode, "staged")
+  const config = await saveConfig("config.json", { executionMode: "superpower", projects: [
+    { key: "repo", part2PromptMode: "override" },
+  ] }, rootDir)
+  assert.equal(config.projects[0].part2PromptMode, "override")
+  assert.equal(config.projects[0].superpowerPromptMode, "global")
+  assert.equal(JSON.parse(await fs.readFile(path.join(rootDir, "config.json"), "utf8")).executionMode, "superpower")
+  await assert.rejects(saveConfig("config.json", { executionMode: "invalid" }, rootDir), /executionMode/)
 })
 
 test("notification normalization preserves defaults for partial config", () => {

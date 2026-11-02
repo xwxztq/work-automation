@@ -4,7 +4,7 @@
 
 # Linear Codex 自动执行
 
-本地服务，执行 Linear 到 Codex 的四阶段自动化流程。
+本地服务，执行 Linear 到 Codex 的自动化任务。默认采用分阶段流程，也可启用 Superpower 模式。
 
 - **阶段一**：扫描 `Todo / Needs Clarification / Too Large / Blocked`，Codex 做需求分析并输出结构化事项操作。
 - **拆分阶段**：扫描 `Needs Splitting`，Codex 规划 parent/sub-issue、覆盖清单和目标状态操作。
@@ -17,7 +17,7 @@ Linear 读取由服务端适配器使用集中保管的凭据完成。项目事�
 
 其他行为要点：
 
-- 状态流转不全自动：`Ready for Codex → On Schedule`、`Too Large → Needs Splitting` 需人工移动；不会自动移到 `Done`。
+- 分阶段模式下，`Ready for Codex → On Schedule`、`Too Large → Needs Splitting` 需人工移动；两种模式均不会自动移到 `Done`。
 - 已处理 issue 的快照 MD5 存在 `.linear-automation/processed-issues.json`，无变化的 issue 自动跳过；手动指定 issue 不受跳过影响，但仍检查状态边界。
 - 运行日志在 `.linear-automation/runs`，逐操作幂等记录在 `.linear-automation/issue-operations`，全局事件日志在 `.linear-automation/events.jsonl`。评论和子事项 UUID 会在 mutation 前落盘；子事项记录还包含规范化请求指纹。服务重启后先按完整 Linear 快照恢复未完成操作，不会重新创建已确认评论、子事项或重复执行已生效状态。
 - 只有 operations 全部完成，或进入不会自动重试的人工处理终态后，服务才记录 processed issue 快照。速率限制、瞬时网络和分页失败保留原 run 等待后续扫描恢复，不会重新启动 Codex。
@@ -151,6 +151,20 @@ bin/wauto uninstall
 `uninstall` 只移除 LaunchAgent 注册，保留用户数据和已安装程序。阶段一尚未包含 Apple Developer ID 签名、公证、自动更新以及 Windows/Linux 安装器，因此当前产物适合内部测试，不应直接作为公开下载版本。
 
 只做本机构建链路冒烟时，可运行 `pnpm native:bundle:macos:local`。它复制本机 Node 及所需运行库，不具备跨机器可移植性。
+
+## Superpower 模式
+
+在设置页开启 **Superpower 模式**并保存，或在配置中设置 `"executionMode": "superpower"`。默认值为 `"staged"`，保留原有流程；项目执行栏也可单次选择 Superpower。
+
+该模式使用独立的精简提示词，由同一 Codex 会话完成需求分析、实现、测试、审查及必要修正，不经过阶段间的人工移状态或审核等待。提示词建议用 sub-agent 隔离独立任务和审查的上下文，由主会话整合结果；是否可用取决于执行端能力。适用于 GPT-6.1-Sol 或更高能力的模型，模型仍由 Codex 默认参数选择，模式本身不强制更换模型。
+
+扫描范围为 `Todo`、`Needs Clarification`、`Too Large`、`Needs Splitting`、`Blocked`、`Ready for Codex`、`On Schedule` 和 `Testing`，也支持已有事项继续实现或检验。开始分析或实现时通过运行专用命令更新为 `In Progress`，进入检验时更新为 `Testing`，需要继续修改时回到 `In Progress`，均在同一会话内推进。检验通过后请求移至 `Ready for Review`；缺少必要信息或环境受阻时移至相应状态，不自动移至 `Done`。不会另行认领 `In Progress` 或已交付事项，强制执行也不越过此入口边界。
+
+开启模式即允许队列中的事项进入实现并创建范围收敛的本地提交，不推送或部署。已启动的运行继续执行，同一事项不会与 Superpower 重复启动；实现并发沿用项目的 `maxActivePart2` 上限。工作区、凭据、浏览器和平台写入仍受服务端边界约束，评论可附带检验图片。仅使用 Superpower 时，Linear 必需状态为 `Todo`、`Needs Clarification`、`Blocked`、`In Progress`、`Testing` 和 `Ready for Review`，其余队列状态存在时也会被扫描。
+
+运行中的状态请求保存在当前 run 的 `progress/requests`，服务校验并写入 Linear、重新读取核对后才返回回执。原始事项快照保持不变，最后已核对的状态单独保存，供后续进度和最终结果使用。服务重启后可继续处理未确认请求；事项被用户移至其他状态时会报告冲突。进度命令不获取平台凭据，也不创建额外评论。
+
+全局模板为 `prompts/superpower.global.md`，项目可通过 `superpowerPromptMode: "override"` 使用自己的模板；设置页提供对应的提示词和通知配置。
 
 ## 配置
 

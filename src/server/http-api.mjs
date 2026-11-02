@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import { resolveExecutionStage } from "./execution-mode.mjs"
 import http from "node:http"
 import path from "node:path"
 import { redactDiagnostic } from "./diagnostic-redaction.mjs"
@@ -238,7 +239,7 @@ async function handleApi(req, res, url, context) {
   if (method === "POST" && url.pathname === "/api/runs/once") {
     if (!(await ensureSetupReady(res, setupManager))) return
     const body = await readBody(req)
-    const stage = body.stage || "both"
+    const stage = resolveExecutionStage(await loadConfig(configPath, rootDir), body.stage || "both")
     const force = Boolean(body.force)
     startManualRunInBackground({ scheduler, store, stage, projectKey: body.projectKey, force })
     sendJson(res, 202, acceptedRunPayload({ stage, projectKey: body.projectKey, force }))
@@ -248,7 +249,7 @@ async function handleApi(req, res, url, context) {
   if (method === "POST" && url.pathname === "/api/runs/issue") {
     if (!(await ensureSetupReady(res, setupManager))) return
     const body = await readBody(req)
-    const stage = body.stage || "both"
+    const stage = resolveExecutionStage(await loadConfig(configPath, rootDir), body.stage || "both")
     const force = Boolean(body.force)
     startManualRunInBackground({ scheduler, store, stage, issueId: body.issueId, projectKey: body.projectKey, force })
     sendJson(res, 202, acceptedRunPayload({ stage, issueId: body.issueId, projectKey: body.projectKey, force }))

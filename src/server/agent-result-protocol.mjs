@@ -5,7 +5,7 @@ import {
 } from "./issue-platform.mjs"
 
 export const AGENT_RESULT_SCHEMA_VERSION = "2"
-export const AGENT_RESULT_STAGES = Object.freeze(["part1", "split", "part2", "part3"])
+export const AGENT_RESULT_STAGES = Object.freeze(["part1", "split", "part2", "part3", "superpower"])
 export const AGENT_RESULT_OPERATION = ISSUE_PLATFORM_OPERATION
 
 export const AGENT_RESULT_ERROR_CODE = Object.freeze({
@@ -549,8 +549,8 @@ function normalizeCommentPayload(value, path, version, stage) {
   }
   const images = []
   if (hasOwn(value, "images")) {
-    if (stage !== "part3") {
-      return invalid(AGENT_RESULT_ERROR_CODE.OPERATION_NOT_ALLOWED, path + ".images", "只有阶段三可以声明评论图片。")
+    if (stage !== "part3" && stage !== "superpower") {
+      return invalid(AGENT_RESULT_ERROR_CODE.OPERATION_NOT_ALLOWED, path + ".images", "只有阶段三和 superpower 可以声明评论图片。")
     }
     if (!Array.isArray(value.images) || value.images.length > 4) {
       return invalid(AGENT_RESULT_ERROR_CODE.INVALID_FIELD, path + ".images", "评论图片必须是最多四项的数组。")

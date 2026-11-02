@@ -25,6 +25,10 @@ export const AGENT_RESULT_ALLOWED_OPERATIONS_BY_STAGE = Object.freeze({
     AGENT_RESULT_OPERATION.CREATE_COMMENT,
     AGENT_RESULT_OPERATION.UPDATE_ISSUE_STATE,
   ]),
+  superpower: Object.freeze([
+    AGENT_RESULT_OPERATION.CREATE_COMMENT,
+    AGENT_RESULT_OPERATION.UPDATE_ISSUE_STATE,
+  ]),
 })
 
 export function createAgentResultContext({ stage, projectKey, issue }) {
@@ -231,7 +235,7 @@ function payloadSchema(operation, stage) {
     )
   }
   if (operation === AGENT_RESULT_OPERATION.CREATE_COMMENT) {
-    return stage === "part3"
+    return stage === "part3" || stage === "superpower"
       ? objectSchema({ body: { type: "string" }, images: {
           type: "array", maxItems: 4,
           items: objectSchema({ filePath: { type: "string" }, caption: { type: "string" } }, ["filePath", "caption"]),

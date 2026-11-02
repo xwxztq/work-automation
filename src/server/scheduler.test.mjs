@@ -13,6 +13,8 @@ import {
 import { createAgentResultContext } from "./agent-result-runtime.mjs"
 import { IssuePlatformError } from "./issue-platform.mjs"
 import { createRunStore } from "./run-store.mjs"
+import { initializeIssueProgress } from "./issue-progress.mjs"
+import { requestIssueProgress } from "./issue-progress-client.mjs"
 
 const baseConfig = {
   linear: { apiKeyEnv: "LINEAR_API_KEY" },
@@ -644,6 +646,9 @@ async function createOperationSchedulerFixture(t, { stateFailures = 0 } = {}) {
     { id: "state-testing", name: "Testing", type: "completed", archivedAt: null },
     { id: "state-clarification", name: "Needs Clarification", type: "unstarted", archivedAt: null },
     { id: "state-blocked", name: "Blocked", type: "canceled", archivedAt: null },
+    { id: "state-todo", name: "Todo", type: "unstarted", archivedAt: null },
+    { id: "state-review", name: "Ready for Review", type: "started", archivedAt: null },
+    { id: "state-progress", name: "In Progress", type: "started", archivedAt: null },
   ]
   const issue = {
     id: "issue-1174",
@@ -742,12 +747,250 @@ async function createOperationSchedulerFixture(t, { stateFailures = 0 } = {}) {
   return {
     config,
     issue,
+    states,
     linear,
     mutations,
     rootDir,
     store: createRunStore(rootDir),
   }
 }
+
+async function createSuperpowerFixture(t, options = {}) {
+  const fixture = await createOperationSchedulerFixture(t, options)
+  fixture.config.executionMode = "superpower"
+  fixture.issue.state = { ...fixture.states.find((state) => state.name === "Todo") }
+  await fs.copyFile(new URL("../../prompts/superpower.global.md", import.meta.url),
+    path.join(fixture.rootDir, "prompts", "superpower.global.md"))
+  fixture.createScheduler = (runner) => createScheduler({
+    rootDir: fixture.rootDir,
+    store: fixture.store,
+    configProvider: async () => fixture.config,
+    linearProvider: () => fixture.linear,
+    linearStatusHealthChecker: { async check(config) {
+      assert.equal(config.executionMode, "superpower")
+      return { ok: true, projects: [] }
+    } },
+    codexRunner: runner,
+  })
+  return fixture
+}
+
+function superpowerResult(run, state = "Ready for Review") {
+  const result = completedAgentResult(run.agentResultContext, "superpower")
+  result.operations[0].payload = { body: "实现和检验通过。", images: [] }
+  result.operations[1].payload.state = state
+  return { exitCode: 0, started: true, status: "succeeded", agentResult: result,
+    agentResultValidation: { ok: true, schemaVersion: "2" } }
+}
+
+test("superpower handles all queue states in one session with no staged handoff", async (t) => {
+  for (const state of ["Todo", "Needs Clarification", "Too Large", "Needs Splitting", "Blocked", "Ready for Codex", "On Schedule", "Testing"]) {
+    await t.test(state, async (t) => {
+      const fixture = await createSuperpowerFixture(t)
+      const inputState = fixture.states.find((item) => item.name === state) ||
+        { id: `input-${state}`, name: state, type: "unstarted", archivedAt: null }
+      if (!fixture.states.includes(inputState)) fixture.states.push(inputState)
+      fixture.issue.state = { ...inputState }
+      let calls = 0
+      const scheduler = fixture.createScheduler(async ({ run, stage, prompt }) => {
+        calls += 1
+        assert.equal(stage, "superpower")
+        assert.match(prompt, /同一会话.*需求分析、实现、检验/)
+        assert.match(prompt, /sub-agent/)
+        assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}|等待阶段三|不要创建子代理/)
+        assert.ok(prompt.includes(path.join(run.dir, "review")))
+        return superpowerResult(run)
+      })
+      // Even an old manual stage selection follows the enabled mode.
+      const summary = await scheduler.runOnce("part1")
+      assert.equal(calls, 1)
+      assert.equal(summary.stage, "superpower")
+      assert.deepEqual(summary.projects[0].part1, [])
+      assert.deepEqual(summary.projects[0].part2, [])
+      assert.deepEqual(summary.projects[0].part3, [])
+      assert.equal(summary.projects[0].superpower[0].result, "succeeded", JSON.stringify(await fixture.store.listRuns(10)))
+      assert.equal(fixture.issue.state.name, "Ready for Review")
+      assert.deepEqual(fixture.mutations, ["comment.create", "issue.state.update"])
+      const [run] = await fixture.store.listRuns(10)
+      assert.equal(run.stage, "superpower")
+      assert.equal(run.cleanupReviewTempOnCompletion, true)
+      assert.equal(run.operationExecution.status, "completed")
+      await scheduler.runOnce()
+      assert.equal(calls, 1)
+    })
+  }
+})
+
+test("superpower does not force terminal or in-progress issues into implementation", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  let calls = 0
+  const scheduler = fixture.createScheduler(async () => { calls += 1 })
+  for (const state of ["In Progress", "Ready for Review", "Done", "Canceled"]) {
+    fixture.issue.state.name = state
+    const summary = await scheduler.runOnce("both", { issueId: fixture.issue.identifier, force: true })
+    assert.equal(summary.projects[0].superpower.length, 0)
+    assert.equal(summary.projects[0].skipped.length, 1)
+  }
+  assert.equal(calls, 0)
+  assert.deepEqual(fixture.mutations, [])
+})
+
+test("superpower retries interrupted platform writes after restart without another Codex session", async (t) => {
+  const fixture = await createSuperpowerFixture(t, { stateFailures: 1 })
+  let calls = 0
+  const runner = async ({ run }) => { calls += 1; return superpowerResult(run) }
+  await fixture.createScheduler(runner).runOnce()
+  assert.equal(fixture.issue.state.name, "Todo")
+  await fixture.createScheduler(runner).runOnce()
+  assert.equal(fixture.issue.state.name, "Ready for Review")
+  assert.equal(calls, 1)
+  assert.deepEqual(fixture.mutations, ["comment.create", "issue.state.update", "issue.state.update"])
+})
+
+test("overlapping superpower scans share the implementation limit", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  let release
+  let started
+  let calls = 0
+  const gate = new Promise((resolve) => { release = resolve })
+  const running = new Promise((resolve) => { started = resolve })
+  t.after(() => release())
+  const scheduler = fixture.createScheduler(async ({ run }) => {
+    calls += 1
+    started()
+    await gate
+    return superpowerResult(run)
+  })
+  const first = scheduler.runOnce()
+  await running
+  await scheduler.runOnce("both", { issueId: fixture.issue.identifier, force: true })
+  assert.equal(calls, 1)
+  release()
+  await first
+  assert.equal((await fixture.store.listRuns(10)).length, 1)
+})
+
+test("superpower blocks invalid target states before any platform mutation", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  const scheduler = fixture.createScheduler(async ({ run }) => superpowerResult(run, "Testing"))
+  await scheduler.runOnce()
+  const [run] = await fixture.store.listRuns(10)
+  assert.equal(run.status, "failed")
+  assert.deepEqual(fixture.mutations, [])
+})
+
+test("single-run superpower works without changing the saved execution mode", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  fixture.config.executionMode = "staged"
+  const scheduler = fixture.createScheduler(async ({ run }) => superpowerResult(run))
+  const summary = await scheduler.runOnce("superpower", { issueId: fixture.issue.identifier })
+  assert.equal(summary.projects[0].superpower[0].result, "succeeded")
+  assert.equal(fixture.config.executionMode, "staged")
+})
+
+test("switching modes does not overlap a persisted review run on the same issue", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  fixture.config.projects[0].maxActivePart2 = 3
+  await fixture.store.createRun({ projectKey: fixture.config.projects[0].key, stage: "part3", issue: fixture.issue })
+  let calls = 0
+  const scheduler = fixture.createScheduler(async () => { calls += 1 })
+  const summary = await scheduler.runOnce()
+  assert.equal(calls, 0)
+  assert.equal(summary.projects[0].superpower[0].result, "already-running")
+  assert.equal((await fixture.store.listRuns(10)).length, 1)
+})
+
+test("superpower clarification is processed once until the issue changes", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  let calls = 0
+  const scheduler = fixture.createScheduler(async ({ run }) => {
+    calls += 1
+    return superpowerResult(run, "Needs Clarification")
+  })
+  await scheduler.runOnce()
+  await scheduler.runOnce()
+  assert.equal(calls, 1)
+  assert.equal(fixture.issue.state.name, "Needs Clarification")
+  fixture.issue.description += " 用户补充验收要求"
+  await scheduler.runOnce()
+  assert.equal(calls, 2)
+})
+
+test("superpower reports progress during one session, including returning to implementation", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  const scheduler = fixture.createScheduler(async ({ run, prompt }) => {
+    assert.match(prompt, /issue-progress-client\.mjs/)
+    for (const [state, expected] of [["inProgress", "In Progress"], ["inProgress", "In Progress"], ["testing", "Testing"],
+      ["inProgress", "In Progress"], ["testing", "Testing"]]) {
+      const receipt = await requestIssueProgress(run.dir, state, { timeoutMs: 5000, pollMs: 20 })
+      assert.equal(receipt.state, expected)
+      assert.equal(fixture.issue.state.name, expected)
+      // The model is still running when the platform state is verified.
+      assert.equal((await fixture.store.getRunMetadata(run.id)).status, "running")
+    }
+    return superpowerResult(run)
+  })
+  const summary = await scheduler.runOnce()
+  assert.equal(summary.projects[0].superpower[0].result, "succeeded")
+  assert.equal(fixture.issue.state.name, "Ready for Review")
+  assert.deepEqual(fixture.mutations, [...Array(4).fill("issue.state.update"), "comment.create", "issue.state.update"])
+  const [run] = await fixture.store.listRuns(10)
+  assert.equal(run.issueBinding.stateName, "Todo") // Original snapshot is immutable.
+  await assert.rejects(requestIssueProgress(run.dir, "inProgress"), /停止接收/)
+})
+
+test("superpower progress refuses to overwrite a user state change", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  const scheduler = fixture.createScheduler(async ({ run }) => {
+    await requestIssueProgress(run.dir, "inProgress", { timeoutMs: 5000, pollMs: 20 })
+    fixture.issue.state = { ...fixture.states.find((state) => state.name === "Blocked") }
+    await assert.rejects(requestIssueProgress(run.dir, "testing", { timeoutMs: 5000, pollMs: 20 }), /冲突/)
+    return superpowerResult(run)
+  })
+  const summary = await scheduler.runOnce()
+  assert.equal(summary.projects[0].superpower[0].result, "failed")
+  assert.equal(fixture.issue.state.name, "Blocked")
+  assert.deepEqual(fixture.mutations, ["issue.state.update"])
+})
+
+test("progress requests survive service restart and final recovery uses the last verified state", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  let run = await fixture.store.createRun({ projectKey: fixture.config.projects[0].key, stage: "superpower", issue: fixture.issue })
+  run = await fixture.store.updateRun(run, { supervisorPid: process.pid,
+    agentResultContext: createAgentResultContext({ stage: "superpower", projectKey: run.projectKey, issue: fixture.issue }) })
+  await initializeIssueProgress(run, fixture.config)
+  const originalProgress = await fs.readFile(path.join(run.dir, "progress", "state.json"))
+  const pending = requestIssueProgress(run.dir, "inProgress", { timeoutMs: 5000, pollMs: 20 })
+  const scheduler = fixture.createScheduler(() => { throw new Error("must not start another model session") })
+  await scheduler.resumeProgress()
+  assert.equal((await pending).state, "In Progress")
+  // Simulate a crash after the verified platform write but before saving the
+  // updated progress binding or delivering the acknowledgement.
+  await fs.writeFile(path.join(run.dir, "progress", "state.json"), originalProgress)
+  for (const name of await fs.readdir(path.join(run.dir, "progress", "responses"))) {
+    await fs.unlink(path.join(run.dir, "progress", "responses", name))
+  }
+  await fixture.store.updateRun(run, { ...superpowerResult(run), status: "running", supervisorPid: null,
+    createdAt: "2026-01-01T00:00:00Z", operationExecution: { version: 1, required: true, status: "pending", safeTerminal: false } })
+  await scheduler.runOnce()
+  assert.equal(fixture.issue.state.name, "Ready for Review")
+  assert.equal((await fixture.store.getRunMetadata(run.id)).status, "succeeded")
+  assert.deepEqual(fixture.mutations, ["issue.state.update", "comment.create", "issue.state.update"])
+})
+
+test("progress retries a transient write without rerunning Codex", async (t) => {
+  const fixture = await createSuperpowerFixture(t, { stateFailures: 1 })
+  let calls = 0
+  const scheduler = fixture.createScheduler(async ({ run }) => {
+    calls += 1
+    await requestIssueProgress(run.dir, "inProgress", { timeoutMs: 5000, pollMs: 20 })
+    return superpowerResult(run, "Blocked")
+  })
+  await scheduler.runOnce()
+  assert.equal(calls, 1)
+  assert.equal(fixture.issue.state.name, "Blocked")
+  assert.deepEqual(fixture.mutations, ["issue.state.update", "issue.state.update", "comment.create", "issue.state.update"])
+})
 
 function completedAgentResult(context, suffix) {
   return {

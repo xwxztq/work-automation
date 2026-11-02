@@ -124,6 +124,7 @@ const emptyProject: ProjectConfig = {
   splitPromptMode: "global",
   part2PromptMode: "global",
   part3PromptMode: "global",
+  superpowerPromptMode: "global",
   extraRules: "无额外项目规则。",
 }
 
@@ -139,16 +140,17 @@ const notificationStageLabels: Record<PromptStage, string> = {
   split: "拆分阶段",
   part2: "阶段二",
   part3: "阶段三",
+  superpower: "Superpower",
 }
 
 const projectFieldDescriptions: Partial<Record<keyof ProjectConfig, string>> = {
   key: "本机配置用的稳定标识，日志和提示词会引用它。",
   repoName: "展示名称，也会写入 Codex 执行提示词。",
   linearProjectId: "Linear 项目 UUID，服务只扫描这个项目下的 issue。",
-  branchOrScopePrefix: "用于阶段二提示词和提交 scope，例如 main。",
+  branchOrScopePrefix: "用于实现提示词和提交 scope，例如 main。",
   path: "本机仓库绝对路径，服务用它定位代码。",
   codexCwd: "codex exec -C 的工作目录；通常等于仓库路径。",
-  maxActivePart2: "同一项目同时处于阶段二实现中的 issue 上限，默认 1。",
+  maxActivePart2: "同一项目同时运行的阶段二或 Superpower 事项上限，默认 1。",
   defaultTests: "AI Triage 未指定测试时使用，每行一条命令。",
   extraRules: "会写入阶段提示词；只放项目约束，不要放密钥。",
 }
@@ -1123,6 +1125,7 @@ function App() {
             {view === "project" && (
               <ProjectView
                 project={selectedProject}
+                executionMode={config.executionMode}
                 runs={projectRuns}
                 runTotalCount={runTotalCount}
                 activeRuns={activeProjectRuns}
@@ -1657,6 +1660,7 @@ function ProjectNavItem({
 
 function ProjectView({
   project,
+  executionMode,
   runs,
   runTotalCount,
   activeRuns,
@@ -1679,6 +1683,7 @@ function ProjectView({
   addProject,
 }: {
   project: ProjectConfig | null
+  executionMode: AppConfig["executionMode"]
   runs: RunSummary[]
   runTotalCount: number
   activeRuns: DaemonStatus["activeRuns"]
@@ -1770,7 +1775,8 @@ function ProjectView({
               <InfoItem label="仓库" value={project.repoName || "-"} />
               <InfoItem label="状态" value={project.enabled ? "启用" : "停用"} />
               <InfoItem label="Linear 项目 ID" value={project.linearProjectId || "-"} />
-              <InfoItem label="阶段二上限" value={String(project.maxActivePart2)} />
+              <InfoItem label="实现并发上限" value={String(project.maxActivePart2)} />
+              <InfoItem label="执行模式" value={executionMode === "superpower" ? "Superpower" : "分阶段"} />
               <InfoItem label="仓库路径" value={project.path || "-"} wide />
               <InfoItem label="Codex 路径" value={project.codexCwd || project.path || "-"} wide />
             </CardContent>
@@ -1781,12 +1787,13 @@ function ProjectView({
               <CardTitle>执行</CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-[150px_1fr_auto]">
-              <Select value={manualStage} onValueChange={(value) => setManualStage(value as Stage)}>
+              <Select value={executionMode === "superpower" ? "superpower" : manualStage} disabled={executionMode === "superpower"} onValueChange={(value) => setManualStage(value as Stage)}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="both">全部</SelectItem>
+                  <SelectItem value="superpower">Superpower</SelectItem>
                   <SelectItem value="part1">阶段一</SelectItem>
                   <SelectItem value="split">拆分阶段</SelectItem>
                   <SelectItem value="part2">阶段二</SelectItem>
@@ -1800,7 +1807,7 @@ function ProjectView({
               />
               <Button
                 className="w-full sm:w-auto"
-                onClick={() => triggerOnce(manualStage, manualIssue.trim() || undefined, project.key, manualForce)}
+                onClick={() => triggerOnce(executionMode === "superpower" ? "superpower" : manualStage, manualIssue.trim() || undefined, project.key, manualForce)}
                 disabled={busy || manualRunSubmitting}
               >
                 <Play className="size-4" />
@@ -1810,7 +1817,7 @@ function ProjectView({
                 <div className="space-y-1">
                   <div className="text-sm font-medium">强制执行</div>
                   <div className="text-xs leading-5 text-muted-foreground">
-                    不填 issue ID 时会绕过“已处理快照”跳过；填写 issue ID 且显式选择某个阶段时，会按所选阶段强制重跑。
+                    绕过“已处理快照”跳过并重新执行。Superpower 仍只处理队列中的事项，不重跑已交付或正在处理的事项。
                   </div>
                 </div>
                 <Switch checked={manualForce} onCheckedChange={setManualForce} />
@@ -2770,7 +2777,7 @@ function ProjectEditor({
                     onChange={(event) => onUpdate({ branchOrScopePrefix: event.target.value })}
                   />
                 </Field>
-                <Field label="阶段二并发上限" description={projectFieldDescriptions.maxActivePart2}>
+                <Field label="实现并发上限" description={projectFieldDescriptions.maxActivePart2}>
                   <Input
                     type="number"
                     value={project.maxActivePart2}
@@ -2791,6 +2798,9 @@ function ProjectEditor({
                 </Field>
                 <Field label="阶段三">
                   <ModeSelect value={project.part3PromptMode} onValueChange={(value) => onUpdate({ part3PromptMode: value })} />
+                </Field>
+                <Field label="Superpower">
+                  <ModeSelect value={project.superpowerPromptMode} onValueChange={(value) => onUpdate({ superpowerPromptMode: value })} />
                 </Field>
                 <Field label="默认测试命令" description={projectFieldDescriptions.defaultTests} className="sm:col-span-2">
                   <Textarea
@@ -2998,6 +3008,16 @@ function SettingsPage({
             <Field label="服务 ID">
               <Input value={config.serverId} onChange={(event) => setConfig({ ...config, serverId: event.target.value })} />
             </Field>
+            <div className="space-y-2 rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="superpower-mode">Superpower 模式</Label>
+                <Switch id="superpower-mode" checked={config.executionMode === "superpower"}
+                  onCheckedChange={(enabled) => setConfig({ ...config, executionMode: enabled ? "superpower" : "staged" })} />
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                使用精简提示词，由同一会话分析、实现和检验，建议以 sub-agent 隔离任务。开启即允许队列事项修改代码并创建本地提交，无需阶段间审核。保存后用于所有项目的新运行。
+              </p>
+            </div>
             <Field label="监听地址">
               <Input value={config.host} onChange={(event) => setConfig({ ...config, host: event.target.value })} />
             </Field>
@@ -3178,13 +3198,13 @@ function SettingsPage({
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            状态名称必须和 Linear 工作流中的名称完全一致。阶段一会扫描待处理、需要澄清、范围过大和阻塞状态；当结论为
-            `TOO LARGE` 时，阶段一会把 issue 移到 Too Large。拆分阶段只扫描 Needs Splitting；阶段二只扫描已排期状态；
-            阶段三只扫描 Testing。Too Large 不会被服务自动继续移动到 Needs Splitting，仍需用户人工审核后变更状态。
+            {config.executionMode === "superpower"
+              ? "状态名称须与 Linear 一致。Superpower 开始分析和实现时进入处理中，检验时进入待自动复查，需要修改时回到处理中，通过后进入待人工评审。状态在同一会话中同步，无需阶段间审核；缺少必要信息或环境受阻时暂停。"
+              : "状态名称须与 Linear 一致。阶段一扫描待处理、需要澄清、范围过大和阻塞状态；拆分阶段扫描 Needs Splitting；阶段二扫描已排期状态；阶段三扫描 Testing。Too Large 仍需人工审核后移至 Needs Splitting。"}
           </p>
           <div className="grid grid-cols-3 gap-3 xl:grid-cols-5">
             {(Object.entries(config.statuses) as Array<[keyof AppConfig["statuses"], string]>).map(([key, value]) => (
-              <Field key={key} label={statusConfigLabel(key)} description={statusConfigDescriptions[key]}>
+              <Field key={key} label={statusConfigLabel(key)} description={config.executionMode === "superpower" ? undefined : statusConfigDescriptions[key]}>
                 <Input
                   value={value}
                   onChange={(event) =>
@@ -3218,6 +3238,7 @@ function SettingsPage({
                 <TabsTrigger value="split">拆分阶段</TabsTrigger>
                 <TabsTrigger value="part2">阶段二</TabsTrigger>
                 <TabsTrigger value="part3">阶段三</TabsTrigger>
+                <TabsTrigger value="superpower">Superpower</TabsTrigger>
               </TabsList>
             </Tabs>
             <Select value={promptScope} onValueChange={setPromptScope}>
@@ -3231,7 +3252,8 @@ function SettingsPage({
                     {prompts.projects[key]?.part1IsOverride ||
                     prompts.projects[key]?.splitIsOverride ||
                     prompts.projects[key]?.part2IsOverride ||
-                    prompts.projects[key]?.part3IsOverride
+                    prompts.projects[key]?.part3IsOverride ||
+                    prompts.projects[key]?.superpowerIsOverride
                       ? `${key}`
                       : key}
                   </SelectItem>
@@ -3410,6 +3432,7 @@ function stageLabel(stage: string) {
   if (stage === "split") return "拆分阶段"
   if (stage === "part2") return "阶段二"
   if (stage === "part3") return "阶段三"
+  if (stage === "superpower") return "Superpower"
   if (stage === "both") return "全部"
   return stage
 }

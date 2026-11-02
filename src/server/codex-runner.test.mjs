@@ -524,7 +524,7 @@ test("runner rejects macOS /tmp workspace and runtime aliases before writing or 
   }
 })
 
-test("real macOS sandbox permits an implementation commit only in part2", async (t) => {
+test("real macOS sandbox permits implementation commits in part2 and superpower", async (t) => {
   if (process.platform !== "darwin") return t.skip("macOS Seatbelt verification")
   const sandboxBin = await resolveExecutable("codex", { path: process.env.PATH })
   if (!sandboxBin) return t.skip("Codex sandbox executable is unavailable")
@@ -542,17 +542,29 @@ test("real macOS sandbox permits an implementation commit only in part2", async 
   assert.equal(init.status, 0, init.stderr)
   await fs.writeFile(path.join(projectDir, "fixture.txt"), "implementation\n")
   await fs.writeFile(path.join(projectDir, ".env.local"), "SYNTHETIC_SECRET=test\n")
-  for (const stage of ["part1", "split", "part2", "part3"]) {
+  for (const stage of ["part1", "split", "part2", "part3", "superpower"]) {
+    await fs.writeFile(path.join(projectDir, "fixture.txt"), `${stage} implementation\n`)
+    await fs.mkdir(path.join(runDir, "review"), { recursive: true })
+    await fs.mkdir(path.join(runDir, "progress", "requests"), { recursive: true })
+    await fs.mkdir(path.join(runDir, "progress", "responses"), { recursive: true })
+    await fs.writeFile(path.join(runDir, "progress", "state.json"), "{}")
     const boundary = buildCodexPermissionBoundary({
       stage, cwd: projectDir, projectPath: projectDir, runtimeRoot: root,
       runDir, finalPath: path.join(runDir, "final.txt"),
       runtimeReadPaths: [path.dirname(process.execPath), path.dirname(gitBin)],
       runtimeWritePaths: [home],
     })
-    const command = stage === "part2"
+    const command = stage === "part2" || stage === "superpower"
       ? `const {spawnSync}=require('node:child_process');const git=${JSON.stringify(gitBin)};for(const args of [['add','fixture.txt'],['-c','user.name=Sandbox Test','-c','user.email=sandbox@example.test','commit','--no-gpg-sign','-m','test: scoped commit']]){const r=spawnSync(git,args,{encoding:'utf8'});if(r.status!==0)throw new Error(r.stderr);}`
       : `let denied=false;try{require('node:fs').writeFileSync('.git/write-probe','forbidden')}catch(e){denied=/EPERM|EACCES/.test(e.code)}require('node:assert/strict').ok(denied);`
-    const script = `{let denied=false;try{require('node:fs').readFileSync('.env.local')}catch(e){denied=/EPERM|EACCES/.test(e.code)}require('node:assert/strict').ok(denied);}${command}`
+    const reviewCommand = stage === "superpower"
+      ? `require('node:fs').writeFileSync(${JSON.stringify(path.join(runDir, "review", "summary.md"))},'verified');
+        require('node:fs').writeFileSync(${JSON.stringify(path.join(runDir, "progress", "requests", "request.json"))},'{"state":"testing"}');
+        for(const file of ${JSON.stringify([path.join(runDir, "progress", "state.json"), path.join(runDir, "progress", "responses", "forged.json")])}) {
+          let denied=false;try{require('node:fs').writeFileSync(file,'forged')}catch(e){denied=/EPERM|EACCES/.test(e.code)}require('node:assert/strict').ok(denied);
+        }`
+      : ""
+    const script = `{let denied=false;try{require('node:fs').readFileSync('.env.local')}catch(e){denied=/EPERM|EACCES/.test(e.code)}require('node:assert/strict').ok(denied);}${command}${reviewCommand}`
     const result = spawnSync(sandboxBin, buildCodexSandboxArgs({
       boundary, cwd: projectDir, targetBin: process.execPath, targetArgs: ["-e", script],
     }), { cwd: projectDir, encoding: "utf8", env: { ...process.env, HOME: home, CODEX_HOME: home, TMPDIR: home, GIT_CONFIG_GLOBAL: os.devNull } })

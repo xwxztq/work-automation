@@ -13,7 +13,34 @@ import {
   findLatestCommentByMarker,
   formatPromptComments,
   readPrompt,
+  readAllPrompts,
+  writePrompt,
 } from "./prompts.mjs"
+import fs from "node:fs/promises"
+import os from "node:os"
+
+test("superpower has a compact independent prompt with editable project overrides", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "work-automation-prompts-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  await fs.cp(path.resolve("prompts"), path.join(root, "prompts"), { recursive: true })
+  const template = await readPrompt(root, "global", "superpower")
+  const legacy = await readPrompt(root, "global", "part2")
+  assert.ok(template.length < legacy.length / 2)
+  assert.match(template, /同一会话/)
+  assert.match(template, /sub-agent/)
+  const bundle = await readAllPrompts(root, [{ key: "repo" }])
+  assert.equal(bundle.projects.repo.superpower, template)
+  assert.equal(bundle.projects.repo.superpowerIsOverride, false)
+  await writePrompt(root, "repo", "superpower", "项目要求")
+  assert.equal((await readAllPrompts(root, [{ key: "repo" }])).projects.repo.superpowerIsOverride, true)
+  assert.equal(await readPrompt(root, "repo", "superpower"), "项目要求\n")
+  const context = createAgentResultContext({ stage: "superpower", projectKey: "repo", issue: { id: "issue-1" } })
+  const section = buildAgentResultPromptSection(context, { id: "issue-1", title: "Test", comments: [{ body: "最新要求" }] })
+  assert.match(section, /不调用事项平台或读取凭据/)
+  assert.match(section, /最新要求/)
+  const binding = JSON.parse(section.split("binding: ")[1].split("\n")[0])
+  assert.equal(parseAgentResult(JSON.stringify({ ...binding, operations: [] }), context).ok, true)
+})
 
 test("buildRunPromptContext exposes absolute and relative part3 paths", () => {
   const context = buildRunPromptContext("/repo/work-automation", {

@@ -1,3 +1,4 @@
+import { SUPERPOWER_INPUT_STATUS_KEYS } from "./execution-mode.mjs"
 import { createHash, randomUUID } from "node:crypto"
 import { auditIssueAdapter, failureCategory, recordIssueAudit, withIssueAuditContext } from "./issue-audit.mjs"
 
@@ -25,10 +26,10 @@ export function createIssueOperationExecutor({ store, platforms, checkpoint } = 
   }
   const registry = normalizePlatforms(platforms)
 
-  async function execute({ run, project, config, agentResult } = {}) {
+  async function execute({ run, project, config, agentResult, purpose = "final" } = {}) {
     return withIssueAuditContext({ runId: run?.id, stage: run?.stage, projectKey: project?.key,
       projectId: project?.linearProjectId, issueId: run?.issueId, platform: run?.issueBinding?.platform }, async () => {
-      const execution = await executeResult({ run, project, config, agentResult })
+      const execution = await executeResult({ run, project, config, agentResult, purpose })
       const validated = validateAgentResult(agentResult, run?.agentResultContext)
       const category = execution.error ? (validated.ok ? failureCategory(execution.error) : "agent-output") : null
       if (execution.error && validated.ok && execution.operations.length === 0) {
@@ -44,7 +45,7 @@ export function createIssueOperationExecutor({ store, platforms, checkpoint } = 
     })
   }
 
-  async function executeResult({ run, project, config, agentResult }) {
+  async function executeResult({ run, project, config, agentResult, purpose }) {
     const validation = validateAgentResult(agentResult, run?.agentResultContext)
     if (!validation.ok) {
       return manualRequired(platformError(
@@ -86,6 +87,7 @@ export function createIssueOperationExecutor({ store, platforms, checkpoint } = 
         result,
         reader: platform.reader,
         store,
+        purpose,
       })
     } catch (error) {
       return executionFailure(error)
@@ -107,7 +109,7 @@ export function createIssueOperationExecutor({ store, platforms, checkpoint } = 
   return Object.freeze({ execute })
 }
 
-async function buildPreflight({ run, project, config, result, reader, store }) {
+async function buildPreflight({ run, project, config, result, reader, store, purpose }) {
   if (
     !run?.id ||
     run.projectKey !== project?.key ||
@@ -161,7 +163,7 @@ async function buildPreflight({ run, project, config, result, reader, store }) {
     return { error: platformError(ISSUE_PLATFORM_ERROR_CODE.CONFLICT) }
   }
 
-  const policy = statePolicy(config?.statuses, result.run.stage)
+  const policy = statePolicy(config?.statuses, result.run.stage, purpose)
   if (!policy) {
     return { error: platformError(ISSUE_PLATFORM_ERROR_CODE.INVALID_REQUEST) }
   }
@@ -973,8 +975,9 @@ function isIdempotencyKeyCharacter(value) {
   return Boolean(value) && /[A-Za-z0-9._:/-]/u.test(value)
 }
 
-function statePolicy(statuses, stage) {
+function statePolicy(statuses, stage, purpose = "final") {
   if (!statuses) return null
+  if (purpose !== "final" && !(purpose === "progress" && stage === "superpower")) return null
   const policies = {
     part1: {
       inputs: [statuses.todo, statuses.needsClarification, statuses.tooLarge, statuses.blocked],
@@ -991,6 +994,12 @@ function statePolicy(statuses, stage) {
     part3: {
       inputs: [statuses.testing],
       targets: [statuses.readyForReview, statuses.schedule, statuses.blocked],
+    },
+    superpower: {
+      inputs: [...SUPERPOWER_INPUT_STATUS_KEYS.map((key) => statuses[key]), statuses.inProgress],
+      targets: purpose === "progress"
+        ? [statuses.inProgress, statuses.testing]
+        : [statuses.readyForReview, statuses.needsClarification, statuses.blocked],
     },
   }
   const policy = policies[stage]

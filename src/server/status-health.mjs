@@ -1,4 +1,5 @@
 import { createLinearClient } from "./linear-client.mjs"
+import { SUPERPOWER_REQUIRED_STATUS_KEYS } from "./execution-mode.mjs"
 import { auditIssueAdapter } from "./issue-audit.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import {
@@ -37,7 +38,8 @@ export const STATUS_LABELS = {
 }
 
 export function configuredRequiredStatuses(config) {
-  return REQUIRED_STATUS_KEYS.map((key) => ({
+  const keys = config.executionMode === "superpower" ? SUPERPOWER_REQUIRED_STATUS_KEYS : REQUIRED_STATUS_KEYS
+  return keys.map((key) => ({
     key,
     label: STATUS_LABELS[key] || key,
     name: String(config.statuses?.[key] || "").trim(),

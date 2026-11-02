@@ -8,6 +8,17 @@ import {
   formatProjectStatusHealthBlock,
 } from "./status-health.mjs"
 
+test("superpower requires progress states but no approval queues and mode changes invalidate health cache", async () => {
+  const linear = fakeLinear(["Todo", "Needs Clarification", "Blocked", "In Progress", "Testing", "Ready for Review"])
+  const checker = createLinearStatusHealthChecker()
+  const enabled = await checker.check({ ...baseConfig, executionMode: "superpower" }, { linear })
+  assert.equal(enabled.ok, true)
+  assert.equal(enabled.requiredStatuses.length, 6)
+  const staged = await checker.check({ ...baseConfig, executionMode: "staged" }, { linear })
+  assert.equal(staged.ok, false)
+  assert.ok(staged.projects[0].teams[0].missingStatuses.some((status) => status.key === "schedule"))
+})
+
 const baseConfig = {
   linear: { apiKeyEnv: "LINEAR_API_KEY" },
   statuses: {

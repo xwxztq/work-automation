@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto"
+import { resolveExecutionStage, superpowerEligibleStatuses } from "./execution-mode.mjs"
+import { createIssueProgressSession, initializeIssueProgress, issueProgressGuidance } from "./issue-progress.mjs"
 import {
   agentResultRunPatch,
   createAgentResultContext,
@@ -48,6 +50,7 @@ export function createScheduler({
   const activeRunsByKey = new Map()
   const activeRunsById = new Map()
   const activeProjectCycles = new Set()
+  const progressSessions = new Map()
 
   async function logEvent(event) {
     await store.appendEvent(event).catch(() => {})
@@ -128,6 +131,8 @@ export function createScheduler({
 
   async function runOnce(stage = "both", options = {}) {
     const config = await configProvider()
+    await resumeProgress()
+    stage = resolveExecutionStage(config, stage)
     const linear = auditIssueAdapter(linearProvider(config), store, { stage, projectKey: options.projectKey, projects: config.projects })
     const summary = {
       startedAt: new Date().toISOString(),
@@ -150,7 +155,8 @@ export function createScheduler({
       },
     })
 
-    const linearStatusHealth = await linearStatusHealthChecker.check(config, { linear })
+    const healthConfig = stage === "superpower" ? { ...config, executionMode: "superpower" } : config
+    const linearStatusHealth = await linearStatusHealthChecker.check(healthConfig, { linear })
     if (linearStatusHealthIsBlocking(linearStatusHealth)) {
       summary.projects = await blockProjectsForLinearStatusHealth({
         projects,
@@ -194,6 +200,7 @@ export function createScheduler({
             split: [],
             part2: [],
             part3: [],
+            superpower: [],
             skipped: [],
             error: message,
           }
@@ -234,6 +241,7 @@ export function createScheduler({
         split: [],
         part2: [],
         part3: [],
+        superpower: [],
         skipped: [
           projectHealth && !projectHealth.ok
             ? formatProjectStatusHealthBlock(projectHealth)
@@ -390,6 +398,7 @@ export function createScheduler({
       split: [],
       part2: [],
       part3: [],
+      superpower: [],
       skipped: [],
     }
     const controller = new AbortController()
@@ -479,6 +488,9 @@ export function createScheduler({
               }),
           }),
         ])
+      } else if (effectiveStage === "superpower") {
+        await runProjectPart2({ config, project, linear, projectSummary, issueId, force,
+          signal: controller.signal, stage: "superpower" })
       } else if (effectiveStage === "part1") {
         await runProjectPart1({
           config,
@@ -540,6 +552,7 @@ export function createScheduler({
           split: projectSummary.split.length,
           part2: projectSummary.part2.length,
           part3: projectSummary.part3.length,
+          superpower: projectSummary.superpower.length,
           skipped: projectSummary.skipped.length,
         },
       })
@@ -801,18 +814,21 @@ export function createScheduler({
     }
   }
 
-  async function runProjectPart2({ config, project, linear, projectSummary, issueId, force = false, signal }) {
+  async function runProjectPart2({ config, project, linear, projectSummary, issueId, force = false, signal, stage = "part2" }) {
     const { issues } = await listCompleteProjectIssues(linear, project.linearProjectId)
+    const eligibleStatuses = stage === "superpower"
+      ? superpowerEligibleStatuses(config)
+      : new Set([config.statuses.schedule])
     const candidates = issueId
       ? issues.filter((issue) => issueMatchesId(issue, issueId))
-      : issues.filter((issue) => issue.state?.name === config.statuses.schedule)
+      : issues.filter((issue) => eligibleStatuses.has(issue.state?.name))
     const activeStats = await activePart2StatsFromIssues(issues, project, config)
 
     await logEvent({
-      type: "part2-candidates",
-      stage: "part2",
+      type: `${stage}-candidates`,
+      stage,
       projectKey: project.key,
-      message: `阶段二候选 ${candidates.length} 个`,
+      message: `${stageLabel(stage)}候选 ${candidates.length} 个`,
       data: {
         issueCount: issues.length,
         candidateCount: candidates.length,
@@ -828,24 +844,24 @@ export function createScheduler({
     for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
       if (signal.aborted) {
         await logEvent({
-          type: "part2-aborted",
+          type: `${stage}-aborted`,
           level: "warn",
-          stage: "part2",
+          stage,
           projectKey: project.key,
-          message: "阶段二项目信号已中止，停止处理后续候选",
+          message: `${stageLabel(stage)}项目信号已中止，停止处理后续候选`,
         })
         break
       }
 
       const issue = await readCompleteIssue(linear, issueRef.identifier || issueRef.id)
-      if (!force && issue.state?.name !== config.statuses.schedule) {
-        projectSummary.skipped.push(`${issue.identifier}: 状态已不是 ${config.statuses.schedule}`)
+      if ((stage === "superpower" || !force) && !eligibleStatuses.has(issue.state?.name)) {
+        projectSummary.skipped.push(`${issue.identifier}: 状态不在 ${stageLabel(stage)}执行范围`)
         await logEvent({
-          type: "part2-skip-state-changed",
-          stage: "part2",
+          type: `${stage}-skip-state-changed`,
+          stage,
           projectKey: project.key,
           issueIdentifier: issue.identifier,
-          message: `${issue.identifier} 状态已不是 ${config.statuses.schedule}，跳过`,
+          message: `${issue.identifier} 状态不在 ${stageLabel(stage)}执行范围，跳过`,
           data: { state: issue.state?.name },
         })
         continue
@@ -854,10 +870,10 @@ export function createScheduler({
       if (activeLimitStats.count >= project.maxActivePart2) {
         projectSummary.skipped.push(`${project.key}: 处理中数量已达上限`)
         await logEvent({
-          type: "part2-skip-active-limit",
-          stage: "part2",
+          type: `${stage}-skip-active-limit`,
+          stage,
           projectKey: project.key,
-          message: "阶段二处理中数量已达上限",
+          message: `${stageLabel(stage)}处理中数量已达上限`,
           data: {
             activeCount: activeLimitStats.count,
             linearInProgressCount: activeLimitStats.linearInProgressCount,
@@ -868,16 +884,16 @@ export function createScheduler({
         })
         break
       }
-      if (!force && !issueId && (await skipUnchangedIssue({ project, issue, stage: "part2", projectSummary }))) {
+      if (!force && !issueId && (await skipUnchangedIssue({ project, issue, stage, projectSummary }))) {
         continue
       }
 
       await logEvent({
         type: "run-queue",
-        stage: "part2",
+        stage,
         projectKey: project.key,
         issueIdentifier: issue.identifier,
-        message: `${issue.identifier} 进入阶段二执行`,
+        message: `${issue.identifier} 进入${stageLabel(stage)}执行`,
         data: { state: issue.state?.name },
       })
       const result = await executeCodexStage({
@@ -885,12 +901,12 @@ export function createScheduler({
         project,
         linear,
         issue,
-        stage: "part2",
+        stage,
         signal,
         enforceLocalPart2Limit: true,
       })
-      const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage: "part2", run: result })
-      projectSummary.part2.push({ issue: issue.identifier, result: finalizedRun.status })
+      const finalizedRun = await recordProcessedIssue({ linear, project, issue, stage, run: result })
+      projectSummary[stage].push({ issue: issue.identifier, result: finalizedRun.status })
     }
   }
 
@@ -1051,7 +1067,7 @@ export function createScheduler({
 
     const localIssueKeys = new Set()
     for (const active of activeLocalRuns()) {
-      if (active.projectKey !== project.key || active.stage !== "part2") {
+      if (active.projectKey !== project.key || !["part2", "superpower"].includes(active.stage)) {
         continue
       }
       const key = issueActiveKey(active.issue)
@@ -1060,7 +1076,7 @@ export function createScheduler({
       }
     }
     for (const run of await persistedRunningRuns()) {
-      if (run.projectKey !== project.key || run.stage !== "part2") {
+      if (run.projectKey !== project.key || !["part2", "superpower"].includes(run.stage)) {
         continue
       }
       const key = issueActiveKey({
@@ -1100,7 +1116,7 @@ export function createScheduler({
   async function countLocalActivePart2(project) {
     const issueKeys = new Set()
     for (const active of activeLocalRuns()) {
-      if (active.projectKey !== project.key || active.stage !== "part2") {
+      if (active.projectKey !== project.key || !["part2", "superpower"].includes(active.stage)) {
         continue
       }
       const key = issueActiveKey(active.issue)
@@ -1109,7 +1125,7 @@ export function createScheduler({
       }
     }
     for (const run of await persistedRunningRuns()) {
-      if (run.projectKey !== project.key || run.stage !== "part2") {
+      if (run.projectKey !== project.key || !["part2", "superpower"].includes(run.stage)) {
         continue
       }
       const key = issueActiveKey({
@@ -1261,7 +1277,36 @@ export function createScheduler({
     }
   }
 
-  async function executeAgentOperations({ config, project, linear, run, agentResult }) {
+  function progressSession({ config, project, linear, run, signal }) {
+    if (!progressSessions.has(run.id)) {
+      progressSessions.set(run.id, createIssueProgressSession({ run, store, signal,
+        execute: (input) => executeAgentOperations({ config, project, linear, ...input }),
+      }))
+    }
+    return progressSessions.get(run.id)
+  }
+
+  async function resumeProgress() {
+    if (typeof store.listRuns !== "function") return
+    const runs = (await store.listRuns(500)).filter((run) => run.stage === "superpower" &&
+      run.status === "running" && !progressSessions.has(run.id) && isRunAlive(run))
+    if (!runs.length) return
+    const config = await configProvider()
+    const linear = auditIssueAdapter(linearProvider(config), store, { stage: "superpower", projects: config.projects })
+    for (const run of runs) {
+      const project = config.projects.find((item) => item.key === run.projectKey)
+      if (project) progressSession({ config, project, linear, run }).start()
+    }
+  }
+
+  async function executeAgentOperations({ config, project, linear, run, agentResult, purpose = "final" }) {
+    if (run.stage === "superpower" && purpose === "final") {
+      const progress = progressSession({ config, project, linear, run })
+      const result = await progress.finish()
+      progressSessions.delete(run.id)
+      if (result.status !== "completed") return result
+      run = await progress.boundRun()
+    }
     if (Array.isArray(agentResult?.operations) && agentResult.operations.length === 0) {
       return {
         version: 1,
@@ -1293,7 +1338,7 @@ export function createScheduler({
         [platform]: { reader: linear, writer },
       },
     })
-    return executor.execute({ run, project, config, agentResult })
+    return executor.execute({ run, project, config, agentResult, purpose })
   }
 
   function executeCodexStage(input) {
@@ -1310,7 +1355,7 @@ export function createScheduler({
     enforceLocalPart2Limit = false,
   }) {
     const key = `${project.key}:${stage}:${issue.identifier}`
-    if (activeRunsByKey.has(key)) {
+    if (hasConflictingActiveRun(project.key, stage, issue)) {
       await logEvent({
         type: "run-skip-active",
         stage,
@@ -1339,21 +1384,32 @@ export function createScheduler({
     }
     if (
       enforceLocalPart2Limit &&
-      stage === "part2" &&
+      ["part2", "superpower"].includes(stage) &&
       (await countLocalActivePart2(project)) >= project.maxActivePart2
     ) {
       const localActivePart2Count = await countLocalActivePart2(project)
       await logEvent({
-        type: "part2-skip-local-active-limit",
+        type: `${stage}-skip-local-active-limit`,
         stage,
         projectKey: project.key,
         issueIdentifier: issue.identifier,
-        message: "阶段二本地运行数量已达上限",
+        message: `${stageLabel(stage)}本地运行数量已达上限`,
         data: {
           localActivePart2Count,
           maxActivePart2: project.maxActivePart2,
         },
       })
+      return { status: "skipped-active-limit" }
+    }
+
+    // Recheck in-memory reservations after the asynchronous reads, with no await
+    // between this check and registering the run below.
+    if (hasConflictingActiveRun(project.key, stage, issue)) {
+      return { status: "already-running" }
+    }
+    if (enforceLocalPart2Limit && activeLocalRuns().filter((active) =>
+      active.projectKey === project.key && ["part2", "superpower"].includes(active.stage),
+    ).length >= project.maxActivePart2) {
       return { status: "skipped-active-limit" }
     }
 
@@ -1411,6 +1467,10 @@ export function createScheduler({
         return run
       }
 
+      if (stage === "superpower") {
+        await initializeIssueProgress(run, config)
+        progressSession({ config, project, linear, run, signal: runController.signal }).start()
+      }
       const prompt = await buildStagePrompt({ config, project, issue, stage, run })
       const codexResult = await codexRunner({
         config,
@@ -1585,6 +1645,8 @@ export function createScheduler({
       run = await cleanupCompletedRunReview(run)
       throw error
     } finally {
+      progressSessions.get(run?.id)?.stop()
+      progressSessions.delete(run?.id)
       signal.removeEventListener("abort", abortFromProject)
       activeRunsByKey.delete(key)
       if (run?.id) {
@@ -1594,18 +1656,11 @@ export function createScheduler({
   }
 
   async function buildStagePrompt({ config, project, issue, stage, run }) {
-    const promptMode =
-      stage === "part1"
-        ? project.part1PromptMode
-        : stage === "split"
-          ? project.splitPromptMode
-          : stage === "part2"
-          ? project.part2PromptMode
-          : project.part3PromptMode
+    const promptMode = project[`${stage}PromptMode`]
     const scope = promptMode === "override" ? project.key : "global"
     const template = await readPrompt(rootDir, scope, stage)
     const extraContext =
-      stage === "part3"
+      stage === "part3" || stage === "superpower"
         ? {
             ...buildRunPromptContext(rootDir, run),
             ...buildIssueReviewPromptContext(issue),
@@ -1617,7 +1672,7 @@ export function createScheduler({
       run.agentResultContext,
       issue,
     )
-    return `${templateText}\n\n${resultContextText}\n`
+    return `${templateText}\n\n${resultContextText}\n${issueProgressGuidance(run)}`
   }
 
   function start() {
@@ -1809,10 +1864,15 @@ export function createScheduler({
     return [...activeById.values()].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)))
   }
 
+  function hasConflictingActiveRun(projectKey, stage, issue) {
+    return activeLocalRuns().some((active) => active.projectKey === projectKey &&
+      stagesConflict(active.stage, stage) && issueActiveKey(active.issue) === issueActiveKey(issue))
+  }
+
   async function findPersistedActiveRun(projectKey, stage, issue) {
     const key = issueActiveKey(issue)
     for (const run of await persistedRunningRuns()) {
-      if (run.projectKey !== projectKey || run.stage !== stage) {
+      if (run.projectKey !== projectKey || !stagesConflict(run.stage, stage)) {
         continue
       }
       const runIssueKey = issueActiveKey({
@@ -1945,6 +2005,7 @@ export function createScheduler({
     status,
     cancelRun,
     cancelProject,
+    resumeProgress,
   }
 
   async function markRunCanceled(run, signal, patch = {}) {
@@ -2171,6 +2232,7 @@ function stageLabel(stage) {
   if (stage === "split") return "拆分阶段"
   if (stage === "part2") return "阶段二"
   if (stage === "part3") return "阶段三"
+  if (stage === "superpower") return "Superpower"
   if (stage === "both") return "全部"
   return stage
 }
@@ -2299,4 +2361,8 @@ function issueFingerprint(issue) {
       .sort((a, b) => `${a.createdAt}:${a.id}`.localeCompare(`${b.createdAt}:${b.id}`)),
   }
   return createHash("md5").update(JSON.stringify(payload)).digest("hex")
+}
+
+function stagesConflict(left, right) {
+  return left === right || left === "superpower" || right === "superpower"
 }

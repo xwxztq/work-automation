@@ -102,6 +102,7 @@ server.listen(config.port, config.host, () => {
 })
 
 const setupStatus = await setupManager.status()
+if (setupStatus.ready) await scheduler.resumeProgress()
 if (!args.dev && setupStatus.ready) {
   scheduler.start()
 } else if (!setupStatus.ready) {

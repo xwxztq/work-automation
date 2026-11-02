@@ -3,7 +3,7 @@ import path from "node:path"
 import { AGENT_RESULT_SCHEMA_VERSION } from "./agent-result-protocol.mjs"
 import { ensureDir, fileExists } from "./config.mjs"
 
-const STAGES = new Set(["part1", "split", "part2", "part3"])
+const STAGES = new Set(["part1", "split", "part2", "part3", "superpower"])
 const IMPLEMENTATION_COMPLETE_MARKER = "Codex Implementation Complete"
 
 export function promptPath(rootDir, scope, stage) {
@@ -37,6 +37,7 @@ export async function readAllPrompts(rootDir, projects) {
     split: await readPrompt(rootDir, "global", "split"),
     part2: await readPrompt(rootDir, "global", "part2"),
     part3: await readPrompt(rootDir, "global", "part3"),
+    superpower: await readPrompt(rootDir, "global", "superpower"),
   }
   const projectPrompts = {}
   for (const project of projects) {
@@ -45,10 +46,12 @@ export async function readAllPrompts(rootDir, projects) {
       split: await readPrompt(rootDir, project.key, "split"),
       part2: await readPrompt(rootDir, project.key, "part2"),
       part3: await readPrompt(rootDir, project.key, "part3"),
+      superpower: await readPrompt(rootDir, project.key, "superpower"),
       part1IsOverride: await fileExists(promptPath(rootDir, project.key, "part1")),
       splitIsOverride: await fileExists(promptPath(rootDir, project.key, "split")),
       part2IsOverride: await fileExists(promptPath(rootDir, project.key, "part2")),
       part3IsOverride: await fileExists(promptPath(rootDir, project.key, "part3")),
+      superpowerIsOverride: await fileExists(promptPath(rootDir, project.key, "superpower")),
     }
   }
   return { global, projects: projectPrompts }
@@ -144,6 +147,11 @@ export function buildAgentResultPromptSection(context, issue) {
       allowedOperations: context?.allowedOperations,
     },
     target: context?.target,
+  }
+  if (context?.stage === "superpower") {
+    return `服务约束（优先于模板）：仅用下方事项快照，不调用事项平台或读取凭据。最终按输出 schema 返回单个 JSON，原样保留 binding，操作由服务执行。operations 仅用允许类型，每项 idempotencyKey 唯一且为 8–128 字符。评论 payload 含 body 和 images（无图为 []）；图片用 run 相对 filePath 和 caption 声明，不嵌入正文，仅 PNG/JPEG，每张 ≤64 KiB，合计 ≤4 张、256 KiB，编码后评论 ≤100000 字符。状态操作 payload 为 {"state":"状态名"}。
+binding: ${JSON.stringify(binding)}
+事项快照: ${JSON.stringify(buildIssueSnapshot(issue))}`
   }
   return `服务提供的不可变运行上下文:
 - 以下边界对全局模板和项目覆盖模板都生效；如有冲突，以这里为准。
