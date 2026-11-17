@@ -56,6 +56,15 @@ const NEW_PROJECT_ISSUES_QUERY = `
   }
 `
 
+const NEW_WORKSPACE_ISSUES_QUERY = `
+  query LinearReadNewWorkspaceIssues($since: DateTimeOrDuration!, $first: Int!, $after: String) {
+    issues(first: $first, after: $after, includeArchived: false, filter: { createdAt: { gte: $since } }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id identifier title description url priority createdAt project { id } }
+    }
+  }
+`
+
 const PROJECT_ISSUES_QUERY = `
   query LinearReadProjectIssues($projectId: String!, $first: Int!, $after: String) {
     project(id: $projectId) {
@@ -302,6 +311,13 @@ export function createLinearReadAdapter(linearClient, options = {}) {
       if (!data?.project) throw platformError(ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND)
       if (data.project.archivedAt) throw platformError(ISSUE_PLATFORM_ERROR_CODE.ARCHIVED)
       return data.project.issues
+    })
+  }
+
+  async function listNewWorkspaceIssues(since) {
+    return readAllPages(async (after) => {
+      const data = await graphql(NEW_WORKSPACE_ISSUES_QUERY, { since, first: pageSize, after }, { pagination: after !== null })
+      return data?.issues
     })
   }
 
@@ -594,7 +610,7 @@ export function createLinearReadAdapter(linearClient, options = {}) {
     listProjectsWorkflowStates,
     listTeamWorkflowStates,
   })
-  return Object.freeze({ ...adapter, listNewProjectIssues, listArchiveCandidates, readArchiveState, readArchiveHistory })
+  return Object.freeze({ ...adapter, listNewProjectIssues, listNewWorkspaceIssues, listArchiveCandidates, readArchiveState, readArchiveHistory })
 }
 
 async function readAllPages(readPage, initialConnection = null) {

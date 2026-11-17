@@ -58,15 +58,20 @@ export async function addWorkspaceMapping(config, body, createClient) {
     throw new Error("请选择另一工作区内已配置的 WA 项目作为目标。")
   }
   const target = requireWorkspace(config, projectWorkspaceId(targetProject))
-  const mappings = config.linear.mappings || []
-  if (mappings.some((mapping) => mapping.sourceWorkspaceId === source.id &&
-    mapping.sourceProjectId === body.sourceProjectId && mapping.targetWorkspaceId === target.id)) {
-    throw new Error("该来源项目在此目标工作区中已有映射。")
+  const sourceProjectId = body.sourceProjectId
+  if (sourceProjectId !== null && (typeof sourceProjectId !== "string" || !sourceProjectId.trim())) {
+    throw new Error("请选择来源 Linear 项目或「所有项目」。")
   }
+  const sourceLinear = workspaceClient(source, createClient)
   const [sourceProject, destination] = await Promise.all([
-    workspaceClient(source, createClient).readProject(body.sourceProjectId),
+    sourceProjectId === null ? { id: null, name: "所有项目" } : sourceLinear.readProject(sourceProjectId),
     workspaceClient(target, createClient).readProject(targetProject.linearProjectId),
   ])
+  const mappings = config.linear.mappings || []
+  if (mappings.some((mapping) => mapping.sourceWorkspaceId === source.id &&
+    mapping.sourceProjectId === sourceProject.id && mapping.targetWorkspaceId === target.id)) {
+    throw new Error(sourceProjectId === null ? "这两个工作区间已有「所有项目」兜底映射。" : "该来源项目在此目标工作区中已有映射。")
+  }
   const team = destination.teams.find((item) => item.id === body.targetTeamId && !item.archivedAt)
   if (!team) throw new Error("请选择目标 Linear 项目下的团队。")
   const mapping = {

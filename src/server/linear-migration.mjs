@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { readJsonFile } from "./config.mjs"
 import { STATE_DIR } from "./defaults.mjs"
-import { activeWorkspaceId, linearWorkspaces } from "./linear-workspaces.mjs"
+import { activeWorkspaceId, hasSpecificMigrationMapping, linearWorkspaces } from "./linear-workspaces.mjs"
 import { recordIssueAudit, withIssueAuditContext } from "./issue-audit.mjs"
 
 export async function migrateLinearIssues({ rootDir, config, projects, linear, sourceClient, isCurrent, store }) {
@@ -32,8 +32,11 @@ export async function migrateLinearIssues({ rootDir, config, projects, linear, s
         const from = Math.max(Date.parse(mapping.since), Date.parse(source.inactiveSince),
           (Date.parse(cursor?.through) || 0) - 60_000)
         const through = new Date().toISOString()
-        const issues = await client.listNewProjectIssues(mapping.sourceProjectId, new Date(from).toISOString())
-        const candidates = new Map(issues.filter((issue) => Date.parse(issue.createdAt) >= from).map((issue) => [issue.id, issue]))
+        const since = new Date(from).toISOString()
+        const fallback = mapping.sourceProjectId === null
+        const issues = fallback ? await client.listNewWorkspaceIssues(since) : await client.listNewProjectIssues(mapping.sourceProjectId, since)
+        const candidates = new Map(issues.filter((issue) => Date.parse(issue.createdAt) >= from &&
+          (!fallback || !hasSpecificMigrationMapping(config, mapping, issue.project?.id))).map((issue) => [issue.id, issue]))
         for (const entry of pending) {
           if (entry.sourceWorkspaceId === source.id && entry.sourceProjectId === mapping.sourceProjectId &&
             entry.workspaceId === activeId && entry.projectId === project.linearProjectId &&
@@ -82,13 +85,16 @@ async function migrateIssue({ directory, source, project, mapping, issue, client
   if (!migrated) {
     if (!issue.title) {
       issue = await client.readIssue(issue.id)
-      if (issue.project?.id !== mapping.sourceProjectId) throw new Error("待迁移事项的来源项目已变更。")
+      if (mapping.sourceProjectId !== null && issue.project?.id !== mapping.sourceProjectId) throw new Error("待迁移事项的来源项目已变更。")
     }
+    // A reserved destination is recovered with its original UUID. New fallback
+    // migrations must still yield to any specific route added during this scan.
+    const sourceProjectId = !existing && mapping.sourceProjectId === null ? issue.project?.id : undefined
     const states = await linear.listTeamWorkflowStates(target.teamId)
     const todo = states.filter((state) => !state.archivedAt && state.name === config.statuses.todo &&
       !["completed", "canceled"].includes(state.type))
     if (todo.length !== 1) throw new Error(`目标团队需要唯一的「${config.statuses.todo}」队列状态。`)
-    if (!await isCurrent(mapping)) return null
+    if (!await isCurrent(mapping, sourceProjectId)) return null
     if (!existing) {
       if (!await writeRecord(pending, record, { exclusive: true })) return null
       if (await readJsonFile(completed, null)) {

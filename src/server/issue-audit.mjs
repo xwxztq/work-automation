@@ -7,7 +7,7 @@ const wrapped = new WeakSet()
 const methods = {
   readIssue: "issue.read", getIssue: "issue.read", readProject: "project.read",
   listProjects: "project.list", listProjectIssues: "issue.list",
-  listNewProjectIssues: "issue.list", readOrganization: "workspace.read",
+  listNewProjectIssues: "issue.list", listNewWorkspaceIssues: "issue.list", readOrganization: "workspace.read",
   listArchiveCandidates: "issue.list", readArchiveState: "issue.archive.read", readArchiveHistory: "issue.history.read",
   listTeamWorkflowStates: "workflow.read", listProjectWorkflowStates: "workflow.read",
   listProjectsWorkflowStates: "workflow.read",

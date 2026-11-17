@@ -73,6 +73,7 @@ test("workspace API binds by organization, scopes project reads, and keeps setti
     },
     async listProjects() { return [{ id: key === primaryKey ? "source-one" : "target" }] },
     async readProject(id) {
+      assert.ok(id)
       assert.equal(key, id === "target" ? otherKey : primaryKey)
       return { id, name: id, teams: [{ id: "team", name: "Team" }] }
     },
@@ -101,7 +102,13 @@ test("workspace API binds by organization, scopes project reads, and keeps setti
       config = await request("linear/mappings", "POST", { sourceWorkspaceId: "default", sourceProjectId,
         targetProjectKey: "target", targetTeamId: "team" })
     }
-    assert.equal(config.linear.mappings.length, 2)
+    config = await request("linear/mappings", "POST", { sourceWorkspaceId: "default", sourceProjectId: null,
+      targetProjectKey: "target", targetTeamId: "team" })
+    assert.equal(config.linear.mappings.length, 3)
+    assert.equal(config.linear.mappings.at(-1).sourceProjectId, null)
+    await request("linear/mappings", "POST", { sourceWorkspaceId: "default", sourceProjectId: null,
+      targetProjectKey: "target", targetTeamId: "team" }, 400)
+    await request("linear/mappings", "POST", { sourceWorkspaceId: "default", targetProjectKey: "target", targetTeamId: "team" }, 400)
     assert.equal(config.statuses.todo, "Secondary Todo")
     config = await request("linear/workspaces/default", "PATCH", { activate: true })
     assert.equal(config.statuses.todo, "Todo")

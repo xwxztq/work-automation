@@ -11,7 +11,7 @@ import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import { createLinearWriteAdapter } from "./linear-write-adapter.mjs"
-import { activeWorkspaceId, linearWorkspaces, projectWorkspaceId, workspaceConfig } from "./linear-workspaces.mjs"
+import { activeWorkspaceId, hasSpecificMigrationMapping, linearWorkspaces, projectWorkspaceId, workspaceConfig } from "./linear-workspaces.mjs"
 import { migrateLinearIssues, readIssueMigration } from "./linear-migration.mjs"
 import { checkIssueScope, cancelOutOfScopeIssue } from "./issue-scope.mjs"
 import { autoArchiveProject } from "./issue-auto-archive.mjs"
@@ -224,13 +224,14 @@ export function createScheduler({
       const migrate = migrationQueue.then(() => migrationRunner({
         rootDir, config, projects, linear, store,
         sourceClient: (workspaceId) => auditIssueAdapter(linearProvider(workspaceConfig(allConfig, workspaceId)), store, { stage: "migration" }),
-        isCurrent: async (mapping) => {
+        isCurrent: async (mapping, sourceProjectId) => {
           const latest = await currentWorkspace(config)
           if (!latest) return false
           const source = linearWorkspaces(latest).find((item) => item.id === mapping.sourceWorkspaceId)
           const original = linearWorkspaces(allConfig).find((item) => item.id === mapping.sourceWorkspaceId)
           return Boolean(source?.mode === "migrated" && source.inactiveSince === original?.inactiveSince &&
             workspaceConfig(latest).statuses.todo === config.statuses.todo &&
+            !hasSpecificMigrationMapping(latest, mapping, sourceProjectId) &&
             latest.linear.mappings?.some((item) => item.id === mapping.id) &&
             latest.projects.some((project) => project.key === mapping.targetProjectKey && project.enabled))
         },

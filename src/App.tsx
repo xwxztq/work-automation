@@ -1549,8 +1549,9 @@ function Sidebar({
   onSwitchWorkspace: (id: string) => void
 }) {
   const projects = workspaceProjects(config)
+  const workspaceName = config.linear.workspaces.find((workspace) => workspace.id === config.linear.activeWorkspaceId)?.name
   return (
-    <aside className="flex max-h-[44svh] min-h-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-svh md:max-h-none md:border-r md:border-b-0">
+    <aside className="flex max-h-[44svh] min-h-0 min-w-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-svh md:max-h-none md:border-r md:border-b-0">
       <div className="flex shrink-0 items-center justify-between px-3 py-3 md:px-4 md:py-4">
         <button
           type="button"
@@ -1569,7 +1570,7 @@ function Sidebar({
             <div className="truncate text-xs text-muted-foreground">{config.serverId}</div>
           </div>
         </button>
-        <Button size="icon" variant="ghost" onClick={onNewProject} disabled={busy} aria-label="新建项目">
+        <Button size="icon" variant="ghost" className="shrink-0" onClick={onNewProject} disabled={busy} aria-label="新建项目">
           <Plus className="size-4" />
         </Button>
       </div>
@@ -1577,7 +1578,9 @@ function Sidebar({
       {config.linear.workspaces.length > 1 && (
         <div className="px-3 pb-3">
           <Select value={config.linear.activeWorkspaceId} onValueChange={onSwitchWorkspace} disabled={busy}>
-            <SelectTrigger className="w-full" aria-label="激活的 Linear 工作区"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full min-w-0" aria-label="激活的 Linear 工作区">
+              <SelectValue className="min-w-0"><span className="truncate" title={workspaceName}>{workspaceName}</span></SelectValue>
+            </SelectTrigger>
             <SelectContent>
               {config.linear.workspaces.map((workspace) => <SelectItem key={workspace.id} value={workspace.id}>{workspace.name}</SelectItem>)}
             </SelectContent>
@@ -1586,7 +1589,7 @@ function Sidebar({
       )}
       <Separator />
 
-      <ScrollArea className="min-h-0 flex-1">
+      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
         <div className="space-y-1 p-3">
           {projects.map((project) => (
             <ProjectNavItem
@@ -1605,11 +1608,11 @@ function Sidebar({
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       <Separator />
 
-      <div className="grid shrink-0 grid-cols-[1fr_auto_auto] gap-2 p-3 md:block md:space-y-3">
+      <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto_auto] gap-2 p-3 md:block md:space-y-3">
         <div className="rounded-lg border bg-background/70 px-3 py-2 md:py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -1627,7 +1630,7 @@ function Sidebar({
           <div className="mt-2 hidden text-xs text-muted-foreground md:block">
             下次扫描: {daemon?.nextRunAt ? formatDate(daemon.nextRunAt) : "-"}
           </div>
-          {daemon?.lastError && <div className="mt-2 text-xs text-destructive">错误: {daemon.lastError}</div>}
+          {daemon?.lastError && <div className="mt-2 text-xs wrap-anywhere text-destructive">错误: {daemon.lastError}</div>}
         </div>
         <Button
           variant={view === "logs" ? "secondary" : "ghost"}
@@ -1684,8 +1687,8 @@ function ProjectNavItem({
       <div className="flex items-center gap-2">
         <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{project.repoName || project.key}</div>
-          <div className="truncate font-mono text-xs text-muted-foreground">{project.key}</div>
+          <div className="truncate text-sm font-medium" title={project.repoName || project.key}>{project.repoName || project.key}</div>
+          <div className="truncate font-mono text-xs text-muted-foreground" title={project.key}>{project.key}</div>
         </div>
         <Switch
           checked={project.enabled}
@@ -1696,7 +1699,7 @@ function ProjectNavItem({
         <Button
           size="icon"
           variant="ghost"
-          className="size-8"
+          className="size-8 shrink-0"
           disabled={busy}
           onClick={(event) => {
             event.stopPropagation()

@@ -16,7 +16,7 @@ export type LinearWorkspace = { id: string; name: string; mode: LinearWorkspaceM
 
 export type LinearMappingInput = {
   sourceWorkspaceId: string
-  sourceProjectId: string
+  sourceProjectId: string | null
   targetProjectKey: string
   targetTeamId: string
 }

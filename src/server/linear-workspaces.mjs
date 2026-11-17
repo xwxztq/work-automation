@@ -8,6 +8,13 @@ export function projectWorkspaceId(project) {
   return project.workspaceId || DEFAULT_WORKSPACE_ID
 }
 
+export function hasSpecificMigrationMapping(config, fallback, sourceProjectId) {
+  const activeId = activeWorkspaceId(config)
+  return Boolean(sourceProjectId && config.linear?.mappings?.some((mapping) =>
+    mapping.sourceWorkspaceId === fallback.sourceWorkspaceId && mapping.sourceProjectId === sourceProjectId &&
+    (mapping.targetWorkspaceId || activeId) === (fallback.targetWorkspaceId || activeId)))
+}
+
 export function linearWorkspaces(config) {
   const linear = config.linear || {}
   return [{

@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { AppConfig, LinearProjectOption, LinearWorkspaceMode } from "@/shared/types"
 
 const MODES = ["isolated", "migrated"] as const
+const ALL_SOURCE_PROJECTS = "all-projects"
 
 export function WorkspaceSettings({ config, onSaved, busy }: {
   config: AppConfig
@@ -65,11 +66,11 @@ export function WorkspaceSettings({ config, onSaved, busy }: {
         {workspaces.length > 1 && (
           <div className="space-y-3 border-t pt-4">
             <h3 className="text-sm font-semibold">项目迁移映射</h3>
-            <p className="text-sm text-muted-foreground">多个来源项目可指向同一个 WA 项目。目标工作区激活且目标项目启用时，映射开始接收入队事项。</p>
+            <p className="text-sm text-muted-foreground">可将多个来源指向同一个 WA 项目。「所有项目」接收没有项目或没有专属映射的新事项。</p>
             {mappings.map((mapping) => (
               <div key={mapping.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
                 <span>
-                  {workspaces.find((workspace) => workspace.id === mapping.sourceWorkspaceId)?.name} / {mapping.sourceProjectName}
+                  {workspaces.find((workspace) => workspace.id === mapping.sourceWorkspaceId)?.name} / {mapping.sourceProjectId === null ? "所有项目（兜底）" : mapping.sourceProjectName}
                   {" → "}
                   {workspaces.find((workspace) => workspace.id === mapping.targetWorkspaceId)?.name} / {config.projects.find((project) => project.key === mapping.targetProjectKey)?.repoName} / {mapping.targetTeamName}
                 </span>
@@ -95,6 +96,8 @@ function MappingForm({ config, disabled, save }: {
   const [targetProjectKey, setTargetProjectKey] = useState("")
   const [targetTeamId, setTargetTeamId] = useState("")
   const sourceProjects = useWorkspaceProjects(sourceWorkspaceId)
+  const sourceOptions = [{ id: ALL_SOURCE_PROJECTS, name: "所有项目（兜底）" },
+    ...sourceProjects.map((project) => ({ id: project.id, name: project.displayName }))]
   const targets = config.projects.filter((project) => (project.workspaceId || "default") !== sourceWorkspaceId)
   const targetProject = targets.find((project) => project.key === targetProjectKey)
   const targetProjects = useWorkspaceProjects(targetProject ? targetProject.workspaceId || "default" : "")
@@ -104,14 +107,16 @@ function MappingForm({ config, disabled, save }: {
   return (
     <form className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_auto]" onSubmit={async (event) => {
       event.preventDefault()
-      if (await save(() => api.addLinearMapping({ sourceWorkspaceId, sourceProjectId, targetProjectKey, targetTeamId: teamId }))) {
+      if (await save(() => api.addLinearMapping({ sourceWorkspaceId,
+        sourceProjectId: sourceProjectId === ALL_SOURCE_PROJECTS ? null : sourceProjectId,
+        targetProjectKey, targetTeamId: teamId }))) {
         setSourceProjectId("")
       }
     }}>
       <MappingSelect label="来源工作区" value={sourceWorkspaceId} options={config.linear.workspaces} disabled={disabled}
         onChange={(id) => { setSourceWorkspaceId(id); setSourceProjectId(""); setTargetProjectKey(""); setTargetTeamId("") }} />
-      <MappingSelect label="来源 Linear 项目" value={sourceProjectId} disabled={disabled || !sourceProjects.length}
-        options={sourceProjects.map((project) => ({ id: project.id, name: project.displayName }))} onChange={setSourceProjectId} />
+      <MappingSelect label="来源 Linear 项目" value={sourceProjectId} disabled={disabled || !sourceWorkspaceId}
+        options={sourceOptions} onChange={setSourceProjectId} />
       <MappingSelect label="目标 WA 项目" value={targetProjectKey} disabled={disabled || !sourceWorkspaceId || !targets.length}
         options={targets.map((project) => ({ id: project.key, name: `${project.repoName} · ${config.linear.workspaces.find((workspace) => workspace.id === (project.workspaceId || "default"))?.name}` }))}
         onChange={(key) => { setTargetProjectKey(key); setTargetTeamId("") }} />
