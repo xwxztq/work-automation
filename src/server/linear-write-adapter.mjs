@@ -47,6 +47,18 @@ const CHILD_ISSUE_CREATE_MUTATION = `
   }
 `
 
+const MIGRATED_ISSUE_CREATE_MUTATION = `
+  mutation LinearWriteMigratedIssueCreate($input: IssueCreateInput!) {
+    issueCreate(input: $input) { success issue { id identifier url } }
+  }
+`
+
+const ISSUE_ARCHIVE_MUTATION = `
+  mutation LinearAutoArchiveIssue($id: String!) {
+    issueArchive(id: $id, trash: false) { success entity { id archivedAt } }
+  }
+`
+
 export const LINEAR_WRITE_SUPPORTED_OPERATIONS = Object.freeze([
   ISSUE_PLATFORM_OPERATION.CREATE_CHILD_ISSUE,
   ISSUE_PLATFORM_OPERATION.CREATE_COMMENT,
@@ -146,10 +158,26 @@ export function createLinearWriteAdapter(linearClient) {
     }
   }
 
+  async function createMigratedIssue(input) {
+    const data = await linearClient.graphql(MIGRATED_ISSUE_CREATE_MUTATION, { input })
+    if (!data?.issueCreate?.success || data.issueCreate.issue?.id !== input.id) {
+      throw new Error("Linear 未确认创建迁移事项。")
+    }
+    return data.issueCreate.issue
+  }
+
+  async function archiveIssue(issueId) {
+    const data = await linearClient.graphql(ISSUE_ARCHIVE_MUTATION, { id: requireValue(issueId, "$.target.issueId") })
+    if (!data?.issueArchive?.success) throw new Error("Linear 未确认归档事项。")
+    return data.issueArchive.entity
+  }
+
   return Object.freeze({
     platform: LINEAR_ISSUE_PLATFORM,
     supportedOperations: LINEAR_WRITE_SUPPORTED_OPERATIONS,
     createChildIssue,
+    createMigratedIssue,
+    archiveIssue,
     createComment,
     verifyCommentImages: (request) => verifyLinearCommentImages({ ...request, readImage: linearClient.readImage }),
     updateIssueState,

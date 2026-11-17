@@ -4,6 +4,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { readJsonFile, writeJsonFile } from "./config.mjs"
+import { formatNodeCommand } from "./windows-node-runtime.mjs"
 
 export const ISSUE_PROGRESS_CLIENT_PATH = fileURLToPath(new URL("./issue-progress-client.mjs", import.meta.url))
 const REQUEST_NAME = /^[0-9a-f-]{36}\.json$/u
@@ -25,8 +26,7 @@ export async function initializeIssueProgress(run, config) {
 
 export function issueProgressGuidance(run) {
   if (run.stage !== "superpower") return ""
-  const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`
-  return `\n运行中同步事项状态：开始分析或实现、检验后继续修改时调用 ${quote(process.execPath)} ${quote(ISSUE_PROGRESS_CLIENT_PATH)} ${quote(run.dir)} inProgress；进入检验时将末尾参数改为 testing。由主会话按顺序调用并等待回执；失败时说明原因，不声称已更新。此命令由服务写回，不需要平台凭据。\n`
+  return `\n运行中同步事项状态：开始分析或实现、检验后继续修改时调用 ${formatNodeCommand([ISSUE_PROGRESS_CLIENT_PATH, run.dir, "inProgress"])}；进入检验时将末尾参数改为 testing。由主会话按顺序调用并等待回执；失败时说明原因，不声称已更新。此命令由服务写回，不需要平台凭据。\n`
 }
 
 // The agent can write requests only. The service owns acknowledgements and the

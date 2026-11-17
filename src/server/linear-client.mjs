@@ -32,6 +32,14 @@ export function createLinearClient(apiKey) {
     return payload.data
   }
 
+  async function readOrganization() {
+    const data = await graphql(`query WorkAutomationOrganization { organization { id name } }`)
+    if (!data?.organization?.id || !data.organization.name) {
+      throw new Error("无法读取 Linear 工作区身份。")
+    }
+    return data.organization
+  }
+
   async function listProjects(first = 100) {
     const query = `
       query Projects($first: Int!, $after: String) {
@@ -78,6 +86,7 @@ export function createLinearClient(apiKey) {
           : project.name,
         url: project.url || null,
         teamNames,
+        teams: project.teams?.nodes || [],
       }
     })
     projects.sort((a, b) =>
@@ -124,6 +133,7 @@ export function createLinearClient(apiKey) {
   return {
     readImage: (url, maxBytes) => readLinearImage(url, apiKey, maxBytes),
     graphql,
+    readOrganization,
     listProjects,
     listProjectIssues,
     readProject,

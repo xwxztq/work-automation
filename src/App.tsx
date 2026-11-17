@@ -43,6 +43,7 @@ import {
   type BrowserNotificationTracker,
 } from "@/app/run-notifications"
 import { CodexActivityPanel } from "@/components/codex-activity/CodexActivityPanel"
+import { WorkspaceSettings } from "@/components/linear-workspace-settings"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -95,6 +96,7 @@ import type {
   CodexActivityPayload,
   DaemonStatus,
   ExecutionEvent,
+  GitBranchConfig,
   LinearProjectOption,
   LinearStatusHealthResult,
   LinearStatusProjectHealth,
@@ -110,6 +112,9 @@ import type {
 type View = "project" | "activity" | "logs" | "settings"
 type PersistedView = Extract<View, "project" | "activity">
 
+const defaultGitBranch: GitBranchConfig = { base: "", create: true, mode: "auto" }
+const defaultAutoArchive = { enabled: false, days: 7 }
+
 const emptyProject: ProjectConfig = {
   key: "",
   enabled: true,
@@ -119,6 +124,8 @@ const emptyProject: ProjectConfig = {
   codexCwd: "",
   branchOrScopePrefix: "",
   maxActivePart2: 1,
+  gitBranch: defaultGitBranch,
+  autoArchive: defaultAutoArchive,
   defaultTests: [],
   part1PromptMode: "global",
   splitPromptMode: "global",
@@ -221,6 +228,10 @@ function resolveSelectedProjectKey(projects: ProjectConfig[], preferredKeys: str
     }
   }
   return projects[0]?.key || ""
+}
+
+function workspaceProjects(config: AppConfig) {
+  return config.projects.filter((project) => (project.workspaceId || "default") === config.linear.activeWorkspaceId)
 }
 
 function emptyCodexActivity(): CodexActivityPayload {
@@ -380,11 +391,11 @@ function App() {
   }, [config?.serverId])
 
   const selectedProject = useMemo(
-    () => config?.projects.find((project) => project.key === selectedProjectKey) || null,
+    () => (config && workspaceProjects(config).find((project) => project.key === selectedProjectKey)) || null,
     [config, selectedProjectKey],
   )
   const activeProjectKeys = useMemo(
-    () => config?.projects.map((project) => project.key).filter(Boolean) || [],
+    () => config ? workspaceProjects(config).map((project) => project.key).filter(Boolean) : [],
     [config],
   )
   const projectRuns = useMemo(
@@ -539,7 +550,7 @@ function App() {
       api.getConfig(),
       api.getPrompts(),
     ])
-    const nextProjectKey = resolveSelectedProjectKey(nextConfig.projects, [
+    const nextProjectKey = resolveSelectedProjectKey(workspaceProjects(nextConfig), [
       selectedProjectKey,
       readPersistedSelectedProjectKey(),
     ])
@@ -593,11 +604,33 @@ function App() {
     }
   }
 
+  async function switchWorkspace(id: string) {
+    setBusy(true)
+    try {
+      const saved = await api.updateLinearWorkspace(id, { activate: true })
+      const nextProjectKey = resolveSelectedProjectKey(workspaceProjects(saved), [])
+      setConfig(saved)
+      selectProject(nextProjectKey)
+      setSelectedRun(null)
+      setManualIssue("")
+      setLinearStatusHealth(null)
+      setRuns([])
+      setRunTotalCount(0)
+      setView("project")
+      await refreshDashboardState(saved, nextProjectKey)
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function openNewProject() {
     if (!config) return
     setEditingProjectKey(null)
     setDraftProject({
       ...emptyProject,
+      workspaceId: config.linear.activeWorkspaceId,
       key: generateProjectKey(config.projects.map((project) => project.key)),
       branchOrScopePrefix: "main",
     })
@@ -655,7 +688,7 @@ function App() {
     const projects = config.projects.filter((project) => project.key !== key)
     const saved = await saveConfig({ ...config, projects })
     if (!saved) return
-    const nextProjectKey = resolveSelectedProjectKey(projects, [selectedProjectKey === key ? "" : selectedProjectKey])
+    const nextProjectKey = resolveSelectedProjectKey(workspaceProjects(saved), [selectedProjectKey === key ? "" : selectedProjectKey])
     selectProject(nextProjectKey)
     void refreshRuns(true, nextProjectKey)
     setSelectedRun(null)
@@ -733,6 +766,10 @@ function App() {
   }
 
   function retryRun(run: RunDetail | RunSummary) {
+    if (config && (run.workspaceId || "default") !== config.linear.activeWorkspaceId) {
+      toast.error("请切换到该运行所属的 Linear 工作区后重试")
+      return
+    }
     const issueId = run.issueIdentifier?.trim()
     if (!issueId) {
       toast.error("当前运行记录缺少 issue 标识，无法重试")
@@ -1088,6 +1125,7 @@ function App() {
           onActivity={openGlobalActivity}
           onLogs={openLogs}
           onSettings={() => setView("settings")}
+          onSwitchWorkspace={(id) => void switchWorkspace(id)}
         />
 
         <section className="flex min-h-0 min-w-0 flex-col overflow-x-hidden px-3 py-3 sm:px-5 sm:py-4">
@@ -1178,6 +1216,7 @@ function App() {
                 promptStage={promptStage}
                 promptText={promptText}
                 setConfig={setConfig}
+                onWorkspaceSaved={(saved) => setConfig((current) => current ? { ...current, linear: saved.linear } : saved)}
                 saveConfig={() => void saveConfig(config)}
                 notificationPermission={notificationPermission}
                 requestNotificationPermission={() => void requestNotificationPermission()}
@@ -1492,6 +1531,7 @@ function Sidebar({
   onActivity,
   onLogs,
   onSettings,
+  onSwitchWorkspace,
 }: {
   config: AppConfig
   daemon: DaemonStatus | null
@@ -1506,7 +1546,9 @@ function Sidebar({
   onActivity: () => void
   onLogs: () => void
   onSettings: () => void
+  onSwitchWorkspace: (id: string) => void
 }) {
+  const projects = workspaceProjects(config)
   return (
     <aside className="flex max-h-[44svh] min-h-0 flex-col border-b bg-sidebar text-sidebar-foreground md:h-svh md:max-h-none md:border-r md:border-b-0">
       <div className="flex shrink-0 items-center justify-between px-3 py-3 md:px-4 md:py-4">
@@ -1532,11 +1574,21 @@ function Sidebar({
         </Button>
       </div>
 
+      {config.linear.workspaces.length > 1 && (
+        <div className="px-3 pb-3">
+          <Select value={config.linear.activeWorkspaceId} onValueChange={onSwitchWorkspace} disabled={busy}>
+            <SelectTrigger className="w-full" aria-label="激活的 Linear 工作区"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {config.linear.workspaces.map((workspace) => <SelectItem key={workspace.id} value={workspace.id}>{workspace.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <Separator />
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1 p-3">
-          {config.projects.map((project) => (
+          {projects.map((project) => (
             <ProjectNavItem
               key={project.key}
               project={project}
@@ -1547,7 +1599,7 @@ function Sidebar({
               onToggle={(enabled) => onToggleProject(project, enabled)}
             />
           ))}
-          {config.projects.length === 0 && (
+          {projects.length === 0 && (
             <div className="rounded-lg border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">
               尚未配置项目
             </div>
@@ -1588,6 +1640,7 @@ function Sidebar({
         <Button
           variant={view === "settings" ? "secondary" : "ghost"}
           className="h-full justify-center md:h-auto md:w-full md:justify-start"
+          aria-label="设置"
           onClick={onSettings}
         >
           <Settings className="size-4" />
@@ -2233,6 +2286,11 @@ function RunDetailPanel({
               <InfoItem label="退出码" value={selectedRun.exitCode == null ? "-" : String(selectedRun.exitCode)} />
               <InfoItem label="Codex PID" value={selectedRun.codexPid == null ? "-" : String(selectedRun.codexPid)} />
               <InfoItem label="更新时间" value={formatDate(selectedRun.updatedAt)} />
+              {selectedRun.cancelReason && <InfoItem label="取消原因" value={selectedRun.cancelReason} wide />}
+              {selectedRun.gitBranch && <>
+                <InfoItem label="Git 工作分支" value={selectedRun.gitBranch.branch} />
+                <InfoItem label="Git 基线" value={selectedRun.gitBranch.base} />
+              </>}
             </div>
             {failureSummary && (
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -2492,6 +2550,8 @@ function ProjectEditor({
   validationMessage?: string | null
   onRemove?: () => void
 }) {
+  const archive = project.autoArchive || defaultAutoArchive
+  const git = project.gitBranch || defaultGitBranch
   const [linearProjectPickerOpen, setLinearProjectPickerOpen] = useState(false)
   const [linearProjectFilter, setLinearProjectFilter] = useState("")
   const [linearProjectOptions, setLinearProjectOptions] = useState<LinearProjectOption[]>([])
@@ -2508,14 +2568,14 @@ function ProjectEditor({
     setLinearProjectLoading(true)
     setLinearProjectError(null)
     try {
-      const response = await api.listLinearProjects()
+      const response = await api.listLinearProjects(project.workspaceId || "default")
       setLinearProjectOptions(response.projects)
     } catch (error) {
       setLinearProjectError(errorMessage(error))
     } finally {
       setLinearProjectLoading(false)
     }
-  }, [])
+  }, [project.workspaceId])
 
   useEffect(() => {
     if (!open) {
@@ -2726,6 +2786,51 @@ function ProjectEditor({
                 onChange={(event) => handleRepoNameChange(event.target.value)}
               />
             </Field>
+            <Field label="事项筛选范围" className="sm:col-span-2"
+              description="用自然语言说明项目负责和排除的事项。明确超出范围的事项会在执行前转为 Canceled。留空关闭筛选。">
+              <Textarea aria-label="事项筛选范围" maxLength={4000} value={project.issueScope || ""}
+                placeholder="例如，只处理支付和订阅相关的事项。排除账号登录、课程内容和品牌设计。"
+                onChange={(event) => onUpdate({ issueScope: event.target.value })} />
+            </Field>
+            <div className="space-y-3 rounded-lg border p-3 sm:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="project-auto-archive">自动归档</Label>
+                <Switch id="project-auto-archive" checked={archive.enabled}
+                  onCheckedChange={(enabled) => onUpdate({ autoArchive: { ...archive, enabled } })} />
+              </div>
+              <Field label="归档阈值（天）" description="事项连续处于同一个 Done 或 Canceled 状态满指定天数后归档。">
+                <Input aria-label="归档阈值（天）" type="number" min={1} step={1} disabled={!archive.enabled}
+                  value={archive.days} onChange={(event) => onUpdate({ autoArchive: { ...archive, days: Number(event.target.value) } })} />
+              </Field>
+            </div>
+            <div className="space-y-3 rounded-lg border p-3 sm:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium">Git 分支行为</span>
+                {!project.gitBranch && <Button size="sm" variant="outline" onClick={() => onUpdate({ gitBranch: defaultGitBranch })}>采用默认分支设置</Button>}
+              </div>
+              <Field label="默认基线分支" description="留空时保存仓库当前签出的分支。">
+                <Input aria-label="默认基线分支" value={git.base} placeholder="保存时记录当前分支"
+                  onChange={(event) => onUpdate({ gitBranch: { ...git, base: event.target.value } })} />
+              </Field>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="project-create-git-branch">创建新分支</Label>
+                <Switch id="project-create-git-branch" checked={git.create}
+                  onCheckedChange={(create) => onUpdate({ gitBranch: { ...git, create } })} />
+              </div>
+              <Field label="事项之间的分支关系" description={git.create
+                ? "自动判断会根据父子事项或阻塞关系沿用已有分支。"
+                : "实现和提交直接使用本地基线分支。"}>
+                <Select value={git.mode} disabled={!git.create}
+                  onValueChange={(mode) => onUpdate({ gitBranch: { ...git, mode: mode as GitBranchConfig["mode"] } })}>
+                  <SelectTrigger aria-label="事项之间的分支关系" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">自动判断</SelectItem>
+                    <SelectItem value="independent">独立</SelectItem>
+                    <SelectItem value="continuous">连续</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
           </div>
 
           <button
@@ -2968,6 +3073,7 @@ function SettingsPage({
   promptStage,
   promptText,
   setConfig,
+  onWorkspaceSaved,
   saveConfig,
   notificationPermission,
   requestNotificationPermission,
@@ -2986,6 +3092,7 @@ function SettingsPage({
   promptStage: PromptStage
   promptText: string
   setConfig: (config: AppConfig) => void
+  onWorkspaceSaved: (config: AppConfig) => void
   saveConfig: () => void
   notificationPermission: NotificationPermission | "unsupported"
   requestNotificationPermission: () => void
@@ -2999,6 +3106,7 @@ function SettingsPage({
 }) {
   return (
     <div className="space-y-4">
+      <WorkspaceSettings config={config} busy={busy} onSaved={onWorkspaceSaved} />
       <div className="grid grid-cols-2 gap-4">
         <Card>
           <CardHeader>
@@ -3047,7 +3155,7 @@ function SettingsPage({
             <CardTitle>Linear 与 Codex</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Field label="Linear API 密钥环境变量" description="这里只填写环境变量名；密钥值只放在启动服务的进程环境中。">
+            <Field label="默认工作区的 API 密钥环境变量" description="填写默认工作区所用的环境变量名。">
               <Input
                 value={config.linear.apiKeyEnv}
                 onChange={(event) =>
@@ -3194,7 +3302,7 @@ function SettingsPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Linear 状态</CardTitle>
+          <CardTitle>Linear 状态 · {config.linear.workspaces.find((workspace) => workspace.id === config.linear.activeWorkspaceId)?.name}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
@@ -3434,6 +3542,7 @@ function stageLabel(stage: string) {
   if (stage === "part3") return "阶段三"
   if (stage === "superpower") return "Superpower"
   if (stage === "both") return "全部"
+  if (stage === "archive") return "自动归档"
   return stage
 }
 

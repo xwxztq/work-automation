@@ -44,7 +44,29 @@ test("known Codex locations include the ChatGPT app and user CLI directories on 
     homeDir: "/Users/example",
   })
 
-  assert.ok(candidates.includes("/Applications/ChatGPT.app/Contents/Resources/codex"))
-  assert.ok(candidates.includes("/Users/example/.local/bin/codex"))
-  assert.ok(candidates.includes("/Users/example/.bun/bin/codex"))
+  assert.ok(candidates.includes(path.normalize("/Applications/ChatGPT.app/Contents/Resources/codex")))
+  assert.ok(candidates.includes(path.normalize("/Users/example/.local/bin/codex")))
+  assert.ok(candidates.includes(path.normalize("/Users/example/.bun/bin/codex")))
+})
+
+test("a running service rediscovers desktop Codex after its pinned version is removed", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wa-codex-upgrade-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, "OpenAI", "Codex", "bin")
+  const old = path.join(bin, "aaa111", "codex.exe")
+  const next = path.join(bin, "bbb222", "codex.exe")
+  const options = { platform: "win32", env: { LOCALAPPDATA: root }, path: "", candidates: [] }
+  for (const file of [old, next]) {
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, "fixture")
+    await fs.chmod(file, 0o755)
+  }
+  await fs.mkdir(path.join(bin, "ccc333"))
+  assert.equal(await resolveCodexExecutable(old, options), old)
+  await fs.rm(old)
+  assert.equal(await resolveCodexExecutable(old, options), next)
+  assert.equal(await resolveCodexExecutable("codex", options), next)
+  assert.equal(await resolveCodexExecutable(old, { ...options, fallbackKnownLocations: false }), null)
+  await fs.rm(next)
+  assert.equal(await resolveCodexExecutable(old, options), null)
 })

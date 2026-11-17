@@ -7,6 +7,7 @@ import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { createAgentResultContext } from "./agent-result-runtime.mjs"
+import { buildWindowsNodeOptions } from "./windows-node-runtime.mjs"
 
 const supervisorPath = fileURLToPath(new URL("./codex-supervisor.mjs", import.meta.url))
 const sandboxTargetPath = fileURLToPath(
@@ -53,12 +54,14 @@ test("validates a fake Codex result, filters its environment, and preserves run 
   assert.equal(capture.env.CODEX_HOME, fixture.innerCodexHome)
   assert.equal(capture.env.HOME, fixture.sandboxUserHome)
   assert.equal(capture.env.TMPDIR, fixture.sandboxTempDir)
-  assert.equal(capture.env.GIT_CONFIG_GLOBAL, os.devNull)
+  assert.equal(capture.env.GIT_CONFIG_GLOBAL, path.join(fixture.sandboxUserHome, ".gitconfig"))
+  assert.equal(capture.env.NODE_OPTIONS, buildWindowsNodeOptions())
   assert.equal(capture.authPresent, true)
   assert.equal(capture.env.LINEAR_API_KEY, undefined)
   assert.equal(capture.env.MCP_LINEAR_TOKEN, undefined)
   assert.equal(capture.env.WORK_ISSUE_TOKEN, undefined)
   assert.equal(capture.env.UNAUTHORIZED_SECRET, undefined)
+  assert.equal(capture.env.SSH_AUTH_SOCK, undefined)
   assert.deepEqual(run.reviewCleanup.removedEntries, ["_work"])
   await assert.rejects(fs.lstat(path.join(reviewDir, "_work")), { code: "ENOENT" })
   assert.equal(await fs.readFile(path.join(reviewDir, "summary.md"), "utf8"), "keep")
@@ -111,6 +114,19 @@ test("fails closed when Codex exits zero with an invalid structured result", asy
     await fs.readFile(fixture.finalPath, "utf8"),
     /FINAL_RESULT_SENTINEL/u,
   )
+})
+
+test("keeps classifier output separate from executable agent results", async (t) => {
+  const decision = { decision: "out-of-scope" }
+  const fixture = await createSupervisorFixture({ finalTransform: () => decision })
+  t.after(() => cleanupFixture(fixture))
+  const input = JSON.parse(await fs.readFile(fixture.inputPath, "utf8"))
+  await fs.writeFile(fixture.inputPath, JSON.stringify({ ...input, outputOnly: true, agentResultContext: null }))
+  assert.equal(await runSupervisor(fixture.inputPath, { ...process.env, CODEX_HOME: fixture.sourceCodexHome }), 0)
+  const run = JSON.parse(await fs.readFile(fixture.metadataPath, "utf8"))
+  assert.equal(run.status, "succeeded")
+  assert.equal(run.agentResult, undefined)
+  assert.deepEqual(JSON.parse(await fs.readFile(fixture.finalPath, "utf8")), decision)
 })
 
 async function createSupervisorFixture(options = {}) {
@@ -210,8 +226,9 @@ child.once("close", (code, signal) => {
   await fs.writeFile(
     inputPath,
     JSON.stringify({
-      codexBin: fakeCodexPath,
+      codexBin: process.execPath,
       args: [
+        fakeCodexPath,
         "exec",
         "--ignore-user-config",
         "--output-last-message",
@@ -220,8 +237,8 @@ child.once("close", (code, signal) => {
         resultSchemaPath,
         "-",
       ],
-      launchBin: fakeLauncherPath,
-      launchArgs: [process.execPath, sandboxTargetPath, inputPath],
+      launchBin: process.execPath,
+      launchArgs: [fakeLauncherPath, process.execPath, sandboxTargetPath, inputPath],
       cwd: runDir,
       promptPath,
       stdoutPath,
@@ -235,6 +252,7 @@ child.once("close", (code, signal) => {
       innerCodexHome,
       sandboxUserHome,
       sandboxTempDir,
+      nodeOptions: buildWindowsNodeOptions(),
     }),
   )
 

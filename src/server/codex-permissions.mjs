@@ -211,9 +211,15 @@ export function buildCodexSandboxArgs({
   cwd,
   targetBin,
   targetArgs = [],
+  platform = process.platform,
 }) {
   return [
     "sandbox",
+    // Each run has a fresh CODEX_HOME, so user-level backend selection is absent.
+    // Restricted read profiles need MXC or the elevated legacy backend.
+    ...(platform === "win32"
+      ? ["-c", "features.prefer_mxc=true", "-c", 'windows.sandbox="elevated"']
+      : []),
     "-C",
     cwd,
     "-P",
@@ -223,6 +229,22 @@ export function buildCodexSandboxArgs({
     targetBin,
     ...targetArgs,
   ]
+}
+
+export async function prepareCodexSandboxOutputs({
+  stage,
+  runDir,
+  finalPath,
+  platform = process.platform,
+}) {
+  if (platform !== "win32") return
+  // Windows needs an existing file for a file-scoped write grant under a
+  // read-only parent. Append mode creates it without truncating prior output.
+  const handle = await fs.open(finalPath, "a")
+  await handle.close()
+  if (stage === "superpower") {
+    await fs.mkdir(path.join(runDir, "progress", "requests"), { recursive: true })
+  }
 }
 
 function buildRunRules({ stage, runDir, finalPath }) {

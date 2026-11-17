@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import fs from "node:fs/promises"
 import { resolveExecutionStage, superpowerEligibleStatuses } from "./execution-mode.mjs"
 import { createIssueProgressSession, initializeIssueProgress, issueProgressGuidance } from "./issue-progress.mjs"
 import {
@@ -10,6 +11,12 @@ import { runCodex } from "./codex-runner.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import { createLinearReadAdapter } from "./linear-read-adapter.mjs"
 import { createLinearWriteAdapter } from "./linear-write-adapter.mjs"
+import { activeWorkspaceId, linearWorkspaces, projectWorkspaceId, workspaceConfig } from "./linear-workspaces.mjs"
+import { migrateLinearIssues, readIssueMigration } from "./linear-migration.mjs"
+import { checkIssueScope, cancelOutOfScopeIssue } from "./issue-scope.mjs"
+import { autoArchiveProject } from "./issue-auto-archive.mjs"
+import { GIT_CHECKOUT_REFUSED, planGitBranch, readGitCheckout } from "./git-branch.mjs"
+import { resolveFromRoot } from "./config.mjs"
 import { auditIssueAdapter, bindIssueAuditRun, failureCategory, recordIssueAudit, withIssueAuditContext } from "./issue-audit.mjs"
 import { createIssueOperationExecutor } from "./issue-operation-executor.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
@@ -40,6 +47,8 @@ export function createScheduler({
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
   linearProvider = getLinear,
   codexRunner = runCodex,
+  issueScopeChecker = checkIssueScope,
+  migrationRunner = migrateLinearIssues,
 }) {
   let timer = null
   let enabled = false
@@ -51,6 +60,16 @@ export function createScheduler({
   const activeRunsById = new Map()
   const activeProjectCycles = new Set()
   const progressSessions = new Map()
+  const archivingIssues = new Set()
+  const archiveProjects = new Set()
+  let migrationQueue = Promise.resolve()
+
+  async function currentWorkspace(config) {
+    const latest = await configProvider()
+    if (activeWorkspaceId(latest) !== activeWorkspaceId(config) ||
+      latest.linear?.workspaceActivatedAt !== config.linear?.workspaceActivatedAt) return null
+    return latest
+  }
 
   async function logEvent(event) {
     await store.appendEvent(event).catch(() => {})
@@ -130,7 +149,11 @@ export function createScheduler({
   }
 
   async function runOnce(stage = "both", options = {}) {
-    const config = await configProvider()
+    const allConfig = await configProvider()
+    if (options.workspaceId && options.workspaceId !== activeWorkspaceId(allConfig)) {
+      throw new Error("激活的 Linear 工作区已切换，请在目标工作区重新发起任务。")
+    }
+    const config = workspaceConfig(allConfig)
     await resumeProgress()
     stage = resolveExecutionStage(config, stage)
     const linear = auditIssueAdapter(linearProvider(config), store, { stage, projectKey: options.projectKey, projects: config.projects })
@@ -155,6 +178,26 @@ export function createScheduler({
       },
     })
 
+    if (!options.issueId && linear) {
+      await Promise.all(projects.filter((project) => project.autoArchive?.enabled).map(async (project) => {
+        if (archiveProjects.has(project.linearProjectId)) return
+        archiveProjects.add(project.linearProjectId)
+        try {
+          const isCurrent = async () => (await currentWorkspace(config))?.projects.some((item) =>
+            item.key === project.key && item.enabled && item.linearProjectId === project.linearProjectId &&
+            item.autoArchive?.enabled && item.autoArchive.days === project.autoArchive.days)
+          if (!await isCurrent()) return
+          await autoArchiveProject({ project, linear, store, logEvent, archiving: archivingIssues, isCurrent,
+            isBusy: async (id) => activeLocalRuns().some((run) => run.issue?.id === id) ||
+              (await persistedRunningRuns()).some((run) => run.issueId === id) })
+        } catch (error) {
+          await logEvent({ type: "project-auto-archive-error", level: "error", stage: "archive", projectKey: project.key, message: error.message })
+        } finally {
+          archiveProjects.delete(project.linearProjectId)
+        }
+      }))
+    }
+
     const healthConfig = stage === "superpower" ? { ...config, executionMode: "superpower" } : config
     const linearStatusHealth = await linearStatusHealthChecker.check(healthConfig, { linear })
     if (linearStatusHealthIsBlocking(linearStatusHealth)) {
@@ -177,12 +220,33 @@ export function createScheduler({
       return summary
     }
 
+    if (!options.issueId && config.linear.mappings?.length) {
+      const migrate = migrationQueue.then(() => migrationRunner({
+        rootDir, config, projects, linear, store,
+        sourceClient: (workspaceId) => auditIssueAdapter(linearProvider(workspaceConfig(allConfig, workspaceId)), store, { stage: "migration" }),
+        isCurrent: async (mapping) => {
+          const latest = await currentWorkspace(config)
+          if (!latest) return false
+          const source = linearWorkspaces(latest).find((item) => item.id === mapping.sourceWorkspaceId)
+          const original = linearWorkspaces(allConfig).find((item) => item.id === mapping.sourceWorkspaceId)
+          return Boolean(source?.mode === "migrated" && source.inactiveSince === original?.inactiveSince &&
+            workspaceConfig(latest).statuses.todo === config.statuses.todo &&
+            latest.linear.mappings?.some((item) => item.id === mapping.id) &&
+            latest.projects.some((project) => project.key === mapping.targetProjectKey && project.enabled))
+        },
+      }))
+      migrationQueue = migrate.catch(() => {})
+      await migrate
+    }
+
+    if (!await currentWorkspace(config)) return { ...summary, finishedAt: new Date().toISOString() }
     await recoverPendingOperationRuns({
       config,
       linear,
       projectKeys: new Set(projects.map((project) => project.key)),
     })
 
+    if (!await currentWorkspace(config)) return { ...summary, finishedAt: new Date().toISOString() }
     summary.projects = await Promise.all(
       projects.map((project) =>
         runProjectCycle({ config, project, linear, stage, issueId: options.issueId, force: Boolean(options.force) }).catch(async (error) => {
@@ -255,11 +319,13 @@ export function createScheduler({
     const runs = await store.listRuns(Number.MAX_SAFE_INTEGER)
     const pending = runs
       .filter((run) =>
-        operationExecutionIsUnfinished(run) && projectKeys.has(run.projectKey)
+        operationExecutionIsUnfinished(run) && projectKeys.has(run.projectKey) &&
+        projectWorkspaceId(run) === activeWorkspaceId(config)
       )
       .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))
 
     for (const candidate of pending) {
+      if (!await currentWorkspace(config)) return
       if (
         activeRunsById.has(candidate.id) ||
         isRunAlive(candidate) ||
@@ -740,6 +806,7 @@ export function createScheduler({
     issueRef,
     signal,
   }) {
+    if (!await currentWorkspace(config)) return null
     const issueIdentifier = issueRef.identifier || issueRef.id
     if (signal.aborted) {
       await logEvent({
@@ -842,6 +909,7 @@ export function createScheduler({
     })
 
     for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
+      if (!await currentWorkspace(config)) break
       if (signal.aborted) {
         await logEvent({
           type: `${stage}-aborted`,
@@ -930,6 +998,7 @@ export function createScheduler({
     })
 
     for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
+      if (!await currentWorkspace(config)) break
       if (signal.aborted) {
         await logEvent({
           type: "split-aborted",
@@ -999,6 +1068,7 @@ export function createScheduler({
     })
 
     for (const issueRef of candidates.sort(comparePart2ScheduleOrder)) {
+      if (!await currentWorkspace(config)) break
       if (signal.aborted) {
         await logEvent({
           type: "part3-aborted",
@@ -1183,7 +1253,7 @@ export function createScheduler({
   }
 
   async function recordProcessedIssue({ linear, project, issue, stage, run }) {
-    if (!run?.id || run.status === "already-running" || run.status === "canceled") {
+    if (!run?.id || run.status === "already-running" || run.status === "canceled" || run.issueScopeCheck === "failed") {
       return run
     }
     if (
@@ -1292,10 +1362,17 @@ export function createScheduler({
       run.status === "running" && !progressSessions.has(run.id) && isRunAlive(run))
     if (!runs.length) return
     const config = await configProvider()
-    const linear = auditIssueAdapter(linearProvider(config), store, { stage: "superpower", projects: config.projects })
+    const clients = new Map()
     for (const run of runs) {
-      const project = config.projects.find((item) => item.key === run.projectKey)
-      if (project) progressSession({ config, project, linear, run }).start()
+      const workspaceId = projectWorkspaceId(run)
+      const project = config.projects.find((item) => item.key === run.projectKey && projectWorkspaceId(item) === workspaceId)
+      if (!project) continue
+      const boundConfig = workspaceConfig(config, workspaceId)
+      if (!clients.has(workspaceId)) {
+        clients.set(workspaceId, auditIssueAdapter(linearProvider(boundConfig), store, { stage: "superpower", projects: boundConfig.projects }))
+      }
+      const linear = clients.get(workspaceId)
+      if (linear) progressSession({ config: boundConfig, project, linear, run }).start()
     }
   }
 
@@ -1354,6 +1431,20 @@ export function createScheduler({
     signal,
     enforceLocalPart2Limit = false,
   }) {
+    const latestConfig = await currentWorkspace(config)
+    if (!latestConfig) return { status: "skipped-workspace-changed" }
+    const latestProject = latestConfig.projects.find((item) => item.key === project.key)
+    if (!latestProject?.enabled || latestProject.linearProjectId !== project.linearProjectId) return { status: "skipped-project-changed" }
+    project = latestProject
+    if (latestConfig.linear?.workspaces?.length) {
+      const workspace = linearWorkspaces(latestConfig).find((item) => item.id === projectWorkspaceId(project))
+      const migration = await readIssueMigration(rootDir, workspace, issue.id)
+      if (migration) {
+        await logEvent({ type: "issue-skip-migrated-source", stage, projectKey: project.key, issueIdentifier: issue.identifier,
+          message: migration.identifier ? `来源事项已迁移至 ${migration.identifier}` : "来源事项的跨工作区迁移正在核对" })
+        return { status: "skipped-migrated-source" }
+      }
+    }
     const key = `${project.key}:${stage}:${issue.identifier}`
     if (hasConflictingActiveRun(project.key, stage, issue)) {
       await logEvent({
@@ -1402,8 +1493,18 @@ export function createScheduler({
       return { status: "skipped-active-limit" }
     }
 
+    const gitRepository = project.gitBranch ? await fs.realpath(resolveFromRoot(rootDir, project.path)) : null
+    if (gitRepository && (await persistedRunningRuns()).some((run) => run.gitCheckoutRepository === gitRepository &&
+      (isRunAlive(run) || isWithinStartupGrace(run)))) {
+      return { status: "skipped-git-checkout-busy" }
+    }
+
     // Recheck in-memory reservations after the asynchronous reads, with no await
     // between this check and registering the run below.
+    if (archivingIssues.has(issue.id)) return { status: "skipped-archiving" }
+    if (gitRepository && activeLocalRuns().some((active) => active.gitCheckoutRepository === gitRepository)) {
+      return { status: "skipped-git-checkout-busy" }
+    }
     if (hasConflictingActiveRun(project.key, stage, issue)) {
       return { status: "already-running" }
     }
@@ -1424,6 +1525,7 @@ export function createScheduler({
     const active = {
       runId: null,
       projectKey: project.key,
+      gitCheckoutRepository: gitRepository,
       stage,
       issue: {
         id: issue.id,
@@ -1439,9 +1541,11 @@ export function createScheduler({
     activeRunsByKey.set(key, active)
 
     let run = null
+    let checkingScope = Boolean(project.issueScope?.trim())
     try {
-      run = await store.createRun({ projectKey: project.key, stage, issue })
+      run = await store.createRun({ projectKey: project.key, stage, issue, workspaceId: projectWorkspaceId(project) })
       run = await store.updateRun(run, {
+        ...(gitRepository ? { gitCheckoutRepository: gitRepository } : {}),
         agentResultContext: createAgentResultContext({
           stage,
           projectKey: project.key,
@@ -1467,6 +1571,49 @@ export function createScheduler({
         return run
       }
 
+      if (checkingScope) {
+        const scope = await issueScopeChecker({ config, project, run, issue, runtimeRoot: rootDir,
+          store, signal: runController.signal })
+        if (runController.signal.aborted) return markRunCanceled(run, runController.signal)
+        const current = await currentWorkspace(config)
+        const currentProject = current?.projects.find((item) => item.key === project.key)
+        const freshIssue = currentProject?.enabled && currentProject.issueScope === project.issueScope &&
+          currentProject.linearProjectId === project.linearProjectId ? await readCompleteIssue(linear, issue.id) : null
+        if (!freshIssue || freshIssue.project?.id !== project.linearProjectId ||
+          freshIssue.state?.id !== issue.state?.id || freshIssue.updatedAt !== issue.updatedAt ||
+          freshIssue.title !== issue.title || freshIssue.description !== issue.description) {
+          return markRunCanceled(run, runController.signal, { cancelReason: "筛选期间事项或项目配置发生变化，将在后续扫描重新判断。" })
+        }
+        if (scope === "out-of-scope") {
+          const state = await cancelOutOfScopeIssue({ linear, issue: freshIssue, store,
+            isCurrent: async () => {
+              const latest = await currentWorkspace(config)
+              return !runController.signal.aborted && latest?.projects.some((item) => item.key === project.key &&
+                item.enabled && item.issueScope === project.issueScope && item.linearProjectId === project.linearProjectId)
+            } })
+          const reason = state ? `事项超出项目范围，已移至 ${state.name}。` : "事项或工作区已变化，将在后续扫描重新判断。"
+          run = await markRunCanceled(run, runController.signal, { cancelReason: reason })
+          await logEvent({ type: state ? "issue-scope-canceled" : "issue-scope-stale", stage, projectKey: project.key,
+            issueIdentifier: issue.identifier, runId: run.id, message: reason })
+          return run
+        }
+        if (!["in-scope", "uncertain"].includes(scope)) throw new Error("事项范围筛选结果无效。")
+        checkingScope = false
+      }
+
+      if (!await currentWorkspace(config)) {
+        return markRunCanceled(run, runController.signal, { cancelReason: "激活的工作区已切换。" })
+      }
+      let gitCheckout = null
+      if (gitRepository && ["part2", "superpower"].includes(stage)) {
+        if (!project.gitBranch.base) throw new Error("请在项目设置保存 Git 基线分支。")
+        const checkout = await readGitCheckout(gitRepository)
+        if (checkout.repository !== gitRepository) throw new Error("启用分支管理时，仓库路径需指向 Git 工作树根目录。")
+        const runs = await store.listRuns(Number.MAX_SAFE_INTEGER, { projectKey: project.key })
+        const gitBranch = planGitBranch({ checkout, project, issue, runs })
+        gitCheckout = { ...gitBranch, gitBin: checkout.gitBin }
+        run = await store.updateRun(run, { gitBranch })
+      }
       if (stage === "superpower") {
         await initializeIssueProgress(run, config)
         progressSession({ config, project, linear, run, signal: runController.signal }).start()
@@ -1479,6 +1626,7 @@ export function createScheduler({
         run,
         runtimeRoot: rootDir,
         prompt,
+        gitCheckout,
         store,
         signal: runController.signal,
         onChild: (processInfo) => {
@@ -1516,7 +1664,8 @@ export function createScheduler({
       const agentSucceeded =
         codexResult.status === "succeeded" &&
         codexResult.agentResultValidation?.ok === true
-      const startupError = codexResult.started
+      const gitCheckoutRefused = Boolean(gitCheckout && codexResult.exitCode === GIT_CHECKOUT_REFUSED)
+      const startupError = gitCheckoutRefused ? "Git 分支准备未完成。请查看 stderr 中的原因，后续扫描会重试。" : codexResult.started
         ? null
         : codexResult.startError || `Codex 子进程未成功启动（退出码 ${codexResult.exitCode}）`
       const fallbackError =
@@ -1530,7 +1679,7 @@ export function createScheduler({
         pid: active.pid,
         supervisorPid: active.supervisorPid,
         codexPid: active.codexPid,
-        codexStarted: codexResult.started,
+        codexStarted: gitCheckoutRefused ? false : codexResult.started,
         startupError,
         agentResult: codexResult.agentResult,
         agentResultValidation: codexResult.agentResultValidation,
@@ -1626,11 +1775,14 @@ export function createScheduler({
         supervisorPid: active.supervisorPid,
         codexPid: active.codexPid,
         codexStarted,
-        startupError: codexStarted ? null : errorMessage,
+        startupError: codexStarted || checkingScope ? null : errorMessage,
         error: errorMessage,
+        ...(checkingScope ? { issueScopeCheck: "failed", operationExecution: {
+          ...run.operationExecution, status: "not-executable", safeTerminal: true,
+        } } : {}),
       })
       await logEvent({
-        type: "run-error",
+        type: checkingScope ? "issue-scope-error" : "run-error",
         level: "error",
         stage,
         projectKey: project.key,
@@ -1643,6 +1795,7 @@ export function createScheduler({
       })
       await notifyRunWebhook(config, run)
       run = await cleanupCompletedRunReview(run)
+      if (checkingScope) return run
       throw error
     } finally {
       progressSessions.get(run?.id)?.stop()
@@ -1672,7 +1825,12 @@ export function createScheduler({
       run.agentResultContext,
       issue,
     )
-    return `${templateText}\n\n${resultContextText}\n${issueProgressGuidance(run)}`
+    const branchGuidance = run.gitBranch
+      ? `\n\nWA 已安排本轮 Git 分支 ${run.gitBranch.branch}（基线 ${run.gitBranch.base}）。直接在该分支实现和提交。保留基线与其他分支，禁止自行切换、另建分支、重写历史或推送。检验其它提交时使用只读 Git 命令。`
+      : stage === "part3" && project.gitBranch
+        ? "\n\nWA 按事项管理实现分支。以实现交接中的提交 SHA 为检验对象，使用该提交的只读导出或 review 目录中的副本进行检验。"
+        : ""
+    return `${templateText}\n\n${resultContextText}\n${issueProgressGuidance(run)}${branchGuidance}`
   }
 
   function start() {
@@ -2017,7 +2175,7 @@ export function createScheduler({
       codexPid: patch.codexPid,
       codexStarted: patch.codexStarted,
       canceledAt: new Date().toISOString(),
-      cancelReason: abortReason(signal, "用户中止任务"),
+      cancelReason: patch.cancelReason || abortReason(signal, "用户中止任务"),
     })
     await logEvent({
       type: "run-canceled",

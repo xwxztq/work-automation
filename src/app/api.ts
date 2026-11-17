@@ -7,6 +7,8 @@ import type {
   DirectoryPickerResult,
   ExecutionEvent,
   LinearProjectListResponse,
+  LinearMappingInput,
+  LinearWorkspaceMode,
   LinearStatusHealthResult,
   PromptStage,
   PromptBundle,
@@ -98,6 +100,16 @@ export const api = {
     }),
   cancelRun: (id: string) => request<unknown>(`/api/runs/${id}/cancel`, { method: "POST" }),
   cancelProject: (key: string) => request<unknown>(`/api/projects/${key}/cancel`, { method: "POST" }),
-  listLinearProjects: () => request<LinearProjectListResponse>("/api/linear/projects"),
+  listLinearProjects: (workspaceId?: string) => request<LinearProjectListResponse>(
+    workspaceId ? `/api/linear/projects?workspaceId=${encodeURIComponent(workspaceId)}` : "/api/linear/projects",
+  ),
+  bindLinearWorkspace: (linearApiKey: string, mode: LinearWorkspaceMode) =>
+    request<AppConfig>("/api/linear/workspaces", { method: "POST", body: JSON.stringify({ linearApiKey, mode }) }),
+  updateLinearWorkspace: (id: string, patch: { activate?: boolean; mode?: LinearWorkspaceMode }) =>
+    request<AppConfig>(`/api/linear/workspaces/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  addLinearMapping: (mapping: LinearMappingInput) =>
+    request<AppConfig>("/api/linear/mappings", { method: "POST", body: JSON.stringify(mapping) }),
+  removeLinearMapping: (id: string) =>
+    request<AppConfig>(`/api/linear/mappings/${encodeURIComponent(id)}`, { method: "DELETE" }),
   previewProject: (key: string) => request<unknown>(`/api/projects/${key}/linear-preview`),
 }

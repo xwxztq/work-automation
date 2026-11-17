@@ -30,8 +30,16 @@ test("progress inbox rejects invalid states, oversized files, symlinks and hardl
   await fs.writeFile(source, JSON.stringify({ state: "testing" }))
   for (const link of [fs.symlink, fs.link]) {
     const name = `${randomUUID()}.json`
+    try {
+      await link(source, path.join(requests, name))
+    } catch (error) {
+      if (process.platform === "win32" && link === fs.symlink && error.code === "EPERM") {
+        t.diagnostic("File symlink fixture unavailable without Windows symlink privilege; hardlink and invalid request cases still run.")
+        continue
+      }
+      throw error
+    }
     names.push(name)
-    await link(source, path.join(requests, name))
   }
   let writes = 0
   const session = createIssueProgressSession({ run,

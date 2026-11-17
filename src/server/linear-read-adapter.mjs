@@ -8,6 +8,54 @@ import {
 export const LINEAR_ISSUE_PLATFORM = "primary-issues"
 export const DEFAULT_LINEAR_READ_PAGE_SIZE = 100
 
+const ARCHIVE_CANDIDATES_QUERY = `
+  query LinearArchiveCandidates($projectId: String!, $before: DateTimeOrDuration!, $first: Int!, $after: String) {
+    project(id: $projectId) {
+      id archivedAt
+      issues(first: $first, after: $after, includeArchived: false,
+        filter: { createdAt: { lte: $before }, state: { type: { in: ["completed", "canceled"] } } }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id identifier }
+      }
+    }
+  }
+`
+
+const ARCHIVE_FIELDS = `
+  id identifier createdAt updatedAt archivedAt completedAt canceledAt
+  project { id }
+  state { id type }
+  children(first: 1, includeArchived: false) { nodes { id } pageInfo { hasNextPage } }
+`
+
+const ARCHIVE_HISTORY_QUERY = `
+  query LinearArchiveHistory($issueId: String!, $first: Int!, $after: String) {
+    issue(id: $issueId) {
+      ${ARCHIVE_FIELDS}
+      history(first: $first, after: $after, includeArchived: true, orderBy: updatedAt) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id createdAt updatedAt fromStateId toStateId }
+      }
+    }
+  }
+`
+
+const ARCHIVE_STATE_QUERY = `
+  query LinearArchiveState($issueId: String!) { issue(id: $issueId) { ${ARCHIVE_FIELDS} } }
+`
+
+const NEW_PROJECT_ISSUES_QUERY = `
+  query LinearReadNewProjectIssues($projectId: String!, $since: DateTimeOrDuration!, $first: Int!, $after: String) {
+    project(id: $projectId) {
+      id archivedAt
+      issues(first: $first, after: $after, includeArchived: false, filter: { createdAt: { gte: $since } }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id identifier title description url priority createdAt }
+      }
+    }
+  }
+`
+
 const PROJECT_ISSUES_QUERY = `
   query LinearReadProjectIssues($projectId: String!, $first: Int!, $after: String) {
     project(id: $projectId) {
@@ -243,6 +291,50 @@ export function createLinearReadAdapter(linearClient, options = {}) {
     })
     projectIssueReads.set(normalizedProjectId, promise)
     return promise
+  }
+
+  async function listNewProjectIssues(projectId, since) {
+    const normalizedProjectId = requireIdentifier(projectId)
+    return readAllPages(async (after) => {
+      const data = await graphql(NEW_PROJECT_ISSUES_QUERY, {
+        projectId: normalizedProjectId, since, first: pageSize, after,
+      }, { pagination: after !== null })
+      if (!data?.project) throw platformError(ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND)
+      if (data.project.archivedAt) throw platformError(ISSUE_PLATFORM_ERROR_CODE.ARCHIVED)
+      return data.project.issues
+    })
+  }
+
+  async function listArchiveCandidates(projectId, before) {
+    const id = requireIdentifier(projectId)
+    return readAllPages(async (after) => {
+      const data = await graphql(ARCHIVE_CANDIDATES_QUERY, { projectId: id, before, first: pageSize, after }, { pagination: after !== null })
+      if (!data?.project) throw platformError(ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND)
+      if (data.project.archivedAt) throw platformError(ISSUE_PLATFORM_ERROR_CODE.ARCHIVED)
+      return data.project.issues
+    })
+  }
+
+  async function readArchiveState(issueId) {
+    const data = await graphql(ARCHIVE_STATE_QUERY, { issueId: requireIdentifier(issueId) })
+    if (!data?.issue) throw platformError(ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND)
+    return data.issue
+  }
+
+  async function readArchiveHistory(issueId) {
+    const id = requireIdentifier(issueId)
+    let issue
+    const history = await readAllPages(async (after) => {
+      const data = await graphql(ARCHIVE_HISTORY_QUERY, { issueId: id, first: pageSize, after }, { pagination: after !== null })
+      if (!data?.issue) throw platformError(ISSUE_PLATFORM_ERROR_CODE.NOT_FOUND)
+      if (issue && (issue.updatedAt !== data.issue.updatedAt || issue.state?.id !== data.issue.state?.id ||
+        issue.project?.id !== data.issue.project?.id || issue.archivedAt !== data.issue.archivedAt)) {
+        throw platformError(ISSUE_PLATFORM_ERROR_CODE.PAGINATION_INTERRUPTED, { retryable: true })
+      }
+      issue ||= data.issue
+      return data.issue.history
+    })
+    return { issue, history }
   }
 
   async function loadProjectIssues(normalizedProjectId) {
@@ -493,7 +585,7 @@ export function createLinearReadAdapter(linearClient, options = {}) {
     }
   }
 
-  return defineIssueReadAdapter({
+  const adapter = defineIssueReadAdapter({
     platform: LINEAR_ISSUE_PLATFORM,
     listProjectIssues,
     readIssue,
@@ -502,6 +594,7 @@ export function createLinearReadAdapter(linearClient, options = {}) {
     listProjectsWorkflowStates,
     listTeamWorkflowStates,
   })
+  return Object.freeze({ ...adapter, listNewProjectIssues, listArchiveCandidates, readArchiveState, readArchiveHistory })
 }
 
 async function readAllPages(readPage, initialConnection = null) {

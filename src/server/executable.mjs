@@ -1,6 +1,6 @@
 import path from "node:path"
 import os from "node:os"
-import { access } from "node:fs/promises"
+import { access, readdir, stat } from "node:fs/promises"
 import { constants } from "node:fs"
 
 export async function resolveExecutable(command, options = {}) {
@@ -36,12 +36,35 @@ export async function resolveCodexExecutable(command = "codex", options = {}) {
     return null
   }
 
+  // Desktop upgrades replace hash-named bin directories. Discover them on each
+  // resolution, including in a long-running service with an obsolete PATH.
+  for (const candidate of await desktopCodexExecutableCandidates(options)) {
+    if (await isExecutable(candidate)) return candidate
+  }
+
   for (const candidate of knownCodexExecutableCandidates(options)) {
     if (await isExecutable(candidate)) {
       return candidate
     }
   }
   return null
+}
+
+async function desktopCodexExecutableCandidates(options) {
+  if ((options.platform || process.platform) !== "win32") return []
+  const env = options.env || process.env
+  const local = env.LOCALAPPDATA || env.LocalAppData
+  if (!local) return []
+  const root = path.join(local, "OpenAI", "Codex", "bin")
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const candidates = await Promise.all(entries
+    .filter(entry => entry.isDirectory() && /^[a-f0-9]+$/iu.test(entry.name))
+    .map(async entry => {
+      const candidate = path.join(root, entry.name, "codex.exe")
+      const info = await stat(candidate).catch(() => null)
+      return info?.isFile() ? { candidate, modified: info.mtimeMs } : null
+    }))
+  return candidates.filter(Boolean).sort((a, b) => b.modified - a.modified || a.candidate.localeCompare(b.candidate)).map(item => item.candidate)
 }
 
 export function knownCodexExecutableCandidates(options = {}) {

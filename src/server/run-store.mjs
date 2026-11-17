@@ -26,12 +26,13 @@ export function createRunStore(rootDir) {
   let runsRead = null
   let operationMutationQueue = Promise.resolve()
 
-  async function createRun({ projectKey, stage, issue }) {
+  async function createRun({ projectKey, stage, issue, workspaceId }) {
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${projectKey}-${stage}-${issue.identifier || issue.id}-${randomUUID().slice(0, 8)}`
     const dir = path.join(runsDir, id)
     const run = {
       id,
       projectKey,
+      ...(workspaceId ? { workspaceId } : {}),
       stage,
       issueId: issue.id,
       issueIdentifier: issue.identifier,

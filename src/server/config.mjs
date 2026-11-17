@@ -2,11 +2,13 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { accessSync, constants } from "node:fs"
 import { DEFAULT_CONFIG } from "./defaults.mjs"
-import { resolveExecutable } from "./executable.mjs"
+import { resolveCodexExecutable } from "./executable.mjs"
 import { isLoopbackHost, isWildcardHostAllowed, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
 import { checkLinearStatusHealth } from "./status-health.mjs"
 import { validateWebhookUrlTemplate } from "./webhook-notifier.mjs"
+import { linearWorkspaces, validateWorkspaceProjects, workspaceConfig } from "./linear-workspaces.mjs"
+import { GIT_BRANCH_DEFAULTS, readGitCheckout, validGitBranch } from "./git-branch.mjs"
 
 const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write"])
 export const CODEX_SANDBOX_RUNTIME_ENV = {
@@ -73,6 +75,16 @@ export async function saveConfig(configPath, config, rootDir = process.cwd()) {
   if (projectKeyValidation.errors.length) {
     throw new Error(projectKeyValidation.errors.join("\n"))
   }
+  validateWorkspaceProjects(normalized, current)
+  for (const project of normalized.projects) {
+    if (!project.gitBranch || project.gitBranch.base) continue
+    if (!project.path) throw new Error(`${project.key}: 保存 Git 基线前请填写仓库路径。`)
+    const cwd = await fs.realpath(resolveFromRoot(rootDir, project.path))
+    const { branch, repository } = await readGitCheckout(cwd)
+    if (cwd !== repository) throw new Error(`${project.key}: 仓库路径需指向 Git 工作树根目录。`)
+    if (!branch) throw new Error(`${project.key}: 当前 Git HEAD 已分离，请填写默认基线分支。`)
+    project.gitBranch.base = branch
+  }
   await writeJsonFile(resolved, normalized)
   return normalized
 }
@@ -126,7 +138,10 @@ export function normalizeConfig(raw) {
       part3PromptMode: "global",
       superpowerPromptMode: "global",
       extraRules: "无额外项目规则。",
+      issueScope: "",
       ...project,
+      autoArchive: normalizeAutoArchive(project.autoArchive, project.key),
+      ...(project.gitBranch ? { gitBranch: normalizeGitBranch(project.gitBranch, project.key) } : {}),
       defaultTests: Array.isArray(project.defaultTests)
         ? project.defaultTests
         : String(project.defaultTests || "")
@@ -142,6 +157,24 @@ export function normalizeConfig(raw) {
   })
 
   return config
+}
+
+function normalizeAutoArchive(value, projectKey) {
+  const { enabled, days } = { enabled: false, days: 7, ...value }
+  if (typeof enabled !== "boolean" || !Number.isSafeInteger(days) || days < 1) {
+    throw new Error(`${projectKey}: 自动归档需设定启停状态和正整数天数。`)
+  }
+  return { enabled, days }
+}
+
+function normalizeGitBranch(value, projectKey) {
+  const { base, create, mode } = { ...GIT_BRANCH_DEFAULTS, ...value }
+  const trimmedBase = typeof base === "string" ? base.trim() : null
+  if (trimmedBase === null || (trimmedBase && !validGitBranch(trimmedBase)) || typeof create !== "boolean" ||
+    !["independent", "continuous", "auto"].includes(mode)) {
+    throw new Error(`${projectKey}: Git 基线分支或分支模式无效。`)
+  }
+  return { base: trimmedBase, create, mode }
 }
 
 export function applyRuntimeConfigOverrides(config, env = process.env) {
@@ -179,9 +212,13 @@ export function redactConfig(config) {
   const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
   return {
     ...config,
+    statuses: workspaceConfig(config).statuses,
     linear: {
-      ...config.linear,
+      apiKeyEnv,
       apiKeySet: Boolean(process.env[apiKeyEnv]),
+      activeWorkspaceId: config.linear.activeWorkspaceId || "default",
+      workspaces: linearWorkspaces(config).map(({ id, name, mode }) => ({ id, name, mode })),
+      mappings: config.linear.mappings || [],
     },
   }
 }
@@ -189,7 +226,8 @@ export function redactConfig(config) {
 export async function validateConfig(config, rootDir = process.cwd(), options = {}) {
   const errors = []
   const warnings = []
-  const apiKeyEnv = config.linear?.apiKeyEnv || "LINEAR_API_KEY"
+  const activeConfig = workspaceConfig(config)
+  const apiKeyEnv = activeConfig.linear.apiKeyEnv
 
   if (!config.serverId?.trim()) {
     errors.push("必须填写 serverId。")
@@ -218,7 +256,7 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
     }
   }
   const codexBin = config.codex?.bin || DEFAULT_CONFIG.codex.bin
-  if (!(await resolveExecutable(codexBin, { cwd: rootDir }))) {
+  if (!(await resolveCodexExecutable(codexBin, { cwd: rootDir }))) {
     warnings.push(
       `当前进程 PATH 中找不到 codex.bin (${codexBin})。事项执行时可能直接启动失败；建议改成绝对路径或在启动服务前补齐 PATH。`,
     )
@@ -267,15 +305,14 @@ export async function validateConfig(config, rootDir = process.cwd(), options = 
     "testing",
     "readyForReview",
   ]) {
-    if (!config.statuses?.[statusKey]?.trim()) {
+    if (typeof activeConfig.statuses[statusKey] !== "string" || !activeConfig.statuses[statusKey].trim()) {
       errors.push(`必须填写 statuses.${statusKey}。`)
     }
   }
 
   let linearStatusHealth = null
   if (options.includeLinearStatusHealth !== false) {
-    linearStatusHealth = await checkLinearStatusHealth(config, {
-      apiKeyEnv,
+    linearStatusHealth = await checkLinearStatusHealth(activeConfig, {
       linear: options.linear,
       apiKey: options.apiKey,
     })

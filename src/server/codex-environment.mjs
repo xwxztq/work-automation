@@ -92,7 +92,9 @@ export function buildCodexProcessEnv(source = {}, options = {}) {
     ) {
       continue
     }
-    result[name] = String(value)
+    // Windows environment names are case-insensitive, but this plain object is
+    // not. A copied `Path` must not coexist with a newly assigned empty `PATH`.
+    result[(options.platform || process.platform) === "win32" ? normalizedName : name] = String(value)
   }
 
   return result

@@ -8,6 +8,7 @@ import {
   evaluateAgentResult,
 } from "./agent-result-runtime.mjs"
 import { buildCodexProcessEnv } from "./codex-environment.mjs"
+import { isolatedGitIdentityConfig } from "./git-identity.mjs"
 import { cleanupReviewTempArtifacts } from "./review-cleanup.mjs"
 import { startBrowserSession } from "./browser-session.mjs"
 
@@ -86,6 +87,8 @@ async function main() {
         sourceCodexHome: process.env.CODEX_HOME,
         targetCodexHome: input.innerCodexHome,
       })
+      const isolatedGitConfig = path.join(input.sandboxUserHome, ".gitconfig")
+      await fs.writeFile(isolatedGitConfig, isolatedGitIdentityConfig(childEnvironment), { mode: 0o600 })
       Object.assign(childEnvironment, {
         HOME: input.sandboxUserHome,
         USERPROFILE: input.sandboxUserHome,
@@ -94,7 +97,7 @@ async function main() {
         TEMP: input.sandboxTempDir,
         CARGO_HOME: path.join(input.sandboxUserHome, ".cargo"),
         COREPACK_HOME: path.join(input.sandboxUserHome, ".cache", "corepack"),
-        GIT_CONFIG_GLOBAL: os.devNull,
+        GIT_CONFIG_GLOBAL: isolatedGitConfig,
         GOPATH: path.join(input.sandboxUserHome, "go"),
         GRADLE_USER_HOME: path.join(input.sandboxUserHome, ".gradle"),
         XDG_CACHE_HOME: path.join(input.sandboxUserHome, ".cache"),
@@ -118,6 +121,7 @@ async function main() {
     child = spawn(input.launchBin || input.codexBin, input.launchArgs || input.args, {
       cwd: input.cwd,
       env: childEnvironment,
+      windowsHide: true,
       stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
     })
 
@@ -174,7 +178,9 @@ async function main() {
       ? null
       : result.error?.message || "Codex 子进程没有成功启动。"
     let completionPatch
-    if (processSucceeded) {
+    if (processSucceeded && input.outputOnly) {
+      completionPatch = { status: "succeeded" }
+    } else if (processSucceeded) {
       const finalText = await readOptional(input.finalPath)
       const evaluation = evaluateAgentResult(finalText, input.agentResultContext)
       completionPatch = agentResultRunPatch(evaluation)

@@ -53,6 +53,62 @@ test("manual API reports and dispatches superpower when the saved mode is enable
   assert.deepEqual(dispatched.map((request) => request.stage), ["superpower", "superpower"])
 })
 
+test("workspace API binds by organization, scopes project reads, and keeps settings per workspace", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-workspace-api-"))
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }))
+  const configPath = path.join(rootDir, "config.json")
+  const otherId = "00000000-0000-4000-8000-000000000002"
+  const primaryEnv = "LINEAR_TEST_WORKSPACE_PRIMARY_KEY"
+  const otherEnv = `LINEAR_API_KEY_WORKSPACE_${otherId.replaceAll("-", "_")}`
+  const primaryKey = "lin_api_wa_primary_fixture"
+  const otherKey = "lin_api_wa_secondary_fixture"
+  process.env[primaryEnv] = primaryKey
+  t.after(() => { delete process.env[primaryEnv]; delete process.env[otherEnv] })
+  await fs.writeFile(configPath, JSON.stringify({ linear: { apiKeyEnv: primaryEnv },
+    projects: [{ key: "legacy", linearProjectId: "source-one" }] }))
+  const linearClientFactory = (key) => ({
+    async readOrganization() {
+      assert.ok([primaryKey, otherKey].includes(key))
+      return key === primaryKey ? { id: "00000000-0000-4000-8000-000000000001", name: "Primary" } : { id: otherId, name: "Secondary" }
+    },
+    async listProjects() { return [{ id: key === primaryKey ? "source-one" : "target" }] },
+    async readProject(id) {
+      assert.equal(key, id === "target" ? otherKey : primaryKey)
+      return { id, name: id, teams: [{ id: "team", name: "Team" }] }
+    },
+  })
+  await withServer({ rootDir, configPath, linearClientFactory }, async (baseUrl) => {
+    async function request(route, method = "GET", body, status = 200) {
+      const response = await fetch(`${baseUrl}/api/${route}`, { method, headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined })
+      const payload = await response.text()
+      assert.equal(response.status, status, payload)
+      assert.doesNotMatch(payload, /lin_api_wa|LINEAR_API_KEY_WORKSPACE_/u)
+      return JSON.parse(payload)
+    }
+    let config = await request("linear/workspaces", "POST", { linearApiKey: otherKey, mode: "isolated" })
+    assert.deepEqual(config.linear.workspaces.map(({ name }) => name), ["Primary", "Secondary"])
+    assert.ok((await fs.readFile(path.join(rootDir, ".env.local"), "utf8")).includes(otherKey))
+    await request("linear/workspaces", "POST", { linearApiKey: primaryKey, mode: "isolated" }, 400)
+    await request("linear/workspaces/default", "PATCH", { mode: "migrated" })
+    config = await request(`linear/workspaces/${otherId}`, "PATCH", { activate: true })
+    assert.deepEqual(await request("linear/projects"), { projects: [{ id: "target" }] })
+    assert.deepEqual(await request("linear/projects?workspaceId=default"), { projects: [{ id: "source-one" }] })
+    config.statuses.todo = "Secondary Todo"
+    config.projects.push({ key: "target", linearProjectId: "target", workspaceId: otherId })
+    await request("config", "PUT", config)
+    for (const sourceProjectId of ["source-one", "source-two"]) {
+      config = await request("linear/mappings", "POST", { sourceWorkspaceId: "default", sourceProjectId,
+        targetProjectKey: "target", targetTeamId: "team" })
+    }
+    assert.equal(config.linear.mappings.length, 2)
+    assert.equal(config.statuses.todo, "Secondary Todo")
+    config = await request("linear/workspaces/default", "PATCH", { activate: true })
+    assert.equal(config.statuses.todo, "Todo")
+    assert.equal(config.projects.length, 2)
+  })
+})
+
 test("setup API returns status and clears Linear health after configuration", async () => {
   const setupStatus = {
     ready: false,

@@ -40,7 +40,7 @@ test("setup status reports missing requirements without exposing a secret", asyn
   await fs.rm(input.rootDir, { recursive: true, force: true })
 })
 
-test("a detected Codex command still requires saving its absolute path", async () => {
+test("a detected Codex command remains ready without pinning its current absolute path", async () => {
   const input = await fixture()
   const manager = createSetupManager({
     ...input,
@@ -51,7 +51,8 @@ test("a detected Codex command still requires saving its absolute path", async (
   const status = await manager.status()
   assert.equal(status.codex.found, true)
   assert.equal(status.codex.absolutePathSaved, false)
-  assert.equal(status.ready, false)
+  assert.equal(status.ready, true)
+  assert.equal(status.needsSetup, false)
 
   await fs.rm(input.rootDir, { recursive: true, force: true })
 })
@@ -86,7 +87,7 @@ test("setup validates Linear, stores the key privately, and persists an absolute
   const envPath = path.join(input.rootDir, ".env.local")
   const envContent = await fs.readFile(envPath, "utf8")
   assert.equal(parseEnvContent(envContent).LINEAR_API_KEY, "lin_api_private")
-  assert.equal((await fs.stat(envPath)).mode & 0o777, 0o600)
+  if (process.platform !== "win32") assert.equal((await fs.stat(envPath)).mode & 0o777, 0o600)
 
   await fs.rm(input.rootDir, { recursive: true, force: true })
 })

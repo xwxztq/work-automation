@@ -10,10 +10,13 @@ import {
   buildCodexPermissionBoundary,
   buildCodexRuntimeReadPaths,
   buildCodexSandboxArgs,
+  prepareCodexSandboxOutputs,
   resolveExecutableReadPaths,
 } from "./codex-permissions.mjs"
-import { resolveExecutable } from "./executable.mjs"
+import { resolveCodexExecutable, resolveExecutable } from "./executable.mjs"
+import { resolveGitIdentityEnvironment } from "./git-identity.mjs"
 import { ISSUE_PROGRESS_CLIENT_PATH } from "./issue-progress.mjs"
+import { buildWindowsNodeOptions } from "./windows-node-runtime.mjs"
 
 const FORCE_KILL_DELAY_MS = 5000
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -34,6 +37,8 @@ export async function runCodex({
   supervisorPath = SUPERVISOR_PATH,
   sandboxExecutable,
   runtimeRoot,
+  outputSchema,
+  gitCheckout,
 }) {
   await assertCodexSandboxPaths([
     project.codexCwd || project.path,
@@ -44,8 +49,10 @@ export async function runCodex({
   await fs.writeFile(run.promptPath, prompt)
 
   const configuredCodexBin = config.codex.bin || "codex"
-  const resolvedCodexBin = await resolveExecutable(configuredCodexBin, {
+  const resolvedCodexBin = await resolveCodexExecutable(configuredCodexBin, {
     cwd: project.codexCwd || project.path,
+    path: environment.PATH || environment.Path,
+    env: environment,
   })
   if (!resolvedCodexBin) {
     throw new Error(
@@ -64,21 +71,25 @@ export async function runCodex({
   }
   const resultSchemaPath =
     run.resultSchemaPath || path.join(run.dir, "agent-result-schema.json")
-  const resultSchema = buildAgentResultOutputSchema(run.agentResultContext)
+  const resultSchema = outputSchema || buildAgentResultOutputSchema(run.agentResultContext)
   await fs.writeFile(resultSchemaPath, `${JSON.stringify(resultSchema, null, 2)}\n`)
   const linearApiKeyEnv = String(
     config.linear?.apiKeyEnv || "LINEAR_API_KEY",
   ).trim()
-  const blockedEnvironmentNames = [linearApiKeyEnv].filter(Boolean)
-  const gitIdentityEnvironment = await resolveGitIdentityEnvironment({
+  const blockedEnvironmentNames = [...new Set([linearApiKeyEnv, config.linear?.defaultApiKeyEnv,
+    ...(config.linear?.workspaces || []).map((workspace) => workspace.apiKeyEnv)].filter(Boolean))]
+  const gitIdentityEnvironment = outputSchema ? {} : await resolveGitIdentityEnvironment({
     cwd: project.codexCwd || project.path,
     environment,
+    required: ["part2", "superpower"].includes(stage),
   })
+  if (!outputSchema) {
+    await fs.appendFile(run.promptPath, "\n\nGit 提交身份由 WA 从宿主 Git 全局 user.name/user.email 读取并注入。必须保留提供的 author 和 committer，不得用 Codex、占位邮箱、--author、git -c user.* 或 GIT_AUTHOR_*/GIT_COMMITTER_* 覆盖它。若 Git 报身份缺失，请报告环境阻塞，禁止编造身份。\n")
+  }
   const codexEnvironment = buildCodexProcessEnv(
     {
       ...environment,
       ...gitIdentityEnvironment,
-      GIT_CONFIG_GLOBAL: os.devNull,
     },
     { blockedNames: blockedEnvironmentNames },
   )
@@ -101,7 +112,7 @@ export async function runCodex({
     path.join(resolvedRuntimeRoot, ".env"),
   ]
   const runtimeReadPaths = buildCodexRuntimeReadPaths(codexEnvironment)
-  const [codexExecutableReadPaths, nodeExecutableReadPaths] = await Promise.all([
+  const [codexExecutableReadPaths, nodeExecutableReadPaths, gitExecutableReadPaths] = await Promise.all([
     resolveExecutableReadPaths(resolvedCodexBin, {
       cwd: project.codexCwd || project.path,
       path: codexEnvironment.PATH,
@@ -110,13 +121,16 @@ export async function runCodex({
       cwd: project.codexCwd || project.path,
       path: codexEnvironment.PATH,
     }),
+    gitCheckout ? resolveExecutableReadPaths(gitCheckout.gitBin, { cwd: project.path, path: codexEnvironment.PATH }) : [],
   ])
   const launcherReadPaths = [
     SANDBOX_TARGET_PATH,
     BROWSER_CLIENT_PATH,
     ...(stage === "superpower" ? [ISSUE_PROGRESS_CLIENT_PATH] : []),
+    ...(gitCheckout ? [path.join(__dirname, "git-branch.mjs"), path.join(__dirname, "executable.mjs")] : []),
     ...codexExecutableReadPaths,
     ...nodeExecutableReadPaths,
+    ...gitExecutableReadPaths,
   ]
   const permissionBoundary = buildCodexPermissionBoundary({
     stage,
@@ -138,12 +152,13 @@ export async function runCodex({
   if (stage === "part3" || stage === "superpower") {
     await fs.mkdir(path.join(run.dir, "review"), { recursive: true })
   }
+  await prepareCodexSandboxOutputs({ stage, runDir: run.dir, finalPath: run.finalPath })
   await fs.mkdir(sandboxTempDir, { recursive: true })
   const launchArgs = buildCodexSandboxArgs({
     boundary: permissionBoundary,
     cwd: project.codexCwd || project.path,
     targetBin: process.execPath,
-    targetArgs: [SANDBOX_TARGET_PATH, supervisorInputPath],
+    targetArgs: buildCodexSandboxTargetArgs(supervisorInputPath),
   })
   await fs.writeFile(
     supervisorInputPath,
@@ -160,12 +175,15 @@ export async function runCodex({
         finalPath: run.finalPath,
         metadataPath: run.metadataPath,
         resultSchemaPath,
+        outputOnly: Boolean(outputSchema),
+        gitCheckout,
         agentResultContext: run.agentResultContext,
         blockedEnvironmentNames,
         launcherCodexHome,
         innerCodexHome,
         sandboxUserHome,
         sandboxTempDir,
+        nodeOptions: buildWindowsNodeOptions(),
         browserEnabled: ["part2", "part3", "superpower"].includes(stage),
         runId: run.id,
       },
@@ -178,6 +196,7 @@ export async function runCodex({
     cwd: project.codexCwd || project.path,
     env: codexEnvironment,
     detached: true,
+    windowsHide: true,
     stdio: "ignore",
   })
   const started = Number.isInteger(supervisor.pid) && supervisor.pid > 0
@@ -257,6 +276,16 @@ export async function runCodex({
     failureAction: latestRun.failureAction,
     retryableFailure: latestRun.retryableFailure,
   }
+}
+
+export function buildCodexSandboxTargetArgs(supervisorInputPath, { platform = process.platform } = {}) {
+  return [
+    // Node otherwise realpaths the entry module by lstat-ing every parent,
+    // including C:\\, which a restricted-read Windows boundary denies.
+    ...(platform === "win32" ? ["--preserve-symlinks", "--preserve-symlinks-main"] : []),
+    SANDBOX_TARGET_PATH,
+    supervisorInputPath,
+  ]
 }
 
 function normalizeCodexDefaultArgs(defaultArgs = []) {
@@ -385,49 +414,6 @@ function excludePathTree(searchPath, blockedRoot) {
       )
     })
     .join(path.delimiter)
-}
-
-async function resolveGitIdentityEnvironment({ cwd, environment }) {
-  const gitBin = await resolveExecutable("git", {
-    cwd,
-    path: environment.PATH,
-  })
-  if (!gitBin) return {}
-  const [name, email] = await Promise.all([
-    readProcessText(gitBin, ["config", "--get", "user.name"], cwd, environment),
-    readProcessText(gitBin, ["config", "--get", "user.email"], cwd, environment),
-  ])
-  return {
-    ...(name
-      ? { GIT_AUTHOR_NAME: name, GIT_COMMITTER_NAME: name }
-      : {}),
-    ...(email
-      ? { GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email }
-      : {}),
-  }
-}
-
-function readProcessText(bin, args, cwd, env) {
-  return new Promise((resolve) => {
-    const child = spawn(bin, args, {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-    let output = ""
-    let settled = false
-    const finish = (value) => {
-      if (settled) return
-      settled = true
-      resolve(value)
-    }
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", (chunk) => {
-      if (output.length < 4096) output += chunk
-    })
-    child.once("error", () => finish(""))
-    child.once("close", (code) => finish(code === 0 ? output.trim() : ""))
-  })
 }
 
 function isBlockedCodexConfigOverride(value) {

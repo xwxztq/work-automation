@@ -113,6 +113,15 @@ test("controlled Codex environment preserves runtime auth but removes credential
   assert.equal(env.UNAUTHORIZED_SECRET, undefined)
 })
 
+test("Windows environment canonicalizes Path before the launcher filters PATH", () => {
+  const env = buildCodexProcessEnv({ Path: "C:\\Tools;C:\\Windows\\System32", UserProfile: "C:\\Users\\test", SystemRoot: "C:\\Windows", linear_api_key: "secret" }, { platform: "win32" })
+  assert.equal(env.PATH, "C:\\Tools;C:\\Windows\\System32")
+  assert.equal(env.Path, undefined)
+  assert.equal(env.USERPROFILE, "C:\\Users\\test")
+  assert.equal(env.SYSTEMROOT, "C:\\Windows")
+  assert.equal(env.linear_api_key, undefined)
+})
+
 test("runtime tool paths cannot reopen the filesystem root or the whole home directory", () => {
   const paths = buildCodexRuntimeReadPaths({
     HOME: "/home/test",
@@ -320,6 +329,7 @@ await fs.writeFile(input.metadataPath, JSON.stringify({ ...run, status: "failed"
     environment: {
       PATH: process.env.PATH,
       HOME: runDir,
+      GIT_CONFIG_GLOBAL: await identityConfigFixture(runDir),
       CODEX_HOME: path.join(runDir, ".codex"),
       OPENAI_API_KEY: "OPENAI_SENTINEL",
       LINEAR_API_KEY: "LINEAR_SENTINEL",
@@ -429,6 +439,7 @@ console.error("fake stderr")
     environment: {
       PATH: process.env.PATH,
       HOME: runDir,
+      GIT_CONFIG_GLOBAL: await identityConfigFixture(runDir),
       CODEX_HOME: path.join(runDir, ".codex"),
       OPENAI_API_KEY: "OPENAI_SENTINEL",
       LINEAR_API_KEY: "LINEAR_SENTINEL",
@@ -454,7 +465,7 @@ console.error("fake stderr")
   assert.equal(capture.env.CODEX_HOME, supervisorConfig.innerCodexHome)
   assert.equal(capture.env.HOME, supervisorConfig.sandboxUserHome)
   assert.equal(capture.env.TMPDIR, supervisorConfig.sandboxTempDir)
-  assert.equal(capture.env.GIT_CONFIG_GLOBAL, os.devNull)
+  assert.equal(capture.env.GIT_CONFIG_GLOBAL, path.join(supervisorConfig.sandboxUserHome, ".gitconfig"))
   assert.equal(capture.env.LINEAR_API_KEY, undefined)
   assert.equal(capture.env.MCP_LINEAR_TOKEN, undefined)
   assert.equal(capture.env.WORK_ISSUE_TOKEN, undefined)
@@ -832,6 +843,12 @@ child.once("close", (code, signal) => {
   )
   await fs.chmod(sandboxPath, 0o755)
   return sandboxPath
+}
+
+async function identityConfigFixture(rootDir) {
+  const file = path.join(rootDir, "global.gitconfig")
+  await fs.writeFile(file, '[user]\nname = z-jack\nemail = identity@example.test\n')
+  return file
 }
 
 function spawnCapture(bin, args, env) {

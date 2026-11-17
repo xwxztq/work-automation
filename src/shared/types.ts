@@ -7,6 +7,25 @@ export type LinearProjectOption = {
   displayName: string
   url: string | null
   teamNames: string[]
+  teams: { id: string; key: string; name: string }[]
+}
+
+export type LinearWorkspaceMode = "isolated" | "migrated"
+
+export type LinearWorkspace = { id: string; name: string; mode: LinearWorkspaceMode }
+
+export type LinearMappingInput = {
+  sourceWorkspaceId: string
+  sourceProjectId: string
+  targetProjectKey: string
+  targetTeamId: string
+}
+
+export type LinearMapping = LinearMappingInput & {
+  id: string
+  sourceProjectName: string
+  targetWorkspaceId: string
+  targetTeamName: string
 }
 
 export type SetupStatus = {
@@ -32,8 +51,16 @@ export type SetupConfigurationInput = {
   codexBin?: string
 }
 
+export type GitBranchMode = "independent" | "continuous" | "auto"
+
+export type GitBranchConfig = { base: string; create: boolean; mode: GitBranchMode }
+
 export type ProjectConfig = {
   key: string
+  workspaceId?: string
+  issueScope?: string
+  autoArchive?: { enabled: boolean; days: number }
+  gitBranch?: GitBranchConfig
   enabled: boolean
   linearProjectId: string
   repoName: string
@@ -59,6 +86,9 @@ export type AppConfig = {
   linear: {
     apiKeyEnv: string
     apiKeySet?: boolean
+    activeWorkspaceId: string
+    workspaces: LinearWorkspace[]
+    mappings: LinearMapping[]
   }
   codex: {
     bin: string
@@ -156,6 +186,8 @@ export type PromptBundle = {
 }
 
 export type RunSummary = {
+  gitBranch?: { branch: string; base: string }
+  workspaceId?: string
   id: string
   projectKey: string
   stage: PromptStage

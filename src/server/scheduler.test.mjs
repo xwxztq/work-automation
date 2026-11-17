@@ -761,7 +761,7 @@ async function createSuperpowerFixture(t, options = {}) {
   fixture.issue.state = { ...fixture.states.find((state) => state.name === "Todo") }
   await fs.copyFile(new URL("../../prompts/superpower.global.md", import.meta.url),
     path.join(fixture.rootDir, "prompts", "superpower.global.md"))
-  fixture.createScheduler = (runner) => createScheduler({
+  fixture.createScheduler = (runner, overrides = {}) => createScheduler({
     rootDir: fixture.rootDir,
     store: fixture.store,
     configProvider: async () => fixture.config,
@@ -771,9 +771,96 @@ async function createSuperpowerFixture(t, options = {}) {
       return { ok: true, projects: [] }
     } },
     codexRunner: runner,
+    ...overrides,
   })
   return fixture
 }
+
+test("superpower scope cancels confirmed exclusions before implementation, and allows uncertain issues", async (t) => {
+  for (const decision of ["out-of-scope", "uncertain", "stale", "failed"]) {
+    await t.test(decision, async (t) => {
+      const fixture = await createSuperpowerFixture(t)
+      fixture.config.projects[0].issueScope = "只处理支付事项"
+      fixture.states.push({ id: "state-canceled", name: "Canceled", type: "canceled" })
+      let implementations = 0
+      const scheduler = fixture.createScheduler(async ({ run }) => {
+        implementations += 1
+        return superpowerResult(run)
+      }, { issueScopeChecker: async ({ issue }) => {
+        assert.equal(issue.description, "Execute operations")
+        if (decision === "failed") throw new Error("classifier unavailable")
+        if (decision === "stale") fixture.issue.description = "Now contains new information"
+        return decision === "stale" ? "out-of-scope" : decision
+      } })
+      const summary = await scheduler.runOnce()
+      const [run] = await fixture.store.listRuns(10)
+      assert.equal(summary.projects[0].superpower[0].result, run.status)
+      assert.equal(implementations, decision === "uncertain" ? 1 : 0)
+      if (decision === "out-of-scope") {
+        assert.equal(fixture.issue.state.name, "Canceled")
+        assert.deepEqual(fixture.mutations, ["issue.state.update"])
+        assert.match(run.cancelReason, /超出项目范围/)
+      } else if (decision === "uncertain") {
+        assert.equal(fixture.issue.state.name, "Ready for Review")
+      } else {
+        assert.deepEqual(fixture.mutations, [])
+        assert.equal(fixture.issue.state.name, "Todo")
+      }
+    })
+  }
+})
+
+test("switching to an isolated workspace only scans its projects and credentials", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  const incoming = { ...fixture.config.projects[0], key: "incoming", workspaceId: "other", linearProjectId: "project-2" }
+  fixture.config.projects.push(incoming)
+  fixture.config.linear.workspaces = [{ id: "other", name: "Other", apiKeyEnv: "LINEAR_OTHER", mode: "isolated" }]
+  fixture.config.linear.mappings = [{ sourceWorkspaceId: "other", targetProjectKey: "work-automation" }]
+  const requests = []
+  const scheduler = fixture.createScheduler(() => assert.fail("No issues available"), {
+    linearProvider: (config) => ({ async listProjectIssues(id) {
+      requests.push([config.linear.apiKeyEnv, id])
+      return { issues: [] }
+    } }),
+  })
+  await scheduler.runOnce()
+  fixture.config.linear.activeWorkspaceId = "other"
+  await scheduler.runOnce()
+  assert.deepEqual(requests, [["LINEAR_API_KEY", "project-1"], ["LINEAR_OTHER", "project-2"]])
+})
+
+test("a migrated issue runs in the active project and the original is skipped after switching", async (t) => {
+  const fixture = await createSuperpowerFixture(t)
+  const sourceProject = { ...fixture.config.projects[0], key: "source-project", workspaceId: "source", linearProjectId: "project-2" }
+  fixture.config.projects.push(sourceProject)
+  fixture.config.linear.workspaces = [{ id: "source", name: "Source", apiKeyEnv: "LINEAR_SOURCE", mode: "migrated",
+    inactiveSince: "2026-08-23T00:00:00.000Z" }]
+  fixture.config.linear.mappings = [{ id: "mapping", sourceWorkspaceId: "source", sourceProjectId: "project-2",
+    targetProjectKey: "work-automation", targetTeamId: "team-1", since: "2026-08-23T00:00:00.000Z" }]
+  const sourceIssue = { ...structuredClone(fixture.issue), id: "source-issue", identifier: "SRC-1",
+    url: "https://linear.app/source/issue/SRC-1", target: { platform: "primary-issues", issueId: "source-issue" },
+    project: { id: "project-2" } }
+  const source = { async listNewProjectIssues() { return [sourceIssue] },
+    async listProjectIssues() { return { issues: [sourceIssue] } }, async readIssue() { return sourceIssue } }
+  const targetList = fixture.linear.listProjectIssues
+  fixture.linear.listProjectIssues = (...args) => fixture.issue.identifier === "DEST-1" ? targetList(...args) : { issues: [] }
+  fixture.linear.operationWriter.createMigratedIssue = async ({ id, title, description }) => {
+    Object.assign(fixture.issue, { id, title, description, identifier: "DEST-1", target: { platform: "primary-issues", issueId: id } })
+    return fixture.issue
+  }
+  const implemented = []
+  const scheduler = fixture.createScheduler(async ({ run }) => {
+    implemented.push([run.workspaceId, run.issueIdentifier])
+    return superpowerResult(run)
+  }, { linearProvider: (config) => config.linear.apiKeyEnv === "LINEAR_SOURCE" ? source : fixture.linear })
+  const initial = await scheduler.runOnce()
+  fixture.config.linear.activeWorkspaceId = "source"
+  const switched = await scheduler.runOnce()
+  assert.deepEqual(initial.projects[0].superpower, [{ issue: "DEST-1", result: "succeeded" }])
+  assert.deepEqual(switched.projects[0].superpower, [{ issue: "SRC-1", result: "skipped-migrated-source" }])
+  assert.deepEqual(implemented, [["default", "DEST-1"]])
+  assert.equal(sourceIssue.state.name, "Todo")
+})
 
 function superpowerResult(run, state = "Ready for Review") {
   const result = completedAgentResult(run.agentResultContext, "superpower")

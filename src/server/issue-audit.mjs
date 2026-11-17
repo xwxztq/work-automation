@@ -7,11 +7,17 @@ const wrapped = new WeakSet()
 const methods = {
   readIssue: "issue.read", getIssue: "issue.read", readProject: "project.read",
   listProjects: "project.list", listProjectIssues: "issue.list",
+  listNewProjectIssues: "issue.list", readOrganization: "workspace.read",
+  listArchiveCandidates: "issue.list", readArchiveState: "issue.archive.read", readArchiveHistory: "issue.history.read",
   listTeamWorkflowStates: "workflow.read", listProjectWorkflowStates: "workflow.read",
   listProjectsWorkflowStates: "workflow.read",
   createComment: "comment.create", updateIssueState: "issue.state.update",
   createChildIssue: "issue.child.create", verifyCommentImages: "comment.images.read",
+  createMigratedIssue: "issue.migration.create",
+  archiveIssue: "issue.archive",
 }
+const issueIdMethods = new Set(["readIssue", "getIssue", "readArchiveState", "readArchiveHistory", "archiveIssue"])
+const writeMethods = new Set(["createComment", "updateIssueState", "createChildIssue", "createMigratedIssue", "archiveIssue"])
 
 export function withIssueAuditContext(fields, task) {
   return context.run({ ...context.getStore(), ...fields }, task)
@@ -40,14 +46,14 @@ export function auditIssueAdapter(adapter, store, defaults = {}) {
     if (typeof adapter[method] !== "function") continue
     result[method] = async (...args) => {
       const request = args[0]
-      const isWrite = ["createComment", "updateIssueState", "createChildIssue"].includes(method)
+      const isWrite = writeMethods.has(method)
       const active = { ...defaults, ...context.getStore() }
       const projectId = method.includes("Project") && typeof request === "string" ? request : active.projectId
       const projectKey = defaults.projects?.find((p) => p.linearProjectId === projectId)?.key || active.projectKey
       const fields = {
         ...active, projectKey, projectId,
         platform: adapter.platform || active.platform || "primary-issues",
-        issueId: request?.target?.issueId || (method === "readIssue" || method === "getIssue" ? request : active.issueId),
+        issueId: request?.target?.issueId || (issueIdMethods.has(method) ? request : active.issueId),
         operation,
         idempotencyKey: request?.idempotencyKey || request?.operation?.idempotencyKey || active.idempotencyKey || `read:${method}:${createHash("sha256").update(JSON.stringify(typeof request === "string" || Array.isArray(request) ? request : null)).digest("hex").slice(0, 20)}`,
         attemptId: randomUUID(),

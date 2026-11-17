@@ -5,6 +5,7 @@ import { writeLocalEnvValue } from "./env.mjs"
 import { resolveCodexExecutable } from "./executable.mjs"
 import { createLinearClient } from "./linear-client.mjs"
 import { auditIssueAdapter } from "./issue-audit.mjs"
+import { activeWorkspaceId, linearWorkspaces } from "./linear-workspaces.mjs"
 
 export function createSetupManager({
   configPath,
@@ -23,7 +24,8 @@ export function createSetupManager({
 
   async function status() {
     const config = await load(configPath, rootDir)
-    const apiKeyEnv = String(config.linear?.apiKeyEnv || "LINEAR_API_KEY").trim()
+    const workspace = linearWorkspaces(config).find((item) => item.id === activeWorkspaceId(config))
+    const apiKeyEnv = workspace.apiKeyEnv
     const configuredBin = String(config.codex?.bin || "codex").trim() || "codex"
     const resolvedBin = await resolveCodex(configuredBin, {
       cwd: rootDir,
@@ -35,8 +37,8 @@ export function createSetupManager({
     const absolutePathSaved = path.isAbsolute(configuredBin) && configuredBin === resolvedBin
 
     return {
-      ready: apiKeySet && codexFound && absolutePathSaved,
-      needsSetup: !apiKeySet || !codexFound || !absolutePathSaved,
+      ready: apiKeySet && codexFound,
+      needsSetup: !apiKeySet || !codexFound,
       runtimeRootDir: rootDir,
       configPath,
       linear: {
@@ -55,7 +57,8 @@ export function createSetupManager({
 
   async function configure(input = {}) {
     const config = await load(configPath, rootDir)
-    const apiKeyEnv = String(config.linear?.apiKeyEnv || "LINEAR_API_KEY").trim()
+    const workspace = linearWorkspaces(config).find((item) => item.id === activeWorkspaceId(config))
+    const apiKeyEnv = workspace.apiKeyEnv
     const suppliedApiKey = String(input.linearApiKey || "").trim()
     const apiKey = suppliedApiKey || String(env[apiKeyEnv] || "").trim()
     if (!apiKey) {
@@ -63,7 +66,12 @@ export function createSetupManager({
     }
 
     try {
-      await auditIssueAdapter(createLinear(apiKey), store, { stage: "setup" }).listProjects()
+      const linear = auditIssueAdapter(createLinear(apiKey), store, { stage: "setup" })
+      const organizationId = workspace.organizationId || (workspace.id !== "default" ? workspace.id : null)
+      if (organizationId && (await linear.readOrganization()).id !== organizationId) {
+        throw new Error("密钥所属的 Linear 工作区与当前绑定不一致。")
+      }
+      await linear.listProjects()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       throw new Error(`Linear API key 校验失败: ${message}`)

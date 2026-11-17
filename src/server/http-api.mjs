@@ -5,6 +5,8 @@ import path from "node:path"
 import { redactDiagnostic } from "./diagnostic-redaction.mjs"
 import { auditIssueAdapter } from "./issue-audit.mjs"
 import { createLinearClient } from "./linear-client.mjs"
+import { activeWorkspaceId, projectWorkspaceId, workspaceConfig } from "./linear-workspaces.mjs"
+import { addWorkspaceMapping, applyGeneralSettings, bindWorkspace, requireWorkspace, updateWorkspace, workspaceClient } from "./linear-workspace-settings.mjs"
 import {
   loadConfig,
   redactConfig,
@@ -30,7 +32,18 @@ export function createHttpApi({
   directoryPicker = createDirectoryPicker(),
   linearStatusHealthChecker = createLinearStatusHealthChecker(),
   codexActivityReader = createCodexActivityReader(),
+  linearClientFactory = createLinearClient,
 }) {
+  let configQueue = Promise.resolve()
+  function mutateConfig(mutate) {
+    const pending = configQueue.then(async () => {
+      const current = await loadConfig(configPath, rootDir)
+      const saved = await saveConfig(configPath, await mutate(current), rootDir)
+      return redactConfig(saved)
+    })
+    configQueue = pending.catch(() => {})
+    return pending
+  }
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost")
@@ -44,6 +57,8 @@ export function createHttpApi({
           directoryPicker,
           linearStatusHealthChecker,
           codexActivityReader,
+          mutateConfig,
+          linearClientFactory,
         })
         return
       }
@@ -72,6 +87,8 @@ async function handleApi(req, res, url, context) {
     directoryPicker,
     linearStatusHealthChecker,
     codexActivityReader,
+    mutateConfig,
+    linearClientFactory,
   } = context
   const method = req.method || "GET"
   const parts = url.pathname.split("/").filter(Boolean)
@@ -114,14 +131,40 @@ async function handleApi(req, res, url, context) {
   if (method === "PUT" && url.pathname === "/api/config") {
     const body = await readBody(req)
     try {
-      const saved = await saveConfig(configPath, body, rootDir)
-      sendJson(res, 200, redactConfig(saved))
+      sendJson(res, 200, await mutateConfig((current) => applyGeneralSettings(current, body)))
     } catch (error) {
       sendJson(res, 400, {
         error: error instanceof Error ? error.message : String(error),
       })
     }
     return
+  }
+
+  if (parts[1] === "linear" && ["workspaces", "mappings"].includes(parts[2])) {
+    try {
+      if (method === "POST" && parts.length === 3) {
+        const body = await readBody(req)
+        const saved = await mutateConfig((config) => parts[2] === "workspaces"
+          ? bindWorkspace(config, body, { rootDir, createClient: linearClientFactory })
+          : addWorkspaceMapping(config, body, linearClientFactory))
+        sendJson(res, 200, saved)
+        return
+      }
+      if (method === "PATCH" && parts[2] === "workspaces" && parts.length === 4) {
+        const body = await readBody(req)
+        sendJson(res, 200, await mutateConfig((config) => updateWorkspace(config, parts[3], body)))
+        return
+      }
+      if (method === "DELETE" && parts[2] === "mappings" && parts.length === 4) {
+        sendJson(res, 200, await mutateConfig((config) => ({ ...config, linear: { ...config.linear,
+          mappings: (config.linear.mappings || []).filter((mapping) => mapping.id !== parts[3]),
+        } })))
+        return
+      }
+    } catch (error) {
+      sendJson(res, 400, { error: error.message })
+      return
+    }
   }
 
   if (method === "GET" && url.pathname === "/api/directory-picker") {
@@ -151,7 +194,7 @@ async function handleApi(req, res, url, context) {
     sendJson(
       res,
       200,
-      await linearStatusHealthChecker.check(config, {
+      await linearStatusHealthChecker.check(workspaceConfig(config), {
         force: url.searchParams.get("refresh") === "1",
         store,
       }),
@@ -167,15 +210,13 @@ async function handleApi(req, res, url, context) {
 
   if (method === "GET" && url.pathname === "/api/linear/projects") {
     const config = await loadConfig(configPath, rootDir)
-    const apiKey = process.env[config.linear.apiKeyEnv]
-    if (!apiKey) {
-      sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
-      return
+    try {
+      const workspace = requireWorkspace(config, url.searchParams.get("workspaceId") || activeWorkspaceId(config))
+      const linear = auditIssueAdapter(workspaceClient(workspace, linearClientFactory), store, { stage: "configuration" })
+      sendJson(res, 200, { projects: await linear.listProjects() })
+    } catch (error) {
+      sendJson(res, 400, { error: error.message })
     }
-    const linear = auditIssueAdapter(createLinearClient(apiKey), store, { stage: "configuration" })
-    sendJson(res, 200, {
-      projects: await linear.listProjects(),
-    })
     return
   }
 
@@ -200,7 +241,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (method === "GET" && parts[1] === "projects" && parts[3] === "linear-preview") {
-    const config = await loadConfig(configPath, rootDir)
+    const config = workspaceConfig(await loadConfig(configPath, rootDir))
     const project = config.projects.find((item) => item.key === parts[2])
     if (!project) {
       sendJson(res, 404, { error: `未知项目: ${parts[2]}` })
@@ -211,7 +252,7 @@ async function handleApi(req, res, url, context) {
       sendJson(res, 400, { error: `未设置 ${config.linear.apiKeyEnv}。` })
       return
     }
-    const linear = auditIssueAdapter(createLinearClient(apiKey), store, { stage: "preview", projectKey: project.key, projectId: project.linearProjectId })
+    const linear = auditIssueAdapter(linearClientFactory(apiKey), store, { stage: "preview", projectKey: project.key, projectId: project.linearProjectId })
     const preview = await linear.listProjectIssues(project.linearProjectId)
     const counts = {}
     for (const issue of preview.issues) {
@@ -236,23 +277,21 @@ async function handleApi(req, res, url, context) {
     return
   }
 
-  if (method === "POST" && url.pathname === "/api/runs/once") {
+  if (method === "POST" && ["/api/runs/once", "/api/runs/issue"].includes(url.pathname)) {
     if (!(await ensureSetupReady(res, setupManager))) return
     const body = await readBody(req)
-    const stage = resolveExecutionStage(await loadConfig(configPath, rootDir), body.stage || "both")
+    const config = await loadConfig(configPath, rootDir)
+    const workspaceId = activeWorkspaceId(config)
+    const project = config.projects.find((item) => item.key === body.projectKey)
+    if (project && projectWorkspaceId(project) !== workspaceId) {
+      sendJson(res, 409, { error: "该项目所属的 Linear 工作区未激活。" })
+      return
+    }
+    const issueId = url.pathname.endsWith("/issue") ? body.issueId : undefined
+    const stage = resolveExecutionStage(config, body.stage || "both")
     const force = Boolean(body.force)
-    startManualRunInBackground({ scheduler, store, stage, projectKey: body.projectKey, force })
-    sendJson(res, 202, acceptedRunPayload({ stage, projectKey: body.projectKey, force }))
-    return
-  }
-
-  if (method === "POST" && url.pathname === "/api/runs/issue") {
-    if (!(await ensureSetupReady(res, setupManager))) return
-    const body = await readBody(req)
-    const stage = resolveExecutionStage(await loadConfig(configPath, rootDir), body.stage || "both")
-    const force = Boolean(body.force)
-    startManualRunInBackground({ scheduler, store, stage, issueId: body.issueId, projectKey: body.projectKey, force })
-    sendJson(res, 202, acceptedRunPayload({ stage, issueId: body.issueId, projectKey: body.projectKey, force }))
+    startManualRunInBackground({ scheduler, store, stage, issueId, projectKey: body.projectKey, force, workspaceId })
+    sendJson(res, 202, acceptedRunPayload({ stage, issueId, projectKey: body.projectKey, force }))
     return
   }
 
@@ -344,9 +383,9 @@ async function ensureSetupReady(res, setupManager) {
   return false
 }
 
-function startManualRunInBackground({ scheduler, store, stage, issueId, projectKey, force = false }) {
+function startManualRunInBackground({ scheduler, store, stage, issueId, projectKey, force = false, workspaceId }) {
   void scheduler
-    .runOnce(stage, { issueId, projectKey, force })
+    .runOnce(stage, { issueId, projectKey, force, workspaceId })
     .catch(async (error) => {
       const message = error instanceof Error ? error.message : String(error)
       await store
