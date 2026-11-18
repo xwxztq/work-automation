@@ -39,6 +39,7 @@ export type ProjectConfig = {
   repoName: string
   path: string
   codexCwd: string
+  executionMode: "inherit" | "sandbox" | "native"
   branchOrScopePrefix: string
   maxActivePart2: number
   defaultTests: string[]
@@ -60,6 +61,7 @@ export type AppConfig = {
   }
   codex: {
     bin: string
+    executionMode: "sandbox" | "native"
     defaultArgs: string[]
     part1Sandbox: string
     splitSandbox: string
@@ -152,6 +154,7 @@ export type PromptBundle = {
 
 export type RunSummary = {
   id: string
+  executionMode?: "sandbox" | "native"
   projectKey: string
   stage: PromptStage
   issueIdentifier: string

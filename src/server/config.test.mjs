@@ -10,6 +10,24 @@ import {
   normalizeConfig,
   saveConfig,
 } from "./config.mjs"
+import { resolveExecutionMode } from "./execution-mode.mjs"
+
+test("execution mode defaults, inheritance and project overrides persist", async (t) => {
+  assert.equal(resolveExecutionMode(normalizeConfig({})), "sandbox")
+  const config = normalizeConfig({ codex: { executionMode: "native" }, projects: [
+    { key: "inherited" }, { key: "restricted", executionMode: "sandbox" }, { key: "local", executionMode: "native" },
+  ] })
+  assert.deepEqual(config.projects.map(p => resolveExecutionMode(config, p)), ["native", "sandbox", "native"])
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wauto-native-config-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  await saveConfig("config.json", config, root)
+  const saved = normalizeConfig(JSON.parse(await fs.readFile(path.join(root, "config.json"), "utf8")))
+  assert.deepEqual(saved.projects.map(p => resolveExecutionMode(saved, p)), ["native", "sandbox", "native"])
+  for (const mode of ["", "full", true]) {
+    assert.throws(() => normalizeConfig({ codex: { executionMode: mode } }), /executionMode/)
+    assert.throws(() => normalizeConfig({ projects: [{ executionMode: mode }] }), /executionMode/)
+  }
+})
 
 test("notification defaults match the four-stage policy", () => {
   const config = normalizeConfig({})

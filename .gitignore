@@ -18,6 +18,7 @@ artifacts/
 !.env.example
 config.local.json
 .linear-automation/
+/refs/
 
 # Editor directories and files
 .vscode/*

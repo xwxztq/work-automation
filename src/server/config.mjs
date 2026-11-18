@@ -6,6 +6,7 @@ import { resolveExecutable } from "./executable.mjs"
 import { isLoopbackHost, isWildcardHostAllowed, validateHost } from "./host.mjs"
 import { validateProjectKeys } from "./project-key.mjs"
 import { checkLinearStatusHealth } from "./status-health.mjs"
+import { resolveExecutionMode } from "./execution-mode.mjs"
 import { validateWebhookUrlTemplate } from "./webhook-notifier.mjs"
 
 const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write"])
@@ -114,6 +115,7 @@ export function normalizeConfig(raw) {
       repoName: "",
       path: "",
       codexCwd: "",
+      executionMode: "inherit",
       branchOrScopePrefix: "",
       maxActivePart2: 1,
       defaultTests: [],
@@ -134,9 +136,11 @@ export function normalizeConfig(raw) {
     if (!normalized.codexCwd) {
       normalized.codexCwd = normalized.path
     }
+    resolveExecutionMode(config, normalized)
     return normalized
   })
 
+  resolveExecutionMode(config)
   return config
 }
 

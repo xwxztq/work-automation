@@ -23,7 +23,9 @@
   - `final.txt`
   - `run.json`
 - 阶段三执行器会把当前 `part3` run 目录、review 目录、最新实现交接评论和实现后用户评论显式传给 Codex agent，便于按协议生成 review 产物。
-- 默认 `part3Sandbox` 使用 `workspace-write` 兼容配置，但真实执行由 Codex 进程外层 permission profile 收紧：Codex 及其命令默认不能读取业务仓库、必要工具链、临时 Codex HOME 和当前 run 之外的文件；业务仓库只读，当前 run 可读且仅 `review/` 可写。macOS 下 `codex exec` 关闭不能嵌套的内层 Seatbelt，外层 profile 仍持续生效。提示词继续约束 agent 只写当前 review 目录，不改业务代码。
+- 在默认沙箱执行模式下，`part3Sandbox` 使用 `workspace-write` 兼容配置，但真实执行由 Codex 进程外层 permission profile 收紧：Codex 及其命令默认不能读取业务仓库、必要工具链、临时 Codex HOME 和当前 run 之外的文件；业务仓库只读，当前 run 可读且仅 `review/` 可写。macOS 下 `codex exec` 关闭不能嵌套的内层 Seatbelt，外层 profile 仍持续生效。提示词继续约束 agent 只写当前 review 目录，不改业务代码。
+
+项目选择本机执行模式时，不启动外层 permission profile。业务源码只读、仅生成 review 产物的要求仍有效，但依靠阶段指令约束；本机模式不提供仓库或证据文件的操作系统级保护。
 
 ## 阶段三输入协议
 
